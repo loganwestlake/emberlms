@@ -45,6 +45,11 @@
       transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
       transition-duration: 200ms;
     }
+    .input-glow:focus {
+      outline: none;
+      border-color: #8B5CF6;
+      box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
+    }
     body { -webkit-tap-highlight-color: transparent; }
   </style>
 </head>
@@ -55,7 +60,7 @@
     // ═══════════════════════════════════════════════════════════════════
     // ⚙️  CONFIG
     // ═══════════════════════════════════════════════════════════════════
-    const BASE_PATH = '/emberlms';   // Change per deployment (see notes)
+    const BASE_PATH = '/emberlms';
 
     // ═══════════════════════════════════════════════════════════════════
     // 🔥 FIREBASE
@@ -91,7 +96,6 @@
 
     const secondaryApp = initializeApp(firebaseConfig, "Secondary");
     const secondaryAuth = getAuth(secondaryApp);
-    // (secondaryAuth used in Phase 3 for creating student accounts)
 
     // ═══════════════════════════════════════════════════════════════════
     // 🧭 ROUTER
@@ -109,7 +113,8 @@
     function buildUrl(relative = '/') {
       const clean = relative.startsWith('/') ? relative : '/' + relative;
       const joined = (BASE_PATH + clean).replace(/\/+/g, '/');
-      return joined.replace(/\/$/, '') || '/';
+      const trimmed = joined.replace(/\/$/, '');
+      return trimmed || '/';
     }
 
     function navigate(path) {
@@ -120,12 +125,14 @@
       const savedPath = sessionStorage.getItem('ember_redirect_path');
       if (savedPath) {
         sessionStorage.removeItem('ember_redirect_path');
-        window.history.replaceState(null, '', savedPath);
+        try { window.history.replaceState(null, '', savedPath); } catch (e) {}
       }
 
       const segments = getAppSegments();
 
-      if (segments.length === 0) return { type: 'landing', tenant: null, segments: [] };
+      if (segments.length === 0) {
+        return { type: 'landing', tenant: null, segments: [] };
+      }
 
       const first = segments[0];
       if (RESERVED.includes(first)) {
@@ -149,7 +156,8 @@
     }
 
     function slugify(str) {
-      return str.toLowerCase()
+      return String(str || '')
+        .toLowerCase()
         .replace(/[^a-z0-9-]/g, '-')
         .replace(/-+/g, '-')
         .replace(/^-|-$/g, '');
@@ -192,8 +200,6 @@
     // ═══════════════════════════════════════════════════════════════════
     // 🖼️ VIEWS
     // ═══════════════════════════════════════════════════════════════════
-
-    // ── Loading ─────────────────────────────────────────────────────
     function viewLoading() {
       render(`
         <div class="min-h-screen flex items-center justify-center text-gray-500">
@@ -202,7 +208,6 @@
       `);
     }
 
-    // ── Landing ─────────────────────────────────────────────────────
     function viewLanding() {
       render(`
         <div class="min-h-screen flex items-center justify-center relative overflow-hidden">
@@ -223,7 +228,6 @@
 
     // ── Onboard ─────────────────────────────────────────────────────
     function viewOnboard() {
-      // Not signed in → show Google button
       if (!currentUser) {
         render(`
           <div class="min-h-screen flex items-center justify-center px-6 relative overflow-hidden">
@@ -253,7 +257,6 @@
         return;
       }
 
-      // Signed in → show school creation form
       render(`
         <div class="min-h-screen flex items-center justify-center px-6 relative overflow-hidden">
           <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
@@ -264,7 +267,7 @@
 
             <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">School Name</label>
             <input id="school-name" type="text" placeholder="Example High School" autocomplete="off"
-              class="w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 focus:outline-none focus:border-[#8B5CF6] transition-all" />
+              class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
 
             <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">School URL</label>
             <div class="flex items-center bg-white/[0.03] border border-white/10 rounded-lg mb-4 focus-within:border-[#8B5CF6] transition-all">
@@ -276,7 +279,7 @@
             <p id="onboard-error" class="text-red-400 text-sm mb-4 hidden"></p>
 
             <button id="onboard-submit"
-              class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all">
+              class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all disabled:opacity-60 disabled:cursor-not-allowed">
               Create School
             </button>
 
@@ -288,7 +291,6 @@
         </div>
       `);
 
-      // Auto-slugify from name (until user manually edits the slug)
       const nameInput = document.getElementById('school-name');
       const slugInput = document.getElementById('school-slug');
       nameInput.addEventListener('input', () => {
@@ -351,7 +353,7 @@
       }
     }
 
-    // ── Tenant route ────────────────────────────────────────────────
+    // ── Tenant ──────────────────────────────────────────────────────
     async function viewTenant(slug, subSegments) {
       viewLoading();
 
@@ -396,11 +398,9 @@
       document.getElementById('signout-nx').addEventListener('click', () => signOut(auth));
     }
 
-    // ── Tenant login (split-screen) ─────────────────────────────────
     function viewTenantLogin(slug, tenant) {
       render(`
         <div class="min-h-screen flex">
-          <!-- Left: atmosphere -->
           <div class="hidden lg:flex w-1/2 bg-[#050505] relative overflow-hidden border-r border-white/[0.08]">
             <div class="absolute bottom-0 left-0 w-[600px] h-[600px] rounded-full bg-[#F59E0B]/10 blur-[120px] pointer-events-none"></div>
             <div class="relative z-10 flex flex-col justify-end p-16">
@@ -414,7 +414,6 @@
             </div>
           </div>
 
-          <!-- Right: form -->
           <div class="w-full lg:w-1/2 flex items-center justify-center px-6 py-12 bg-[#0A0A0A]">
             <div class="max-w-sm w-full">
               <div class="lg:hidden mb-8">
@@ -427,7 +426,6 @@
                 <p class="text-gray-500 text-sm">Sign in to continue</p>
               </div>
 
-              <!-- Teacher: Google -->
               <button id="tenant-google-btn"
                 class="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-medium py-3 px-4 rounded-lg hover:bg-gray-100 transition-all">
                 <svg class="w-5 h-5" viewBox="0 0 24 24">
@@ -445,19 +443,18 @@
                 <div class="flex-1 h-px bg-white/[0.08]"></div>
               </div>
 
-              <!-- Student: username/password -->
               <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Username</label>
               <input id="student-username" type="text" autocomplete="username"
-                class="w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 focus:outline-none focus:border-[#8B5CF6] transition-all" />
+                class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
 
               <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Password</label>
               <input id="student-password" type="password" autocomplete="current-password"
-                class="w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 focus:outline-none focus:border-[#8B5CF6] transition-all" />
+                class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
 
               <p id="login-error" class="text-red-400 text-sm mb-4 hidden"></p>
 
               <button id="student-login-btn"
-                class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all">
+                class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all disabled:opacity-60">
                 Sign in as Student
               </button>
 
@@ -499,12 +496,16 @@
 
       try {
         await signInWithEmailAndPassword(auth, email, password);
-        // onAuthStateChanged will re-render
       } catch (err) {
         console.error(err);
         btn.disabled = false;
         btn.textContent = 'Sign in as Student';
-        if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
+        if (
+          err.code === 'auth/invalid-credential' ||
+          err.code === 'auth/wrong-password' ||
+          err.code === 'auth/user-not-found' ||
+          err.code === 'auth/invalid-email'
+        ) {
           showError('Invalid username or password.');
         } else {
           showError('Sign-in failed. Try again.');
@@ -512,7 +513,7 @@
       }
     }
 
-    // ── Dashboard (Phase 2 placeholder) ─────────────────────────────
+    // ── Dashboard (placeholder) ─────────────────────────────────────
     function viewDashboard(slug, tenant, roleInfo) {
       const name = currentUser.displayName || roleInfo.data.displayName || currentUser.email || 'User';
       const isTeacher = roleInfo.role === 'teacher';
@@ -544,7 +545,7 @@
             <div class="mt-auto pt-6 border-t border-white/[0.08]">
               <div class="flex items-center gap-3 mb-3">
                 ${currentUser.photoURL
-                  ? `<img src="${currentUser.photoURL}" class="w-8 h-8 rounded-full border border-white/20">`
+                  ? `<img src="${currentUser.photoURL}" class="w-8 h-8 rounded-full border border-white/20" alt="">`
                   : `<div class="w-8 h-8 rounded-full bg-white/10"></div>`}
                 <div class="flex-1 min-w-0">
                   <p class="text-sm text-white truncate">${escapeHtml(name)}</p>
@@ -576,7 +577,6 @@
       document.getElementById('signout-dash').addEventListener('click', () => signOut(auth));
     }
 
-    // ── 404 ─────────────────────────────────────────────────────────
     function viewNotFound() {
       render(`
         <div class="min-h-screen flex items-center justify-center text-center px-6">
@@ -596,10 +596,9 @@
       try {
         const provider = new GoogleAuthProvider();
         await signInWithPopup(auth, provider);
-        // onAuthStateChanged handles the rest
       } catch (err) {
         console.error('Google sign-in error:', err);
-        if (err.code === 'auth/popup-closed-by-user') return;
+        if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') return;
         alert('Sign-in failed: ' + err.message);
       }
     }
@@ -611,18 +610,23 @@
       if (!authReady) return;
       const route = parseRoute();
 
-      switch (route.type) {
-        case 'landing':
-          viewLanding();
-          break;
-        case 'onboard':
-          viewOnboard();
-          break;
-        case 'tenant':
-          await viewTenant(route.tenant, route.segments);
-          break;
-        default:
-          viewNotFound();
+      try {
+        switch (route.type) {
+          case 'landing':
+            viewLanding();
+            break;
+          case 'onboard':
+            viewOnboard();
+            break;
+          case 'tenant':
+            await viewTenant(route.tenant, route.segments);
+            break;
+          default:
+            viewNotFound();
+        }
+      } catch (err) {
+        console.error('Route render failed:', err);
+        render(`<div class="min-h-screen flex items-center justify-center text-red-400 p-6 text-center">Error:<br>${escapeHtml(err.message)}</div>`);
       }
     }
 
