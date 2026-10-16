@@ -4,14 +4,9 @@
   <meta charset="UTF-8">
   <title>Redirecting…</title>
   <script>
-    // ⚙️  Must match the BASE_PATH in index.html
     const BASE_PATH = '/emberlms';
-
-    // Save the full URL so the app can restore it after redirect
     const fullPath = window.location.pathname + window.location.search + window.location.hash;
     sessionStorage.setItem('ember_redirect_path', fullPath);
-
-    // Redirect to the app shell at the correct base path
     window.location.replace(BASE_PATH + '/index.html');
   </script>
 </head>
