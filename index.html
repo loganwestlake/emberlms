@@ -224,7 +224,7 @@
       getFirestore, doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc,
       collection, collectionGroup, query, where, orderBy, limit,
       onSnapshot, getDocs, serverTimestamp, arrayUnion, arrayRemove,
-      writeBatch, getCountFromServer
+      writeBatch, getCountFromServer, deleteField
     } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
     // ═══════════════════════════════════════════════════════════════
@@ -473,6 +473,7 @@
       t.className = 'toast pointer-events-auto flex items-center gap-3 bg-[#1A1A1A] border border-white/10 rounded-xl px-4 py-3 shadow-2xl text-sm text-white sm:max-w-sm';
       t.innerHTML = `${ico(icon, 'w-4 h-4 shrink-0 ' + color)}<span>${escapeHtml(msg)}</span>`;
       host.appendChild(t);
+      while (host.children.length > 3) host.firstElementChild.remove();
       refreshIcons();
       setTimeout(() => { t.classList.add('toast-out'); setTimeout(() => t.remove(), 260); }, type === 'error' ? 5000 : 2800);
     }
@@ -508,7 +509,7 @@
       refreshIcons();
       let closed = false;
       const api = {
-        el: ov,
+        el: ov, dismissible,
         $: s => ov.querySelector(s),
         $$: s => [...ov.querySelectorAll(s)],
         close() {
@@ -523,7 +524,7 @@
       };
       const onKey = e => {
         if (openModals[openModals.length - 1] !== api) return;
-        if (e.key === 'Escape' && dismissible) {
+        if (e.key === 'Escape' && api.dismissible) {
           if (ov.querySelector('.ql-tooltip.ql-editing')) return; // let Quill close its link tooltip first
           e.preventDefault(); e.stopPropagation(); api.close();
         } else if (e.key === 'Tab') {
@@ -535,7 +536,7 @@
         }
       };
       document.addEventListener('keydown', onKey, true);
-      ov.addEventListener('mousedown', e => { if (dismissible && e.target === ov) api.close(); });
+      ov.addEventListener('mousedown', e => { if (api.dismissible && e.target === ov) api.close(); });
       ov.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => api.close()));
       openModals.push(api);
       setTimeout(() => {
@@ -733,47 +734,96 @@
       const data = tenantSnap.data();
       const updates = {};
       if (!data.type) updates.type = 'school';
-      if (!data.joinCode) updates.joinCode = genCode();
       if (Object.keys(updates).length) { try { await updateDoc(tenantSnap.ref, updates); tenantCache.delete(tenantSnap.id); } catch (e) {} }
       if (data.ownerUid === userDocId && userDocData.role !== 'admin') {
         try { await updateDoc(doc(db, 'tenants', tenantSnap.id, 'users', userDocId), { role: 'admin' }); } catch (e) {}
       }
     }
+    const isPermErr = e => e?.code === 'permission-denied';
+    function ls(key, val) { try { if (val === undefined) return localStorage.getItem(key); localStorage.setItem(key, val); } catch { return null; } }
+    // Remember which tenant a user belongs to, so routing never needs a collection-group query.
+    function rememberTenant(uid, slug) {
+      if (!uid || ls(`ember_last_tenant:${uid}`) === slug) return;
+      ls(`ember_last_tenant:${uid}`, slug);
+      setDoc(doc(db, 'userIndex', uid), { tenants: arrayUnion(slug) }, { merge: true }).catch(() => {});
+    }
+    const studentDest = (slug, st) => st === 'approved' ? `/${slug}` : st === 'pending' ? `/${slug}/pending` : `/${slug}/rejected`;
+    async function destinationIn(slug, uid) {
+      const r = await getRoleInTenant(slug, uid);
+      if (!r) return null;
+      return r.role === 'student' ? studentDest(slug, r.data.status) : `/${slug}`;
+    }
     async function resolveDestinationForUser(user) {
       if (!user) return null;
+      const uid = user.uid;
       try {
-        const dSnap = await getDocs(query(collection(db, 'districts'), where('adminUids', 'array-contains', user.uid), limit(1)));
+        const dSnap = await getDocs(query(collection(db, 'districts'), where('adminUids', 'array-contains', uid), limit(1)));
         if (!dSnap.empty) return `/district/${dSnap.docs[0].id}`;
-      } catch (e) { console.warn('district lookup failed', e); }
+      } catch (e) { if (!isPermErr(e)) console.warn('district lookup failed', e); }
+
+      // Students: the school is encoded in their login (username@school.emberlms.local).
+      const m = /^[^@]+@([a-z0-9-]+)\.emberlms\.local$/.exec(user.email || '');
+      if (m) { const d = await destinationIn(m[1], uid); if (d) return d; }
+
+      // Staff: last-used tenant, then the userIndex document.
+      const candidates = new Set();
+      const last = ls(`ember_last_tenant:${uid}`); if (last) candidates.add(last);
+      try { const ix = await getDoc(doc(db, 'userIndex', uid)); (ix.data()?.tenants || []).forEach(t => candidates.add(t)); } catch (e) {}
+      for (const slug of candidates) { const d = await destinationIn(slug, uid); if (d) return d; }
+
+      // Legacy fallback: collection-group queries (require the {path=**} rules in firestore.rules).
       const fromStaffSnap = async (snap) => {
         const first = snap.docs[0];
         const tenantRef = first.ref.parent.parent;
         const tenantSnap = await getDoc(tenantRef);
         if (tenantSnap.exists()) await maybeMigrateTenant(tenantSnap, first.id, first.data());
+        rememberTenant(uid, tenantRef.id);
         return `/${tenantRef.id}`;
       };
       try {
-        const byUid = await getDocs(query(collectionGroup(db, 'users'), where('userId', '==', user.uid), limit(1)));
+        const byUid = await getDocs(query(collectionGroup(db, 'users'), where('userId', '==', uid), limit(1)));
         if (!byUid.empty) return await fromStaffSnap(byUid);
         if (user.email) {
           const byEmail = await getDocs(query(collectionGroup(db, 'users'), where('email', '==', user.email), limit(1)));
           if (!byEmail.empty) return await fromStaffSnap(byEmail);
         }
-      } catch (e) { console.warn('teacher lookup failed', e); }
+      } catch (e) { if (!isPermErr(e)) console.warn('teacher lookup failed', e); }
       if (user.email) {
         try {
           const sSnap = await getDocs(query(collectionGroup(db, 'students'), where('email', '==', user.email), limit(1)));
           if (!sSnap.empty) {
             const first = sSnap.docs[0];
-            const slug = first.ref.parent.parent.id;
-            const status = first.data().status;
-            if (status === 'approved') return `/${slug}`;
-            if (status === 'pending') return `/${slug}/pending`;
-            return `/${slug}/rejected`;
+            return studentDest(first.ref.parent.parent.id, first.data().status);
           }
-        } catch (e) { console.warn('student lookup failed', e); }
+        } catch (e) { if (!isPermErr(e)) console.warn('student lookup failed', e); }
       }
       return null;
+    }
+
+    // Join codes live in /joinCodes/{CODE} (get-only) and /tenants/{t}/private/settings,
+    // never on the tenant doc, which must stay publicly listable for school search.
+    async function getJoinCode(slug, tenant) {
+      try { const s = await getDoc(doc(db, 'tenants', slug, 'private', 'settings')); if (s.exists() && s.data().joinCode) return s.data().joinCode; } catch (e) {}
+      return tenant?.joinCode || '';
+    }
+    async function setJoinCode(slug, oldCode = '') {
+      const code = genCode();
+      const b = writeBatch(db);
+      b.set(doc(db, 'joinCodes', code), { tenantId: slug, createdAt: serverTimestamp() });
+      b.set(doc(db, 'tenants', slug, 'private', 'settings'), { joinCode: code }, { merge: true });
+      b.update(doc(db, 'tenants', slug), { joinCode: deleteField() });
+      await b.commit();
+      if (oldCode) deleteDoc(doc(db, 'joinCodes', oldCode)).catch(() => {});
+      tenantCache.delete(slug);
+      return code;
+    }
+    async function lookupJoinCode(code) {
+      try {
+        const s = await getDoc(doc(db, 'joinCodes', code));
+        if (s.exists()) { const t = await getTenant(s.data().tenantId); if (t) return t; }
+      } catch (e) {}
+      const snap = await getDocs(query(collection(db, 'tenants'), where('joinCode', '==', code), limit(1))); // legacy codes
+      return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
     }
     async function goToAccount(user = currentUser) {
       const dest = await resolveDestinationForUser(user);
@@ -851,7 +901,7 @@
             <div class="flex items-center gap-2 sm:gap-3 text-sm">
               ${signedIn ? `
                 <span class="hidden md:inline text-xs text-gray-500 truncate max-w-[200px]">${escapeHtml(currentUser.email || '')}</span>
-                <button data-signout class="btn btn-ghost btn-sm sm:btn">Sign out</button>
+                <button data-signout class="btn btn-ghost btn-sm">Sign out</button>
                 <button data-goto-account class="btn btn-primary btn-sm">My account</button>
               ` : `
                 <a href="${buildUrl('/login')}" class="btn btn-ghost btn-sm">Sign in</a>
@@ -1093,7 +1143,10 @@
               try {
                 const cred = await signInWithEmailAndPassword(auth, email, password);
                 await afterLogin(cred.user, '/signup');
-              } catch (e) { console.error(e); showError(err, friendlyError(e)); }
+              } catch (e) {
+                if (!['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found'].includes(e.code)) console.error(e);
+                showError(err, friendlyError(e));
+              }
             }));
           });
           $('#staff-forgot').addEventListener('click', async e => {
@@ -1248,9 +1301,9 @@
           if (code.length !== 6) return showError(err, 'Join codes are 6 characters long.');
           withBusy(e.currentTarget.querySelector('[type=submit]'), 'Looking up…', async () => {
             try {
-              const snap = await getDocs(query(collection(db, 'tenants'), where('joinCode', '==', code), limit(1)));
-              if (snap.empty) return showError(err, 'No school found with that code. Double-check it with your admin.');
-              Object.assign(w.data, { joinCode: code, schoolSlug: snap.docs[0].id, schoolName: snap.docs[0].data().name });
+              const school = await lookupJoinCode(code);
+              if (!school) return showError(err, 'No school found with that code. Double-check it with your admin.');
+              Object.assign(w.data, { joinCode: code, schoolSlug: school.id, schoolName: school.name });
               go('teacher-auth');
             } catch (ex) { console.error(ex); showError(err, friendlyError(ex)); }
           });
@@ -1439,7 +1492,9 @@
         if (w.mode === 'join') {
           const slug = w.data.schoolSlug;
           const existing = await getDoc(doc(db, 'tenants', slug, 'users', u.uid));
-          if (!existing.exists()) await setDoc(doc(db, 'tenants', slug, 'users', u.uid), { ...profile, role: 'teacher' });
+          // joinCode is stored so security rules can verify the teacher really had it.
+          if (!existing.exists()) await setDoc(doc(db, 'tenants', slug, 'users', u.uid), { ...profile, role: 'teacher', joinCode: w.data.joinCode });
+          rememberTenant(u.uid, slug);
           signupWizard = null;
           toast(`Welcome to ${w.data.schoolName || 'your school'}!`);
           navigate('/' + slug, { replace: true });
@@ -1450,8 +1505,9 @@
             toast('That address was just taken — pick another.', 'error');
             w.data.tenantSlug = ''; w.step = 'teacher-personal-name'; renderWizard(); return;
           }
-          await setDoc(doc(db, 'tenants', slug), { type: 'personal', name, slug, ownerUid: u.uid, joinCode: genCode(), createdAt: serverTimestamp() });
+          await setDoc(doc(db, 'tenants', slug), { type: 'personal', name, slug, ownerUid: u.uid, createdAt: serverTimestamp() });
           await setDoc(doc(db, 'tenants', slug, 'users', u.uid), { ...profile, role: 'admin' });
+          rememberTenant(u.uid, slug);
           signupWizard = null;
           toast('Your classroom is ready!');
           navigate('/' + slug, { replace: true });
@@ -1770,12 +1826,13 @@
         withBusy(e.currentTarget.querySelector('[type=submit]'), 'Creating…', async () => {
           try {
             if ((await getDoc(doc(db, 'tenants', slug))).exists()) return showError(err, 'That address is already taken.');
-            await setDoc(doc(db, 'tenants', slug), { type: 'school', name, slug, districtId, joinCode: genCode(), ownerUid: currentUser.uid, createdAt: serverTimestamp() });
+            await setDoc(doc(db, 'tenants', slug), { type: 'school', name, slug, districtId, ownerUid: currentUser.uid, createdAt: serverTimestamp() });
             await setDoc(doc(db, 'tenants', slug, 'users', currentUser.uid), {
               userId: currentUser.uid, role: 'admin', email: currentUser.email || '',
               displayName: currentUser.displayName || (currentUser.email ? currentUser.email.split('@')[0] : 'Admin'),
               photoURL: currentUser.photoURL || null, createdAt: serverTimestamp()
             });
+            await setJoinCode(slug).catch(e => console.warn('join code not created', e));
             schoolsCache = null;
             m.close(); toast(`${name} created`); renderRoute();
           } catch (ex) { console.error(ex); showError(err, friendlyError(ex)); }
@@ -1808,6 +1865,7 @@
       const roleInfo = await getRoleInTenant(slug, currentUser.uid);
       if (!live(t)) return;
       if (!roleInfo) return viewNoAccess(slug, tenant);
+      if (roleInfo.role !== 'student' || roleInfo.data.status === 'approved') rememberTenant(currentUser.uid, slug);
       if (roleInfo.role === 'student') {
         if (roleInfo.data.status === 'pending') return viewPending(slug, tenant);
         if (roleInfo.data.status === 'rejected') return viewRejected(slug, tenant);
@@ -2269,6 +2327,11 @@
       draw();
       return {
         collect() {
+          host.querySelectorAll('[data-q]').forEach(qel => {
+            const q = qs[+qel.dataset.q]; if (!q) return;
+            q.prompt = qel.querySelector('[data-prompt]').value;
+            qel.querySelectorAll('[data-choice]').forEach(i => { q.choices[+i.dataset.choice] = i.value; });
+          });
           const out = [];
           for (let i = 0; i < qs.length; i++) {
             const q = qs[i], prompt = q.prompt.trim();
@@ -3070,7 +3133,7 @@
           $('#bulk-bar') && ($('#bulk-bar').style.width = `${Math.round((i + 1) / names.length * 100)}%`);
         }
         const ok = results.filter(r => r.ok);
-        const csv = 'Name,Username,Password\n' + ok.map(r => `"${r.name}",${r.username},${r.password}`).join('\n');
+        const tsv = 'Name\tUsername\tPassword\n' + ok.map(r => `${r.name}\t${r.username}\t${r.password}`).join('\n');
         body.innerHTML = modalBody(`
           <div class="flex items-center gap-3 mb-4">${iconTile(ok.length === results.length ? 'circle-check' : 'triangle-alert', ok.length === results.length ? 'green' : 'amber')}<div><p class="text-white text-sm font-medium">${plural(ok.length, 'account')} created</p>${ok.length < results.length ? `<p class="text-xs text-red-400">${results.length - ok.length} failed — see below.</p>` : '<p class="text-xs text-gray-500">Copy these now and share them with your students.</p>'}</div></div>
           <div class="card overflow-hidden max-h-[45vh] overflow-y-auto"><table class="w-full text-sm"><thead class="text-[10px] uppercase tracking-wider text-gray-500 text-left"><tr class="border-b border-white/[0.06]"><th class="px-4 py-2 font-medium">Name</th><th class="px-4 py-2 font-medium">Username</th><th class="px-4 py-2 font-medium">Password</th></tr></thead>
@@ -3079,7 +3142,7 @@
         refreshIcons();
         m.dismissible = true;
         m.$('[data-close-final]').addEventListener('click', () => m.close());
-        m.$('[data-copy-csv]')?.addEventListener('click', () => copyText(csv.replace(/,/g, '\t'), 'Copied — paste into a spreadsheet'));
+        m.$('[data-copy-csv]')?.addEventListener('click', () => copyText(tsv, 'Copied — paste into a spreadsheet'));
       });
     }
 
@@ -3259,9 +3322,9 @@
       const weekInput = m.$('#plan-week');
       const weekOf = () => { const v = weekInput.value; return v ? isoWeekOf(new Date(v + 'T12:00:00')) : ''; };
       weekInput.addEventListener('change', () => { const w = weekOf(); m.$('#plan-week-label').textContent = w ? `${describeWeek(w)} · ${weekDateRange(w)}` : ''; });
-      m.$('#plan-template').addEventListener('click', () => {
+      m.$('#plan-template').addEventListener('click', async () => {
         if (!editor.quill) return;
-        if (!isEmptyRichText(editor.getHTML()) && !confirm('Replace the current content with the template?')) return;
+        if (!isEmptyRichText(editor.getHTML()) && !await confirmDialog({ title: 'Replace with template?', message: 'Your current plan text will be replaced.', confirmLabel: 'Replace' })) return;
         editor.quill.clipboard.dangerouslyPasteHTML('<h2>Learning objectives</h2><ul><li>Students will be able to…</li></ul><h2>Standards</h2><p></p><h2>Activities</h2><ol><li>Warm-up (5 min)</li><li>Direct instruction (15 min)</li><li>Guided practice (15 min)</li><li>Exit ticket (5 min)</li></ol><h2>Materials</h2><ul><li></li></ul><h2>Assessment</h2><p></p><h2>Differentiation</h2><p></p>');
       });
       const save = (submit, btn) => {
@@ -3337,19 +3400,23 @@
         `<div id="admin-content" class="max-w-6xl"><div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">${Array.from({ length: 4 }, () => '<div class="skeleton h-32"></div>').join('')}</div><div class="skeleton h-48"></div></div>`));
       try {
         const studentsCol = collection(db, 'tenants', slug, 'students');
+        const failed = [];
+        const safe = (p, fallback) => p.catch(e => { console.warn(e); failed.push(e); return fallback; });
         const [teacherCount, studentCount, pendingCount, courseCount, plansSnap, fresh] = await Promise.all([
           countOf(collection(db, 'tenants', slug, 'users')),
           countOf(query(studentsCol, where('status', '==', 'approved'))),
           countOf(query(studentsCol, where('status', '==', 'pending'))),
           countOf(collection(db, 'tenants', slug, 'courses')),
-          getDocs(query(collection(db, 'tenants', slug, 'plans'), where('status', '==', 'submitted'))),
-          getTenant(slug, { fresh: true }),
+          safe(getDocs(query(collection(db, 'tenants', slug, 'plans'), where('status', '==', 'submitted'))), { docs: [] }),
+          safe(getTenant(slug, { fresh: true }), tenant),
         ]);
+        let joinCode = await getJoinCode(slug, fresh || tenant);
+        if (!joinCode) joinCode = await safe(setJoinCode(slug), '');
         if (!live(t)) return;
-        const joinCode = fresh?.joinCode || tenant.joinCode || '';
         const toReview = plansSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => recency(b.submittedAt) - recency(a.submittedAt));
         const p = s => buildUrl(`/${slug}${s}`);
         $('#admin-content').innerHTML = `
+          ${failed.length ? `<div class="mb-6 p-4 rounded-xl bg-red-500/5 border border-red-500/20 text-sm text-gray-300 flex gap-3">${ico('triangle-alert', 'w-4 h-4 text-red-400 shrink-0 mt-0.5')}<span>Some data couldn't be loaded: ${escapeHtml(friendlyError(failed[0]))} Check that your Firestore security rules match <code class="text-[#F59E0B]">firestore.rules</code>.</span></div>` : ''}
           <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">
             ${[
               { icon: 'graduation-cap', label: 'Students', value: studentCount, sub: pendingCount ? `${pendingCount} pending approval` : 'All approved', tone: pendingCount ? 'amber' : 'muted', href: p('/admin/students') },
@@ -3382,7 +3449,7 @@
         $('#copy-join-code').addEventListener('click', () => copyText(joinCode, 'Join code copied'));
         $('#regen-join-code').addEventListener('click', async () => {
           if (!await confirmDialog({ title: 'Generate a new join code?', message: 'The current code will stop working immediately. Teachers who already joined are not affected.', confirmLabel: 'Regenerate' })) return;
-          try { await updateDoc(doc(db, 'tenants', slug), { joinCode: genCode() }); tenantCache.delete(slug); toast('New join code generated'); renderRoute(); }
+          try { await setJoinCode(slug, joinCode); toast('New join code generated'); renderRoute(); }
           catch (e) { toast(friendlyError(e), 'error'); }
         });
         $('#admin-content').addEventListener('click', e => {
@@ -3399,7 +3466,7 @@
       setTitle('Teachers', tenant.name);
       render(tenantPage(ctx, 'admin-teachers', pageHeader({ eyebrow: 'Admin', title: 'Teachers', subtitle: escapeHtml(tenant.name), actions: `<button id="invite-teacher-btn" class="btn btn-primary">${ico('user-plus')} Invite teachers</button>` }) +
         `<div id="teachers-list" class="max-w-5xl">${skeletonRows(5)}</div>`));
-      $('#invite-teacher-btn').addEventListener('click', async () => openInviteTeacherModal(await getTenant(slug, { fresh: true }) || tenant));
+      $('#invite-teacher-btn').addEventListener('click', async () => openInviteTeacherModal(tenant, await getJoinCode(slug, tenant)));
       try {
         const [teachersSnap, coursesSnap] = await Promise.all([getDocs(collection(db, 'tenants', slug, 'users')), getDocs(collection(db, 'tenants', slug, 'courses'))]);
         if (!live(t)) return;
@@ -3436,14 +3503,14 @@
         });
       } catch (e) { console.error(e); if (live(t)) { $('#teachers-list').innerHTML = errorBox(e); refreshIcons(); } }
     }
-    function openInviteTeacherModal(tenant) {
+    function openInviteTeacherModal(tenant, joinCode) {
       const signupUrl = location.origin + buildUrl('/signup');
-      const msg = `You're invited to join ${tenant.name} on ${APP_NAME}.\n\n1. Go to ${signupUrl}\n2. Choose "I'm a teacher" → "Join my school"\n3. Enter the join code: ${tenant.joinCode || ''}`;
+      const msg = `You're invited to join ${tenant.name} on ${APP_NAME}.\n\n1. Go to ${signupUrl}\n2. Choose "I'm a teacher" → "Join my school"\n3. Enter the join code: ${joinCode || ''}`;
       const m = openModal({
         html: modalHeader({ title: 'Invite teachers', subtitle: `Share this code so teachers can join ${escapeHtml(tenant.name)}.`, icon: 'user-plus' }) + modalBody(`
           <div class="bg-[#0A0A0A] border border-white/[0.08] rounded-xl p-6 mb-5 text-center">
             <p class="label">Join code</p>
-            <code class="text-4xl font-mono text-[#F59E0B] tracking-[0.3em] block">${escapeHtml(tenant.joinCode || '——')}</code>
+            <code class="text-4xl font-mono text-[#F59E0B] tracking-[0.3em] block">${escapeHtml(joinCode || '——')}</code>
           </div>
           <ol class="text-sm text-gray-400 space-y-2 list-decimal pl-5">
             <li>Go to <span class="text-[#F59E0B] break-all">${escapeHtml(signupUrl)}</span></li>
@@ -3451,7 +3518,7 @@
             <li>Enter the code above</li>
           </ol>`) + modalFooter(`<button data-copy-code class="btn btn-secondary flex-1">${ico('copy')} Copy code</button><button data-copy-msg class="btn btn-primary flex-1">${ico('mail')} Copy invite message</button>`)
       });
-      m.$('[data-copy-code]').addEventListener('click', () => copyText(tenant.joinCode || '', 'Join code copied'));
+      m.$('[data-copy-code]').addEventListener('click', () => copyText(joinCode || '', 'Join code copied'));
       m.$('[data-copy-msg]').addEventListener('click', () => { copyText(msg, 'Invite message copied'); m.close(); });
     }
 
@@ -3539,6 +3606,7 @@
     // ═══════════════════════════════════════════════════════════════
     async function renderRoute() {
       if (!authReady) return;
+      currentUser = auth.currentUser; // source of truth, even mid sign-in while routing is suppressed
       routeToken++;
       clearSubs(); closeAllModals(); closeSidebar();
       const route = parseRoute();
