@@ -15,13 +15,8 @@
     tailwind.config = {
       theme: {
         extend: {
-          fontFamily: {
-            sans: ['Inter', 'sans-serif'],
-            serif: ['Playfair Display', 'serif'],
-          },
-          colors: {
-            ember: { bg:'#0A0A0A', surface:'#141414', amber:'#F59E0B', violet:'#8B5CF6' }
-          }
+          fontFamily: { sans: ['Inter','sans-serif'], serif: ['Playfair Display','serif'] },
+          colors: { ember: { bg:'#0A0A0A', surface:'#141414', amber:'#F59E0B', violet:'#8B5CF6' } }
         }
       }
     }
@@ -29,7 +24,6 @@
 
   <script src="https://unpkg.com/lucide@latest"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
-
   <link href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
   <script src="https://cdn.quilljs.com/1.3.7/quill.min.js"></script>
 
@@ -49,7 +43,6 @@
     .grad-emerald{ background: linear-gradient(135deg, #10B981, #059669); }
     .modal-overlay { backdrop-filter: blur(6px); }
 
-    /* Quill dark theme overrides */
     .ql-toolbar.ql-snow { border: none !important; border-bottom: 1px solid rgba(255,255,255,0.08) !important; padding: 8px 0 !important; }
     .ql-container.ql-snow { border: none !important; font-family: Inter, sans-serif !important; font-size: 14px !important; }
     .ql-editor { color: #EDEDED !important; min-height: 200px; padding: 16px 0 !important; line-height: 1.7; }
@@ -61,12 +54,10 @@
     .ql-snow .ql-picker-item { color: #888 !important; }
     .ql-snow .ql-active .ql-stroke, .ql-snow .ql-active .ql-fill { stroke: #F59E0B !important; fill: #F59E0B !important; }
     .ql-snow .ql-active .ql-picker-label { color: #F59E0B !important; }
-    .ql-snow .ql-picker-label:hover, .ql-snow .ql-picker-item:hover { color: #F59E0B !important; }
     .ql-snow .ql-tooltip { background: #141414 !important; border-color: rgba(255,255,255,0.08) !important; color: #EDEDED !important; }
     .ql-snow .ql-tooltip input[type=text] { background: rgba(255,255,255,0.05) !important; border-color: rgba(255,255,255,0.1) !important; color: #EDEDED !important; }
     .ql-snow .ql-tooltip a { color: #F59E0B !important; }
 
-    /* Rendered content (student reading view) */
     .prose-ember h1 { font-family: 'Playfair Display', serif; font-size: 1.75rem; color: #fff; margin: 1rem 0 0.5rem; }
     .prose-ember h2 { font-family: 'Playfair Display', serif; font-size: 1.4rem; color: #fff; margin: 1rem 0 0.5rem; }
     .prose-ember h3 { font-family: 'Playfair Display', serif; font-size: 1.15rem; color: #fff; margin: 0.75rem 0 0.4rem; }
@@ -90,10 +81,10 @@
     const RESERVED = ['onboard', 'login', 'signup', 'api', 'assets'];
     const GRADIENTS = ['grad-amber','grad-violet','grad-teal','grad-rose','grad-blue','grad-emerald'];
     const ITEM_TYPES = [
-      { type: 'page',       label: 'Page',       icon: 'file-text',       desc: 'Rich text content' },
-      { type: 'assignment', label: 'Assignment', icon: 'clipboard-list',  desc: 'Collect student work' },
-      { type: 'link',       label: 'Link',       icon: 'link',            desc: 'External resource' },
-      { type: 'quiz',       label: 'Quiz',       icon: 'check-square',    desc: 'Auto-graded questions' },
+      { type: 'page',       label: 'Page',       icon: 'file-text',      desc: 'Rich text content' },
+      { type: 'assignment', label: 'Assignment', icon: 'clipboard-list', desc: 'Collect student work' },
+      { type: 'link',       label: 'Link',       icon: 'link',           desc: 'External resource' },
+      { type: 'quiz',       label: 'Quiz',       icon: 'check-square',   desc: 'Auto-graded questions' },
     ];
 
     // ═══════════════════════════════════════════════════════════════════
@@ -102,12 +93,13 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
     import {
       getAuth, GoogleAuthProvider, signInWithPopup,
-      signInWithEmailAndPassword, signOut, onAuthStateChanged
+      signInWithEmailAndPassword, createUserWithEmailAndPassword,
+      signOut, onAuthStateChanged
     } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
     import {
       getFirestore, doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc,
-      collection, query, where, orderBy, onSnapshot, serverTimestamp,
-      arrayUnion
+      collection, query, where, orderBy, onSnapshot, getDocs, serverTimestamp,
+      arrayUnion, arrayRemove
     } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
     import { getStorage } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
 
@@ -188,6 +180,17 @@
       return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
     }
     function sanitize(html) { return window.DOMPurify ? DOMPurify.sanitize(html || '') : (html || ''); }
+    function genPassword() {
+      const words = ['ember','flame','glow','spark','warm','light','sun','dusk','ash','coal','pine','river'];
+      return words[Math.floor(Math.random()*words.length)] + Math.floor(Math.random()*9000 + 1000);
+    }
+    function genUsername(first, last, existing = []) {
+      const base = (slugify(first + (last ? last[0] : '')) || 'student').replace(/-/g,'_').slice(0,18);
+      let candidate = base;
+      let i = 1;
+      while (existing.includes(candidate)) { candidate = base + i; i++; }
+      return candidate;
+    }
 
     // ═══════════════════════════════════════════════════════════════════
     // 🔐 STATE
@@ -195,7 +198,13 @@
     let currentUser = null;
     let authReady = false;
     let unsubs = [];
+    let viewAsStudent = sessionStorage.getItem('ember_view_as_student') === '1';
     function clearSubs() { unsubs.forEach(u => { try { u(); } catch(e){} }); unsubs = []; }
+    function setViewAsStudent(val) {
+      viewAsStudent = val;
+      sessionStorage.setItem('ember_view_as_student', val ? '1' : '0');
+      renderRoute();
+    }
 
     // ═══════════════════════════════════════════════════════════════════
     // 🧩 DATA
@@ -224,60 +233,77 @@
     }
     async function deleteCourse(slug, id) { await deleteDoc(doc(db, 'tenants', slug, 'courses', id)); }
 
+    async function createStudent(slug, { firstName, lastName, username, password }) {
+      const fakeEmail = `${username}@${slug}.emberlms.local`;
+      // Use secondaryAuth so the teacher stays logged in
+      const cred = await createUserWithEmailAndPassword(secondaryAuth, fakeEmail, password);
+      const studentUid = cred.user.uid;
+      await signOut(secondaryAuth);
+      // Write the student doc from the teacher's authenticated context
+      await setDoc(doc(db, 'tenants', slug, 'students', studentUid), {
+        username, firstName, lastName,
+        displayName: `${firstName} ${lastName}`.trim(),
+        email: fakeEmail,
+        role: 'student',
+        tempPassword: password,
+        enrolledCourseIds: [],
+        createdAt: serverTimestamp()
+      });
+      return studentUid;
+    }
+
+    async function deleteStudent(slug, studentUid) {
+      // Note: we can't delete the auth account client-side without signing in as them.
+      // We'll delete the Firestore doc; the auth account becomes orphaned.
+      await deleteDoc(doc(db, 'tenants', slug, 'students', studentUid));
+    }
+
+    async function enrollStudent(slug, courseId, studentUid, studentName, username) {
+      await setDoc(doc(db, 'tenants', slug, 'courses', courseId, 'enrollments', studentUid), {
+        studentId: studentUid, studentName, username, enrolledAt: serverTimestamp()
+      });
+      await updateDoc(doc(db, 'tenants', slug, 'students', studentUid), {
+        enrolledCourseIds: arrayUnion(courseId)
+      });
+    }
+
+    async function unenrollStudent(slug, courseId, studentUid) {
+      await deleteDoc(doc(db, 'tenants', slug, 'courses', courseId, 'enrollments', studentUid));
+      await updateDoc(doc(db, 'tenants', slug, 'students', studentUid), {
+        enrolledCourseIds: arrayRemove(courseId)
+      });
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // 🖼️ VIEW: LANDING
     // ═══════════════════════════════════════════════════════════════════
     function viewLanding() {
       render(`
         <div class="min-h-screen relative overflow-hidden">
-          <!-- Nav -->
           <nav class="relative z-20 max-w-6xl mx-auto px-6 py-6 flex justify-between items-center">
-            <div class="font-serif text-xl">
-              <span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span>
-            </div>
+            <div class="font-serif text-xl"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></div>
             <div class="flex items-center gap-6 text-sm">
               <a href="${buildUrl('/onboard')}" class="text-gray-400 hover:text-white transition-all">Sign in</a>
-              <a href="${buildUrl('/onboard')}"
-                 class="px-4 py-2 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg hover:brightness-110 transition-all">
-                Get started
-              </a>
+              <a href="${buildUrl('/onboard')}" class="px-4 py-2 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg hover:brightness-110 transition-all">Get started</a>
             </div>
           </nav>
-
-          <!-- Hero glow -->
           <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[900px] h-[700px] rounded-full bg-[#F59E0B]/10 blur-[160px] pointer-events-none"></div>
           <div class="absolute top-40 right-0 w-[500px] h-[500px] rounded-full bg-[#8B5CF6]/10 blur-[140px] pointer-events-none"></div>
-
-          <!-- Hero -->
           <section class="relative z-10 max-w-5xl mx-auto px-6 pt-16 pb-24 text-center">
             <p class="text-xs text-[#F59E0B] uppercase tracking-[0.3em] mb-6">Built for teachers</p>
-            <h1 class="font-serif text-6xl md:text-7xl text-white leading-[1.05] mb-6">
-              Teaching,<br><span class="italic text-[#F59E0B]">refined.</span>
-            </h1>
-            <p class="text-lg md:text-xl text-gray-400 max-w-2xl mx-auto mb-10 leading-relaxed">
-              Ember is a modern learning platform with the focus of a notebook and the polish of a studio tool. Give your classroom the software it deserves.
-            </p>
+            <h1 class="font-serif text-6xl md:text-7xl text-white leading-[1.05] mb-6">Teaching,<br><span class="italic text-[#F59E0B]">refined.</span></h1>
+            <p class="text-lg md:text-xl text-gray-400 max-w-2xl mx-auto mb-10 leading-relaxed">Ember is a modern learning platform with the focus of a notebook and the polish of a studio tool.</p>
             <div class="flex flex-wrap items-center justify-center gap-4">
-              <a href="${buildUrl('/onboard')}"
-                 class="px-6 py-3.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_25px_rgba(245,158,11,0.25)] hover:shadow-[0_0_40px_rgba(245,158,11,0.45)] hover:brightness-110 transition-all">
-                Create your school — free
-              </a>
-              <a href="${buildUrl('/onboard')}"
-                 class="px-6 py-3.5 bg-white/[0.04] border border-white/10 text-white font-medium rounded-lg hover:bg-white/[0.08] transition-all">
-                Sign in
-              </a>
+              <a href="${buildUrl('/onboard')}" class="px-6 py-3.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_25px_rgba(245,158,11,0.25)] hover:shadow-[0_0_40px_rgba(245,158,11,0.45)] hover:brightness-110 transition-all">Create your school — free</a>
+              <a href="${buildUrl('/onboard')}" class="px-6 py-3.5 bg-white/[0.04] border border-white/10 text-white font-medium rounded-lg hover:bg-white/[0.08] transition-all">Sign in</a>
             </div>
             <p class="text-xs text-gray-600 mt-6">No credit card. No setup fees. Just sign in with Google.</p>
           </section>
-
-          <!-- Dashboard preview -->
           <section class="relative z-10 max-w-6xl mx-auto px-6 pb-24">
             <div class="relative rounded-2xl border border-white/[0.08] bg-[#0D0D0D] overflow-hidden shadow-2xl">
               <div class="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#F59E0B]/50 to-transparent"></div>
               <div class="flex items-center gap-2 px-4 py-3 border-b border-white/[0.08] bg-[#0A0A0A]">
-                <div class="w-3 h-3 rounded-full bg-white/10"></div>
-                <div class="w-3 h-3 rounded-full bg-white/10"></div>
-                <div class="w-3 h-3 rounded-full bg-white/10"></div>
+                <div class="w-3 h-3 rounded-full bg-white/10"></div><div class="w-3 h-3 rounded-full bg-white/10"></div><div class="w-3 h-3 rounded-full bg-white/10"></div>
                 <div class="ml-4 text-xs text-gray-600 font-mono">emberlms.com/your-school</div>
               </div>
               <div class="grid grid-cols-12 min-h-[400px]">
@@ -285,7 +311,6 @@
                   <div class="font-serif text-sm"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></div>
                   <div class="pt-4 space-y-1.5">
                     <div class="flex items-center gap-2 px-2.5 py-1.5 rounded bg-white/[0.05] border-l-2 border-[#F59E0B] text-xs text-white"><div class="w-3 h-3 rounded bg-[#F59E0B]/60"></div>Dashboard</div>
-                    <div class="flex items-center gap-2 px-2.5 py-1.5 rounded text-xs text-gray-500"><div class="w-3 h-3 rounded bg-white/10"></div>Courses</div>
                     <div class="flex items-center gap-2 px-2.5 py-1.5 rounded text-xs text-gray-500"><div class="w-3 h-3 rounded bg-white/10"></div>Students</div>
                   </div>
                 </div>
@@ -295,19 +320,13 @@
                     ${[['grad-amber','English 1'],['grad-violet','Geometry'],['grad-teal','Spanish 1']].map(([g,t]) => `
                       <div class="bg-[#141414] border border-white/[0.08] rounded-lg overflow-hidden">
                         <div class="${g} h-12"></div>
-                        <div class="p-3">
-                          <div class="text-xs text-gray-500 mb-0.5">01 - ${t}</div>
-                          <div class="font-serif text-sm text-white">${t}</div>
-                        </div>
-                      </div>
-                    `).join('')}
+                        <div class="p-3"><div class="text-xs text-gray-500 mb-0.5">01 - ${t}</div><div class="font-serif text-sm text-white">${t}</div></div>
+                      </div>`).join('')}
                   </div>
                 </div>
               </div>
             </div>
           </section>
-
-          <!-- Features -->
           <section class="relative z-10 max-w-6xl mx-auto px-6 pb-24">
             <div class="text-center mb-14">
               <p class="text-xs text-[#F59E0B] uppercase tracking-[0.3em] mb-3">Everything in one place</p>
@@ -315,25 +334,20 @@
             </div>
             <div class="grid md:grid-cols-3 gap-6">
               ${[
-                { icon:'layers',        title:'Modules & Items',   desc:'Organize content into modules. Pages, assignments, links, and quizzes — all in one flow.' },
-                { icon:'users',         title:'Student Accounts',  desc:'Create usernames and passwords for your students. No emails required. Works for any age.' },
-                { icon:'clipboard-list',title:'Grading Built-in',  desc:'Collect submissions, grade inline, and leave feedback — all without leaving the platform.' },
-                { icon:'palette',       title:'Designed to focus', desc:'A dark, editorial interface that puts content first and distractions last.' },
-                { icon:'lock',          title:'Yours, isolated',   desc:'Each school gets its own URL and its own space. Your data never touches another tenant.' },
-                { icon:'zap',           title:'Real-time updates', desc:'Grades, submissions, and content sync across devices the moment they change.' }
+                { icon:'layers', title:'Modules & Items', desc:'Organize content into modules. Pages, assignments, links, and quizzes — all in one flow.' },
+                { icon:'users', title:'Student Accounts', desc:'Create usernames and passwords for your students. No emails required. Works for any age.' },
+                { icon:'clipboard-list', title:'Grading Built-in', desc:'Collect submissions, grade inline, and leave feedback — all without leaving the platform.' },
+                { icon:'palette', title:'Designed to focus', desc:'A dark, editorial interface that puts content first and distractions last.' },
+                { icon:'lock', title:'Yours, isolated', desc:'Each school gets its own URL and its own space. Your data never touches another tenant.' },
+                { icon:'zap', title:'Real-time updates', desc:'Grades, submissions, and content sync across devices the moment they change.' }
               ].map(f => `
                 <div class="bg-[#141414] border border-white/[0.08] rounded-xl p-6 hover:border-white/20 hover:-translate-y-0.5 transition-all">
-                  <div class="w-10 h-10 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center mb-4">
-                    <i data-lucide="${f.icon}" class="w-5 h-5 text-[#F59E0B]"></i>
-                  </div>
+                  <div class="w-10 h-10 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center mb-4"><i data-lucide="${f.icon}" class="w-5 h-5 text-[#F59E0B]"></i></div>
                   <h3 class="font-serif text-xl text-white mb-2">${f.title}</h3>
                   <p class="text-sm text-gray-500 leading-relaxed">${f.desc}</p>
-                </div>
-              `).join('')}
+                </div>`).join('')}
             </div>
           </section>
-
-          <!-- How it works -->
           <section class="relative z-10 max-w-4xl mx-auto px-6 pb-24">
             <div class="text-center mb-14">
               <p class="text-xs text-[#F59E0B] uppercase tracking-[0.3em] mb-3">Three steps</p>
@@ -344,108 +358,69 @@
                 { n:'01', title:'Sign in with Google', desc:'Your school, your URL. Pick a slug like "example" and your space is live at emberlms.com/example.' },
                 { n:'02', title:'Create courses & students', desc:'Add courses with a click. Generate student accounts with usernames and passwords — no emails needed.' },
                 { n:'03', title:'Teach', desc:'Build modules, add assignments, and watch submissions roll in. Everything lives in one clean dashboard.' }
-              ].map((s,i) => `
+              ].map(s => `
                 <div class="flex items-start gap-6 bg-[#141414] border border-white/[0.08] rounded-xl p-6">
                   <div class="font-serif text-3xl text-[#F59E0B] leading-none">${s.n}</div>
-                  <div>
-                    <h3 class="font-serif text-lg text-white mb-1">${s.title}</h3>
-                    <p class="text-sm text-gray-500 leading-relaxed">${s.desc}</p>
-                  </div>
-                </div>
-              `).join('')}
+                  <div><h3 class="font-serif text-lg text-white mb-1">${s.title}</h3><p class="text-sm text-gray-500 leading-relaxed">${s.desc}</p></div>
+                </div>`).join('')}
             </div>
           </section>
-
-          <!-- CTA -->
           <section class="relative z-10 max-w-4xl mx-auto px-6 pb-24">
             <div class="relative rounded-2xl border border-white/[0.08] bg-gradient-to-br from-[#141414] to-[#0A0A0A] p-12 text-center overflow-hidden">
               <div class="absolute inset-0 bg-gradient-to-b from-[#F59E0B]/5 to-transparent"></div>
               <div class="relative z-10">
                 <h2 class="font-serif text-4xl text-white mb-4">Bring your classroom to Ember.</h2>
                 <p class="text-gray-400 mb-8 max-w-lg mx-auto">Free to start. Yours in seconds.</p>
-                <a href="${buildUrl('/onboard')}"
-                   class="inline-block px-8 py-3.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_25px_rgba(245,158,11,0.25)] hover:shadow-[0_0_40px_rgba(245,158,11,0.45)] hover:brightness-110 transition-all">
-                  Create your school
-                </a>
+                <a href="${buildUrl('/onboard')}" class="inline-block px-8 py-3.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_25px_rgba(245,158,11,0.25)] hover:shadow-[0_0_40px_rgba(245,158,11,0.45)] hover:brightness-110 transition-all">Create your school</a>
               </div>
             </div>
           </section>
-
-          <!-- Footer -->
           <footer class="relative z-10 border-t border-white/[0.06] py-8">
             <div class="max-w-6xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-4 text-xs text-gray-600">
               <div class="font-serif"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></div>
               <div>© ${new Date().getFullYear()} Ember LMS. The modern standard for learning.</div>
             </div>
           </footer>
-        </div>
-      `);
+        </div>`);
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // 🖼️ VIEW: ONBOARD (unchanged from Phase 2/3)
+    // 🖼️ VIEW: ONBOARD
     // ═══════════════════════════════════════════════════════════════════
     function viewOnboard() {
       if (!currentUser) {
-        render(`
-          <div class="min-h-screen flex items-center justify-center px-6 relative overflow-hidden">
-            <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
-            <div class="max-w-md w-full text-center z-10">
-              <h1 class="font-serif text-4xl text-white mb-3">Create your school</h1>
-              <p class="text-gray-500 mb-8">Sign in with Google to get started.</p>
-              <button id="google-signin-btn"
-                class="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-medium py-3 px-4 rounded-lg hover:bg-gray-100 transition-all">
-                <svg class="w-5 h-5" viewBox="0 0 24 24">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                </svg>
-                Sign in with Google
-              </button>
-              <p class="text-xs text-gray-600 mt-6">
-                <a href="${buildUrl('/')}" class="hover:text-gray-400">← Back</a>
-              </p>
-            </div>
+        render(`<div class="min-h-screen flex items-center justify-center px-6 relative overflow-hidden">
+          <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
+          <div class="max-w-md w-full text-center z-10">
+            <h1 class="font-serif text-4xl text-white mb-3">Create your school</h1>
+            <p class="text-gray-500 mb-8">Sign in with Google to get started.</p>
+            <button id="google-signin-btn" class="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-medium py-3 px-4 rounded-lg hover:bg-gray-100 transition-all">
+              <svg class="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+              Sign in with Google
+            </button>
+            <p class="text-xs text-gray-600 mt-6"><a href="${buildUrl('/')}" class="hover:text-gray-400">← Back</a></p>
           </div>
-        `);
+        </div>`);
         document.getElementById('google-signin-btn').addEventListener('click', handleGoogleSignIn);
         return;
       }
-
-      render(`
-        <div class="min-h-screen flex items-center justify-center px-6 relative overflow-hidden">
-          <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
-          <div class="max-w-md w-full z-10">
-            <h1 class="font-serif text-4xl text-white mb-3">Create your school</h1>
-            <p class="text-gray-500 mb-8">Give your school a name and a URL.</p>
-
-            <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">School Name</label>
-            <input id="school-name" type="text" placeholder="Example High School" autocomplete="off"
-              class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
-
-            <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">School URL</label>
-            <div class="flex items-center bg-white/[0.03] border border-white/10 rounded-lg mb-4 focus-within:border-[#8B5CF6] transition-all">
-              <span class="text-gray-500 text-sm pl-4 select-none">/${escapeHtml(BASE_PATH.replace(/^\//, ''))}/</span>
-              <input id="school-slug" type="text" placeholder="example" autocomplete="off"
-                class="flex-1 bg-transparent px-2 py-3 text-white focus:outline-none" />
-            </div>
-
-            <p id="onboard-error" class="text-red-400 text-sm mb-4 hidden"></p>
-
-            <button id="onboard-submit"
-              class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all disabled:opacity-60">
-              Create School
-            </button>
-
-            <p class="text-xs text-gray-600 mt-6 text-center">
-              Signed in as ${escapeHtml(currentUser.email || '')} ·
-              <button id="signout-btn" class="hover:text-gray-400">Sign out</button>
-            </p>
+      render(`<div class="min-h-screen flex items-center justify-center px-6 relative overflow-hidden">
+        <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
+        <div class="max-w-md w-full z-10">
+          <h1 class="font-serif text-4xl text-white mb-3">Create your school</h1>
+          <p class="text-gray-500 mb-8">Give your school a name and a URL.</p>
+          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">School Name</label>
+          <input id="school-name" type="text" placeholder="Example High School" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
+          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">School URL</label>
+          <div class="flex items-center bg-white/[0.03] border border-white/10 rounded-lg mb-4 focus-within:border-[#8B5CF6] transition-all">
+            <span class="text-gray-500 text-sm pl-4 select-none">/${escapeHtml(BASE_PATH.replace(/^\//, ''))}/</span>
+            <input id="school-slug" type="text" placeholder="example" autocomplete="off" class="flex-1 bg-transparent px-2 py-3 text-white focus:outline-none" />
           </div>
+          <p id="onboard-error" class="text-red-400 text-sm mb-4 hidden"></p>
+          <button id="onboard-submit" class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all disabled:opacity-60">Create School</button>
+          <p class="text-xs text-gray-600 mt-6 text-center">Signed in as ${escapeHtml(currentUser.email || '')} · <button id="signout-btn" class="hover:text-gray-400">Sign out</button></p>
         </div>
-      `);
-
+      </div>`);
       const ni = document.getElementById('school-name');
       const si = document.getElementById('school-slug');
       ni.addEventListener('input', () => { if (!si.dataset.touched) si.value = slugify(ni.value); });
@@ -453,7 +428,6 @@
       document.getElementById('onboard-submit').addEventListener('click', createSchool);
       document.getElementById('signout-btn').addEventListener('click', () => signOut(auth));
     }
-
     async function createSchool() {
       const name = document.getElementById('school-name').value.trim();
       const slug = document.getElementById('school-slug').value.trim().toLowerCase();
@@ -469,10 +443,7 @@
         const ex = await getDoc(doc(db, 'tenants', slug));
         if (ex.exists()) { btn.disabled = false; btn.textContent = 'Create School'; return showError('That URL is already taken.'); }
         await setDoc(doc(db, 'tenants', slug), { name, slug, ownerUid: currentUser.uid, createdAt: serverTimestamp() });
-        await setDoc(doc(db, 'tenants', slug, 'users', currentUser.uid), {
-          role: 'teacher', email: currentUser.email,
-          displayName: currentUser.displayName, photoURL: currentUser.photoURL, createdAt: serverTimestamp()
-        });
+        await setDoc(doc(db, 'tenants', slug, 'users', currentUser.uid), { role: 'teacher', email: currentUser.email, displayName: currentUser.displayName, photoURL: currentUser.photoURL, createdAt: serverTimestamp() });
         navigate('/' + slug);
       } catch (e) {
         console.error(e); btn.disabled = false; btn.textContent = 'Create School';
@@ -481,7 +452,7 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // 🖼️ VIEW: TENANT ROUTING
+    // 🖼️ TENANT ROUTING
     // ═══════════════════════════════════════════════════════════════════
     async function viewTenant(slug, segs) {
       render(`<div class="min-h-screen flex items-center justify-center text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i></div>`);
@@ -492,13 +463,14 @@
       if (!roleInfo) return viewNoAccess(slug, tenant);
 
       const sub = segs[0] || 'dashboard';
+      if (sub === 'students') return viewStudents(slug, tenant, roleInfo);
       if (sub === 'course' && segs[1]) {
+        if (segs[2] === 'roster') return viewCourseRoster(slug, tenant, roleInfo, segs[1]);
         if (segs[2] === 'item' && segs[3] && segs[4]) return viewItem(slug, tenant, roleInfo, segs[1], segs[3], segs[4]);
         return viewCourse(slug, tenant, roleInfo, segs[1]);
       }
       return viewDashboard(slug, tenant, roleInfo);
     }
-
     function viewTenantNotFound(slug) {
       render(`<div class="min-h-screen flex items-center justify-center text-center px-6"><div>
         <h1 class="font-serif text-3xl text-white mb-2">School not found</h1>
@@ -513,66 +485,45 @@
         <button data-signout class="px-5 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Sign out</button>
       </div></div>`);
     }
-
     function viewTenantLogin(slug, tenant) {
-      render(`
-        <div class="min-h-screen flex">
-          <div class="hidden lg:flex w-1/2 bg-[#050505] relative overflow-hidden border-r border-white/[0.08]">
-            <div class="absolute bottom-0 left-0 w-[600px] h-[600px] rounded-full bg-[#F59E0B]/10 blur-[120px] pointer-events-none"></div>
-            <div class="relative z-10 flex flex-col justify-end p-16">
-              <p class="text-xs text-[#F59E0B] uppercase tracking-widest mb-4">Welcome</p>
-              <h1 class="font-serif text-5xl text-white leading-tight mb-4">${escapeHtml(tenant.name)}</h1>
-              <p class="text-gray-500 text-base max-w-md">Sign in to access your courses, assignments, and grades.</p>
-            </div>
-          </div>
-          <div class="w-full lg:w-1/2 flex items-center justify-center px-6 py-12 bg-[#0A0A0A]">
-            <div class="max-w-sm w-full">
-              <div class="lg:hidden mb-8">
-                <h1 class="font-serif text-3xl text-white mb-1">${escapeHtml(tenant.name)}</h1>
-                <p class="text-gray-500 text-sm">Sign in to continue</p>
-              </div>
-              <div class="hidden lg:block mb-8">
-                <h2 class="font-serif text-3xl text-white mb-1">Welcome back</h2>
-                <p class="text-gray-500 text-sm">Sign in to continue</p>
-              </div>
-              <button id="tenant-google-btn"
-                class="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-medium py-3 px-4 rounded-lg hover:bg-gray-100 transition-all">
-                <svg class="w-5 h-5" viewBox="0 0 24 24">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                </svg>
-                Continue as Teacher
-              </button>
-              <div class="flex items-center gap-4 my-6">
-                <div class="flex-1 h-px bg-white/[0.08]"></div>
-                <span class="text-xs text-gray-500 uppercase tracking-wider">or</span>
-                <div class="flex-1 h-px bg-white/[0.08]"></div>
-              </div>
-              <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Username</label>
-              <input id="student-username" type="text" autocomplete="username"
-                class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
-              <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Password</label>
-              <input id="student-password" type="password" autocomplete="current-password"
-                class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
-              <p id="login-error" class="text-red-400 text-sm mb-4 hidden"></p>
-              <button id="student-login-btn"
-                class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all disabled:opacity-60">
-                Sign in as Student
-              </button>
-              <p class="text-xs text-gray-600 mt-6 text-center">
-                <a href="${buildUrl('/')}" class="hover:text-gray-400">← Back</a>
-              </p>
-            </div>
+      render(`<div class="min-h-screen flex">
+        <div class="hidden lg:flex w-1/2 bg-[#050505] relative overflow-hidden border-r border-white/[0.08]">
+          <div class="absolute bottom-0 left-0 w-[600px] h-[600px] rounded-full bg-[#F59E0B]/10 blur-[120px] pointer-events-none"></div>
+          <div class="relative z-10 flex flex-col justify-end p-16">
+            <p class="text-xs text-[#F59E0B] uppercase tracking-widest mb-4">Welcome</p>
+            <h1 class="font-serif text-5xl text-white leading-tight mb-4">${escapeHtml(tenant.name)}</h1>
+            <p class="text-gray-500 text-base max-w-md">Sign in to access your courses, assignments, and grades.</p>
           </div>
         </div>
-      `);
+        <div class="w-full lg:w-1/2 flex items-center justify-center px-6 py-12 bg-[#0A0A0A]">
+          <div class="max-w-sm w-full">
+            <div class="mb-8">
+              <h2 class="font-serif text-3xl text-white mb-1">Welcome back</h2>
+              <p class="text-gray-500 text-sm">Sign in to continue</p>
+            </div>
+            <button id="tenant-google-btn" class="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-medium py-3 px-4 rounded-lg hover:bg-gray-100 transition-all">
+              <svg class="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+              Continue as Teacher
+            </button>
+            <div class="flex items-center gap-4 my-6">
+              <div class="flex-1 h-px bg-white/[0.08]"></div>
+              <span class="text-xs text-gray-500 uppercase tracking-wider">or</span>
+              <div class="flex-1 h-px bg-white/[0.08]"></div>
+            </div>
+            <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Username</label>
+            <input id="student-username" type="text" autocomplete="username" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
+            <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Password</label>
+            <input id="student-password" type="password" autocomplete="current-password" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
+            <p id="login-error" class="text-red-400 text-sm mb-4 hidden"></p>
+            <button id="student-login-btn" class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all disabled:opacity-60">Sign in as Student</button>
+            <p class="text-xs text-gray-600 mt-6 text-center"><a href="${buildUrl('/')}" class="hover:text-gray-400">← Back</a></p>
+          </div>
+        </div>
+      </div>`);
       document.getElementById('tenant-google-btn').addEventListener('click', handleGoogleSignIn);
       document.getElementById('student-login-btn').addEventListener('click', () => studentLogin(slug));
       document.getElementById('student-password').addEventListener('keydown', e => { if (e.key === 'Enter') studentLogin(slug); });
     }
-
     async function studentLogin(slug) {
       const u = document.getElementById('student-username').value.trim().toLowerCase();
       const p = document.getElementById('student-password').value;
@@ -596,22 +547,35 @@
     // 🖼️ VIEW: DASHBOARD
     // ═══════════════════════════════════════════════════════════════════
     function viewDashboard(slug, tenant, roleInfo) {
-      const isTeacher = roleInfo.role === 'teacher';
+      const isRealTeacher = roleInfo.role === 'teacher';
+      const isTeacherMode = isRealTeacher && !viewAsStudent;
+      const isPreview = isRealTeacher && viewAsStudent;
+      const isStudent = !isRealTeacher;
+
       render(`
         <div class="min-h-screen flex">
           ${renderSidebar(slug, tenant, roleInfo, 'dashboard')}
           <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
             <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
+            ${isPreview ? renderPreviewBanner() : ''}
             <header class="p-8 pb-4 flex justify-between items-center z-10 relative">
               <div>
-                <h2 class="font-serif text-3xl text-white mb-1">Dashboard</h2>
+                <h2 class="font-serif text-3xl text-white mb-1">${isStudent ? 'My Courses' : 'Dashboard'}</h2>
                 <p class="text-xs text-gray-500 tracking-wider uppercase font-medium">${escapeHtml(tenant.name)}</p>
               </div>
-              ${isTeacher ? `
-                <button id="add-course-btn"
-                  class="px-5 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all flex items-center gap-2">
-                  <i data-lucide="plus" class="w-4 h-4"></i> New Course
-                </button>` : ''}
+              <div class="flex items-center gap-3">
+                ${isRealTeacher ? `
+                  <button id="toggle-preview-btn"
+                    class="px-4 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all flex items-center gap-2">
+                    <i data-lucide="${viewAsStudent ? 'eye-off' : 'eye'}" class="w-4 h-4"></i>
+                    ${viewAsStudent ? 'Exit Preview' : 'View as Student'}
+                  </button>` : ''}
+                ${isTeacherMode ? `
+                  <button id="add-course-btn"
+                    class="px-5 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all flex items-center gap-2">
+                    <i data-lucide="plus" class="w-4 h-4"></i> New Course
+                  </button>` : ''}
+              </div>
             </header>
             <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
               <div id="course-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -619,13 +583,39 @@
               </div>
             </div>
           </main>
-        </div>
-      `);
-      if (isTeacher) document.getElementById('add-course-btn').addEventListener('click', () => openCourseModal(slug));
-      subscribeToCourses(slug, isTeacher);
+        </div>`);
+
+      if (isRealTeacher) {
+        document.getElementById('toggle-preview-btn').addEventListener('click', () => setViewAsStudent(!viewAsStudent));
+      }
+      if (isTeacherMode) {
+        document.getElementById('add-course-btn').addEventListener('click', () => openCourseModal(slug));
+      }
+
+      if (isStudent) {
+        subscribeToEnrolledCourses(slug, roleInfo);
+      } else {
+        subscribeToOwnedCourses(slug, isTeacherMode);
+      }
     }
 
-    function subscribeToCourses(slug, isTeacher) {
+    function renderPreviewBanner() {
+      return `<div class="relative z-20 bg-[#F59E0B]/10 border-b border-[#F59E0B]/20 px-8 py-2.5 flex items-center justify-between text-xs">
+        <div class="flex items-center gap-2 text-[#F59E0B]">
+          <i data-lucide="eye" class="w-3.5 h-3.5"></i>
+          <span class="font-medium">Previewing as Student</span>
+          <span class="text-gray-500 ml-2">— Teacher controls are hidden</span>
+        </div>
+        <button id="exit-preview-banner" class="text-[#F59E0B] hover:text-white font-medium transition-colors">Exit Preview</button>
+      </div>`;
+    }
+
+    function attachPreviewBannerHandler() {
+      const btn = document.getElementById('exit-preview-banner');
+      if (btn) btn.addEventListener('click', () => setViewAsStudent(false));
+    }
+
+    function subscribeToOwnedCourses(slug, showDelete) {
       clearSubs();
       const q = query(collection(db, 'tenants', slug, 'courses'), orderBy('createdAt', 'desc'));
       const unsub = onSnapshot(q, (snap) => {
@@ -635,12 +625,57 @@
           grid.innerHTML = `<div class="col-span-full text-center py-20 border border-dashed border-white/10 rounded-xl">
             <i data-lucide="book-open" class="w-10 h-10 mx-auto mb-4 text-gray-600"></i>
             <p class="text-lg text-white font-serif mb-1">No courses yet</p>
-            <p class="text-sm text-gray-500">${isTeacher ? 'Click "New Course" to create your first one.' : 'You are not enrolled in any courses yet.'}</p>
+            <p class="text-sm text-gray-500">${showDelete ? 'Click "New Course" to create your first one.' : 'You have no courses.'}</p>
           </div>`;
           refreshIcons(); return;
         }
-        grid.innerHTML = snap.docs.map(d => renderCourseCard(slug, d.id, d.data(), isTeacher)).join('');
+        grid.innerHTML = snap.docs.map(d => renderCourseCard(slug, d.id, d.data(), showDelete)).join('');
         refreshIcons();
+        wireCourseGrid(slug, showDelete);
+      });
+      unsubs.push(unsub);
+      attachPreviewBannerHandler();
+    }
+
+    async function subscribeToEnrolledCourses(slug, roleInfo) {
+      clearSubs();
+      const ids = roleInfo.data.enrolledCourseIds || [];
+      const grid = document.getElementById('course-grid');
+      if (!grid) return;
+
+      if (ids.length === 0) {
+        grid.innerHTML = `<div class="col-span-full text-center py-20 border border-dashed border-white/10 rounded-xl">
+          <i data-lucide="book-open" class="w-10 h-10 mx-auto mb-4 text-gray-600"></i>
+          <p class="text-lg text-white font-serif mb-1">No courses yet</p>
+          <p class="text-sm text-gray-500">You haven't been enrolled in any courses. Ask your teacher for a join code.</p>
+        </div>`;
+        refreshIcons();
+        return;
+      }
+
+      // Fetch all courses in parallel
+      try {
+        const courses = await Promise.all(ids.map(async (id) => {
+          const s = await getDoc(doc(db, 'tenants', slug, 'courses', id));
+          return s.exists() ? { id: s.id, ...s.data() } : null;
+        }));
+        const valid = courses.filter(Boolean);
+        if (valid.length === 0) {
+          grid.innerHTML = `<div class="col-span-full text-center py-20 text-gray-500 text-sm">Courses unavailable.</div>`;
+          return;
+        }
+        grid.innerHTML = valid.map(c => renderCourseCard(slug, c.id, c, false)).join('');
+        refreshIcons();
+        wireCourseGrid(slug, false);
+      } catch (e) {
+        console.error(e);
+        grid.innerHTML = `<div class="col-span-full text-red-400 text-sm p-6">Failed to load courses.</div>`;
+      }
+    }
+
+    function wireCourseGrid(slug, showDelete) {
+      const grid = document.getElementById('course-grid');
+      if (showDelete) {
         grid.querySelectorAll('[data-action="delete"]').forEach(btn => {
           btn.addEventListener('click', async (e) => {
             e.stopPropagation(); e.preventDefault();
@@ -649,27 +684,22 @@
             }
           });
         });
-        grid.querySelectorAll('[data-course-link]').forEach(card => {
-          card.addEventListener('click', (e) => {
-            if (e.target.closest('[data-action]')) return;
-            navigate(`/${slug}/course/${card.dataset.courseLink}`);
-          });
+      }
+      grid.querySelectorAll('[data-course-link]').forEach(card => {
+        card.addEventListener('click', (e) => {
+          if (e.target.closest('[data-action]')) return;
+          navigate(`/${slug}/course/${card.dataset.courseLink}`);
         });
-      }, (err) => {
-        console.error(err);
-        const grid = document.getElementById('course-grid');
-        if (grid) grid.innerHTML = `<div class="col-span-full text-red-400 text-sm p-6">Failed to load courses: ${escapeHtml(err.message)}</div>`;
       });
-      unsubs.push(unsub);
     }
 
-    function renderCourseCard(slug, id, course, isTeacher) {
+    function renderCourseCard(slug, id, course, showDelete) {
       const grad = course.gradient || pickGradient(course.title);
       return `
         <div data-course-link="${id}"
           class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden cursor-pointer hover:-translate-y-1 hover:border-white/20 transition-all group flex flex-col">
           <div class="${grad} h-24 relative">
-            ${isTeacher ? `<button data-action="delete" data-id="${id}" data-title="${escapeHtml(course.title || '')}"
+            ${showDelete ? `<button data-action="delete" data-id="${id}" data-title="${escapeHtml(course.title || '')}"
               class="absolute top-2 right-2 p-1.5 bg-black/30 hover:bg-red-500/80 rounded text-white/80 hover:text-white opacity-0 group-hover:opacity-100 transition-all">
               <i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>` : ''}
           </div>
@@ -684,8 +714,7 @@
               <i data-lucide="folder" class="w-4 h-4 hover:text-[#F59E0B] transition-colors"></i>
             </div>
           </div>
-        </div>
-      `;
+        </div>`;
     }
 
     function openCourseModal(slug) {
@@ -696,11 +725,9 @@
           <h3 class="font-serif text-2xl text-white mb-1">New Course</h3>
           <p class="text-gray-500 text-sm mb-6">Create a course for your students.</p>
           <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Course Name</label>
-          <input id="course-title" type="text" placeholder="English 1" autocomplete="off"
-            class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
+          <input id="course-title" type="text" placeholder="English 1" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
           <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Course Code <span class="text-gray-600 normal-case tracking-normal">(optional)</span></label>
-          <input id="course-code" type="text" placeholder="01 - English 1 - Santiago" autocomplete="off"
-            class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
+          <input id="course-code" type="text" placeholder="01 - English 1 - Santiago" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
           <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Color</label>
           <div id="gradient-picker" class="grid grid-cols-6 gap-2 mb-6">
             ${GRADIENTS.map((g, i) => `<button type="button" data-grad="${g}" class="${g} h-9 rounded-lg border-2 ${i === 0 ? 'border-white' : 'border-transparent'} hover:border-white/50 transition-all"></button>`).join('')}
@@ -721,6 +748,7 @@
       const close = () => ov.remove();
       ov.querySelector('#course-cancel').addEventListener('click', close);
       ov.addEventListener('click', e => { if (e.target === ov) close(); });
+      ov.querySelector('#course-title').addEventListener('keydown', e => { if (e.key === 'Enter') ov.querySelector('#course-create').click(); });
       ov.querySelector('#course-create').addEventListener('click', async () => {
         const title = ov.querySelector('#course-title').value.trim();
         const code = ov.querySelector('#course-code').value.trim();
@@ -736,6 +764,368 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // 🖼️ VIEW: STUDENTS (tenant-level)
+    // ═══════════════════════════════════════════════════════════════════
+    function viewStudents(slug, tenant, roleInfo) {
+      if (roleInfo.role !== 'teacher') return viewNotFound();
+
+      render(`
+        <div class="min-h-screen flex">
+          ${renderSidebar(slug, tenant, roleInfo, 'students')}
+          <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
+            <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
+            <header class="p-8 pb-4 flex justify-between items-center z-10 relative">
+              <div>
+                <h2 class="font-serif text-3xl text-white mb-1">Students</h2>
+                <p class="text-xs text-gray-500 tracking-wider uppercase font-medium">${escapeHtml(tenant.name)}</p>
+              </div>
+              <button id="add-student-btn"
+                class="px-5 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all flex items-center gap-2">
+                <i data-lucide="user-plus" class="w-4 h-4"></i> New Student
+              </button>
+            </header>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
+              <div id="student-list" class="max-w-4xl">
+                <div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div>
+              </div>
+            </div>
+          </main>
+        </div>`);
+
+      document.getElementById('add-student-btn').addEventListener('click', () => openCreateStudentModal(slug));
+
+      // Subscribe to student list
+      const q = query(collection(db, 'tenants', slug, 'students'), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, (snap) => {
+        const list = document.getElementById('student-list');
+        if (!list) return;
+        if (snap.empty) {
+          list.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center">
+            <i data-lucide="users" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i>
+            <h3 class="font-serif text-xl text-white mb-2">No students yet</h3>
+            <p class="text-gray-500 text-sm">Click "New Student" to create your first account.</p>
+          </div>`;
+          refreshIcons(); return;
+        }
+        list.innerHTML = `
+          <div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
+            <div class="grid grid-cols-12 px-5 py-3 border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
+              <div class="col-span-4">Name</div>
+              <div class="col-span-3">Username</div>
+              <div class="col-span-2">Password</div>
+              <div class="col-span-2">Courses</div>
+              <div class="col-span-1"></div>
+            </div>
+            <div class="divide-y divide-white/[0.04]">
+              ${snap.docs.map(d => {
+                const s = d.data();
+                const name = s.displayName || `${s.firstName || ''} ${s.lastName || ''}`.trim() || s.username;
+                const enrolled = (s.enrolledCourseIds || []).length;
+                return `
+                  <div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
+                    <div class="col-span-4 text-sm text-white truncate">${escapeHtml(name)}</div>
+                    <div class="col-span-3 text-sm text-gray-400 font-mono truncate">${escapeHtml(s.username || '')}</div>
+                    <div class="col-span-2 text-xs text-gray-500 font-mono truncate" title="${escapeHtml(s.tempPassword || '')}">${escapeHtml(s.tempPassword || '••••••')}</div>
+                    <div class="col-span-2 text-xs text-gray-500">${enrolled} course${enrolled === 1 ? '' : 's'}</div>
+                    <div class="col-span-1 flex justify-end gap-1">
+                      <button data-copy-user data-user="${escapeHtml(s.username || '')}" title="Copy credentials"
+                        class="p-1.5 text-gray-500 hover:text-[#F59E0B] opacity-0 group-hover:opacity-100 transition-all">
+                        <i data-lucide="clipboard" class="w-3.5 h-3.5"></i>
+                      </button>
+                      <button data-delete-student data-id="${d.id}" data-name="${escapeHtml(name)}" title="Delete"
+                        class="p-1.5 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                      </button>
+                    </div>
+                  </div>`;
+              }).join('')}
+            </div>
+          </div>`;
+        refreshIcons();
+
+        list.querySelectorAll('[data-delete-student]').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            if (confirm(`Delete student "${btn.dataset.name}"? They will be removed from all courses.`)) {
+              await deleteStudent(slug, btn.dataset.id);
+            }
+          });
+        });
+        list.querySelectorAll('[data-copy-user]').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const username = btn.dataset.user;
+            const studentDoc = snap.docs.find(d => d.data().username === username);
+            if (studentDoc) {
+              const s = studentDoc.data();
+              const text = `Ember LMS Login\nSchool URL: ${window.location.origin}${buildUrl('/' + slug)}\nUsername: ${s.username}\nPassword: ${s.tempPassword || '(ask your teacher)'}`;
+              try { await navigator.clipboard.writeText(text); alert('Credentials copied to clipboard.'); }
+              catch(e) { prompt('Copy manually:', text); }
+            }
+          });
+        });
+      });
+      unsubs.push(unsub);
+    }
+
+    function openCreateStudentModal(slug) {
+      const ov = document.createElement('div');
+      ov.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 modal-overlay px-6';
+      ov.innerHTML = `
+        <div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-md w-full p-8 shadow-2xl">
+          <h3 class="font-serif text-2xl text-white mb-1">New Student</h3>
+          <p class="text-gray-500 text-sm mb-6">Create a username and password for this student.</p>
+          <div class="grid grid-cols-2 gap-3 mb-4">
+            <div>
+              <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">First Name</label>
+              <input id="student-first" type="text" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
+            </div>
+            <div>
+              <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Last Name</label>
+              <input id="student-last" type="text" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
+            </div>
+          </div>
+          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Username</label>
+          <input id="student-user" type="text" autocomplete="off" placeholder="auto-generated" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all font-mono text-sm" />
+          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Password</label>
+          <div class="flex gap-2 mb-6">
+            <input id="student-pass" type="text" autocomplete="off" class="input-glow flex-1 bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all font-mono text-sm" />
+            <button id="regen-pass" type="button" title="Regenerate" class="px-3 bg-white/[0.05] border border-white/10 text-gray-400 hover:text-[#F59E0B] rounded-lg transition-all">
+              <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+            </button>
+          </div>
+          <p id="student-error" class="text-red-400 text-sm mb-4 hidden"></p>
+          <div class="flex gap-3">
+            <button id="student-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button>
+            <button id="student-create" class="flex-1 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60">Create Student</button>
+          </div>
+        </div>`;
+      document.body.appendChild(ov);
+      refreshIcons();
+
+      const firstEl = ov.querySelector('#student-first');
+      const lastEl = ov.querySelector('#student-last');
+      const userEl = ov.querySelector('#student-user');
+      const passEl = ov.querySelector('#student-pass');
+
+      // Prefill password
+      passEl.value = genPassword();
+
+      // Auto-generate username from name
+      const updateUser = async () => {
+        if (userEl.dataset.touched) return;
+        const first = firstEl.value.trim();
+        const last = lastEl.value.trim();
+        if (!first) return;
+        // Fetch existing usernames for uniqueness
+        let existing = [];
+        try {
+          const snap = await getDocs(collection(db, 'tenants', slug, 'students'));
+          existing = snap.docs.map(d => d.data().username);
+        } catch(e) {}
+        userEl.value = genUsername(first, last, existing);
+      };
+      firstEl.addEventListener('input', updateUser);
+      lastEl.addEventListener('input', updateUser);
+      userEl.addEventListener('input', () => { userEl.dataset.touched = '1'; });
+
+      ov.querySelector('#regen-pass').addEventListener('click', () => { passEl.value = genPassword(); });
+
+      const close = () => ov.remove();
+      ov.querySelector('#student-cancel').addEventListener('click', close);
+      ov.addEventListener('click', e => { if (e.target === ov) close(); });
+
+      ov.querySelector('#student-create').addEventListener('click', async () => {
+        const firstName = firstEl.value.trim();
+        const lastName = lastEl.value.trim();
+        const username = userEl.value.trim().toLowerCase();
+        const password = passEl.value;
+        const err = ov.querySelector('#student-error');
+        const btn = ov.querySelector('#student-create');
+        err.classList.add('hidden');
+
+        if (!firstName) { err.textContent = 'Please enter a first name.'; err.classList.remove('hidden'); return; }
+        if (!/^[a-z0-9_]{3,20}$/.test(username)) { err.textContent = 'Username must be 3-20 chars: lowercase, numbers, underscores.'; err.classList.remove('hidden'); return; }
+        if (password.length < 6) { err.textContent = 'Password must be at least 6 characters.'; err.classList.remove('hidden'); return; }
+
+        btn.disabled = true; btn.textContent = 'Creating…';
+        try {
+          await createStudent(slug, { firstName, lastName, username, password });
+          close();
+        } catch (e) {
+          console.error(e); btn.disabled = false; btn.textContent = 'Create Student';
+          if (e.code === 'auth/email-already-in-use') err.textContent = 'That username is already taken.';
+          else err.textContent = 'Failed: ' + (e.message || e.code);
+          err.classList.remove('hidden');
+        }
+      });
+      setTimeout(() => firstEl.focus(), 50);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🖼️ VIEW: COURSE ROSTER
+    // ═══════════════════════════════════════════════════════════════════
+    async function viewCourseRoster(slug, tenant, roleInfo, courseId) {
+      if (roleInfo.role !== 'teacher') return viewNotFound();
+
+      const cSnap = await getDoc(doc(db, 'tenants', slug, 'courses', courseId));
+      if (!cSnap.exists()) return viewNotFound();
+      const course = { id: cSnap.id, ...cSnap.data() };
+      const grad = course.gradient || pickGradient(course.title);
+
+      render(`
+        <div class="min-h-screen flex">
+          ${renderSidebar(slug, tenant, roleInfo, 'roster', course)}
+          <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
+            <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
+            ${viewAsStudent ? renderPreviewBanner() : ''}
+            <header class="p-8 pb-4 z-10 relative">
+              <a href="${buildUrl('/' + slug + '/course/' + courseId)}" class="text-xs text-gray-500 hover:text-[#F59E0B] transition-all inline-flex items-center gap-1 mb-3">
+                <i data-lucide="arrow-left" class="w-3 h-3"></i> Back to ${escapeHtml(course.title)}
+              </a>
+              <div class="flex items-center justify-between gap-4">
+                <div class="flex items-center gap-4 min-w-0">
+                  <div class="${grad} w-12 h-12 rounded-xl shrink-0"></div>
+                  <div class="min-w-0">
+                    <p class="text-xs text-gray-500 mb-0.5">Roster</p>
+                    <h2 class="font-serif text-3xl text-white truncate">${escapeHtml(course.title || 'Untitled')}</h2>
+                  </div>
+                </div>
+                <div class="flex items-center gap-3 shrink-0">
+                  <button id="toggle-preview-btn"
+                    class="px-4 py-2 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all flex items-center gap-2">
+                    <i data-lucide="${viewAsStudent ? 'eye-off' : 'eye'}" class="w-4 h-4"></i>
+                    ${viewAsStudent ? 'Exit Preview' : 'View as Student'}
+                  </button>
+                  <button id="enroll-btn"
+                    class="px-5 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all flex items-center gap-2">
+                    <i data-lucide="user-plus" class="w-4 h-4"></i> Enroll Students
+                  </button>
+                </div>
+              </div>
+            </header>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
+              <div id="roster-list" class="max-w-4xl">
+                <div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div>
+              </div>
+            </div>
+          </main>
+        </div>`);
+      attachPreviewBannerHandler();
+
+      document.getElementById('toggle-preview-btn').addEventListener('click', () => setViewAsStudent(!viewAsStudent));
+
+      const unsub = onSnapshot(collection(db, 'tenants', slug, 'courses', courseId, 'enrollments'), (snap) => {
+        const list = document.getElementById('roster-list');
+        if (!list) return;
+        if (snap.empty) {
+          list.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center">
+            <i data-lucide="users" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i>
+            <h3 class="font-serif text-xl text-white mb-2">No students enrolled</h3>
+            <p class="text-gray-500 text-sm">Click "Enroll Students" to add them to this course.</p>
+          </div>`;
+          refreshIcons(); return;
+        }
+        list.innerHTML = `
+          <div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
+            <div class="grid grid-cols-12 px-5 py-3 border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
+              <div class="col-span-5">Name</div>
+              <div class="col-span-4">Username</div>
+              <div class="col-span-2">Enrolled</div>
+              <div class="col-span-1"></div>
+            </div>
+            <div class="divide-y divide-white/[0.04]">
+              ${snap.docs.map(d => {
+                const e = d.data();
+                return `
+                  <div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
+                    <div class="col-span-5 text-sm text-white truncate">${escapeHtml(e.studentName || '')}</div>
+                    <div class="col-span-4 text-sm text-gray-400 font-mono truncate">${escapeHtml(e.username || '')}</div>
+                    <div class="col-span-2 text-xs text-gray-500">${escapeHtml(formatDate(e.enrolledAt))}</div>
+                    <div class="col-span-1 flex justify-end">
+                      <button data-unenroll data-id="${d.id}" data-name="${escapeHtml(e.studentName || '')}" title="Remove from course"
+                        class="p-1.5 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all">
+                        <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                      </button>
+                    </div>
+                  </div>`;
+              }).join('')}
+            </div>
+          </div>`;
+        refreshIcons();
+
+        list.querySelectorAll('[data-unenroll]').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            if (confirm(`Remove "${btn.dataset.name}" from this course?`)) {
+              await unenrollStudent(slug, courseId, btn.dataset.id);
+            }
+          });
+        });
+      });
+      unsubs.push(unsub);
+
+      document.getElementById('enroll-btn').addEventListener('click', () => openEnrollModal(slug, courseId));
+    }
+
+    async function openEnrollModal(slug, courseId) {
+      // Fetch all students and current enrollments
+      const [allSnap, enrolledSnap] = await Promise.all([
+        getDocs(collection(db, 'tenants', slug, 'students')),
+        getDocs(collection(db, 'tenants', slug, 'courses', courseId, 'enrollments'))
+      ]);
+      const enrolled = new Set(enrolledSnap.docs.map(d => d.id));
+      const available = allSnap.docs.filter(d => !enrolled.has(d.id)).map(d => ({ id: d.id, ...d.data() }));
+
+      const ov = document.createElement('div');
+      ov.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 modal-overlay px-6';
+      ov.innerHTML = `
+        <div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-md w-full shadow-2xl flex flex-col max-h-[80vh]">
+          <div class="p-6 border-b border-white/[0.06]">
+            <h3 class="font-serif text-2xl text-white mb-1">Enroll Students</h3>
+            <p class="text-gray-500 text-sm">Pick students to add to this course.</p>
+          </div>
+          <div class="flex-1 overflow-y-auto p-4">
+            ${available.length === 0 ? `
+              <div class="text-center py-8 px-4">
+                <p class="text-gray-500 text-sm">${allSnap.empty ? 'No students exist yet. Create some on the Students page first.' : 'All your students are already enrolled.'}</p>
+              </div>
+            ` : available.map(s => `
+              <label class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/[0.03] cursor-pointer transition-all">
+                <input type="checkbox" data-student-id="${s.id}" data-name="${escapeHtml(s.displayName || s.username || '')}" data-username="${escapeHtml(s.username || '')}"
+                  class="w-4 h-4 accent-[#F59E0B]" />
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-white truncate">${escapeHtml(s.displayName || s.username || '')}</div>
+                  <div class="text-xs text-gray-500 font-mono truncate">${escapeHtml(s.username || '')}</div>
+                </div>
+              </label>
+            `).join('')}
+          </div>
+          <div class="p-6 border-t border-white/[0.06] flex gap-3">
+            <button id="enroll-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button>
+            <button id="enroll-confirm" class="flex-1 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60" ${available.length === 0 ? 'disabled' : ''}>Enroll Selected</button>
+          </div>
+        </div>`;
+      document.body.appendChild(ov);
+      refreshIcons();
+
+      const close = () => ov.remove();
+      ov.querySelector('#enroll-cancel').addEventListener('click', close);
+      ov.addEventListener('click', e => { if (e.target === ov) close(); });
+
+      ov.querySelector('#enroll-confirm').addEventListener('click', async () => {
+        const checks = [...ov.querySelectorAll('input[type="checkbox"]:checked')];
+        if (checks.length === 0) { close(); return; }
+        const btn = ov.querySelector('#enroll-confirm');
+        btn.disabled = true; btn.textContent = 'Enrolling…';
+        try {
+          await Promise.all(checks.map(c => enrollStudent(slug, courseId, c.dataset.studentId, c.dataset.name, c.dataset.username)));
+          close();
+        } catch (e) {
+          console.error(e); alert('Failed to enroll: ' + e.message);
+          btn.disabled = false; btn.textContent = 'Enroll Selected';
+        }
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // 🖼️ VIEW: COURSE (Modules)
     // ═══════════════════════════════════════════════════════════════════
     async function viewCourse(slug, tenant, roleInfo, courseId) {
@@ -743,13 +1133,15 @@
       if (!cSnap.exists()) return viewNotFound();
       const course = { id: cSnap.id, ...cSnap.data() };
       const grad = course.gradient || pickGradient(course.title);
-      const isTeacher = roleInfo.role === 'teacher';
+      const isRealTeacher = roleInfo.role === 'teacher';
+      const isTeacherMode = isRealTeacher && !viewAsStudent;
 
       render(`
         <div class="min-h-screen flex">
           ${renderSidebar(slug, tenant, roleInfo, 'course', course)}
           <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
             <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
+            ${viewAsStudent ? renderPreviewBanner() : ''}
             <header class="p-8 pb-4 z-10 relative">
               <a href="${buildUrl('/' + slug)}" class="text-xs text-gray-500 hover:text-[#F59E0B] transition-all inline-flex items-center gap-1 mb-3">
                 <i data-lucide="arrow-left" class="w-3 h-3"></i> Back to Dashboard
@@ -762,11 +1154,19 @@
                     <h2 class="font-serif text-3xl text-white truncate">${escapeHtml(course.title || 'Untitled')}</h2>
                   </div>
                 </div>
-                ${isTeacher ? `
-                  <button id="add-module-btn"
-                    class="px-4 py-2 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all flex items-center gap-2 shrink-0">
-                    <i data-lucide="plus" class="w-4 h-4"></i> Add Module
-                  </button>` : ''}
+                <div class="flex items-center gap-3 shrink-0">
+                  ${isRealTeacher ? `
+                    <button id="toggle-preview-btn"
+                      class="px-4 py-2 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all flex items-center gap-2">
+                      <i data-lucide="${viewAsStudent ? 'eye-off' : 'eye'}" class="w-4 h-4"></i>
+                      ${viewAsStudent ? 'Exit Preview' : 'View as Student'}
+                    </button>` : ''}
+                  ${isTeacherMode ? `
+                    <button id="add-module-btn"
+                      class="px-4 py-2 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all flex items-center gap-2">
+                      <i data-lucide="plus" class="w-4 h-4"></i> Add Module
+                    </button>` : ''}
+                </div>
               </div>
             </header>
             <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
@@ -775,11 +1175,12 @@
               </div>
             </div>
           </main>
-        </div>
-      `);
+        </div>`);
+      attachPreviewBannerHandler();
 
-      if (isTeacher) document.getElementById('add-module-btn').addEventListener('click', () => openModuleModal(slug, courseId));
-      subscribeToModules(slug, courseId, isTeacher);
+      if (isRealTeacher) document.getElementById('toggle-preview-btn').addEventListener('click', () => setViewAsStudent(!viewAsStudent));
+      if (isTeacherMode) document.getElementById('add-module-btn').addEventListener('click', () => openModuleModal(slug, courseId));
+      subscribeToModules(slug, courseId, isTeacherMode);
     }
 
     function subscribeToModules(slug, courseId, isTeacher) {
@@ -788,7 +1189,6 @@
       const unsub = onSnapshot(q, async (snap) => {
         const list = document.getElementById('modules-list');
         if (!list) return;
-
         if (snap.empty) {
           list.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center">
             <i data-lucide="layers" class="w-10 h-10 text-[#F59E0B] mx-auto mb-4"></i>
@@ -797,8 +1197,6 @@
           </div>`;
           refreshIcons(); return;
         }
-
-        // For each module, fetch items
         const moduleEls = await Promise.all(snap.docs.map(async (md, idx) => {
           const mod = { id: md.id, ...md.data() };
           const itemsSnap = await new Promise((res) => {
@@ -808,51 +1206,44 @@
           const items = itemsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
           return renderModuleCard(slug, courseId, mod, items, isTeacher, idx + 1);
         }));
-
         list.innerHTML = moduleEls.join('');
         refreshIcons();
 
-        // Wire item clicks
         list.querySelectorAll('[data-item-link]').forEach(el => {
           el.addEventListener('click', (e) => {
             e.preventDefault();
             navigate(`/${slug}/course/${courseId}/item/${el.dataset.moduleId}/${el.dataset.itemLink}`);
           });
         });
-
-        // Wire module delete
-        list.querySelectorAll('[data-module-delete]').forEach(btn => {
-          btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            if (confirm(`Delete module "${btn.dataset.title}"? All items inside will be removed.`)) {
-              await deleteDoc(doc(db, 'tenants', slug, 'courses', courseId, 'modules', btn.dataset.id));
-            }
+        if (isTeacher) {
+          list.querySelectorAll('[data-module-delete]').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              if (confirm(`Delete module "${btn.dataset.title}"?`)) {
+                await deleteDoc(doc(db, 'tenants', slug, 'courses', courseId, 'modules', btn.dataset.id));
+              }
+            });
           });
-        });
-
-        // Wire item delete
-        list.querySelectorAll('[data-item-delete]').forEach(btn => {
-          btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            if (confirm('Delete this item?')) {
-              await deleteDoc(doc(db, 'tenants', slug, 'courses', courseId, 'modules', btn.dataset.moduleId, 'items', btn.dataset.id));
-            }
+          list.querySelectorAll('[data-item-delete]').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              if (confirm('Delete this item?')) {
+                await deleteDoc(doc(db, 'tenants', slug, 'courses', courseId, 'modules', btn.dataset.moduleId, 'items', btn.dataset.id));
+              }
+            });
           });
-        });
-
-        // Wire "add item" button per module
-        list.querySelectorAll('[data-add-item]').forEach(btn => {
-          btn.addEventListener('click', () => openItemTypeModal(slug, courseId, btn.dataset.moduleId));
-        });
+          list.querySelectorAll('[data-add-item]').forEach(btn => {
+            btn.addEventListener('click', () => openItemTypeModal(slug, courseId, btn.dataset.moduleId));
+          });
+        }
       });
       unsubs.push(unsub);
     }
 
     function renderModuleCard(slug, courseId, mod, items, isTeacher, idx) {
       const itemsHtml = items.length === 0
-        ? `<p class="text-xs text-gray-600 italic py-3">No items yet</p>`
+        ? `<p class="text-xs text-gray-600 italic py-3 px-5">No items yet</p>`
         : items.map(it => renderItemRow(slug, courseId, mod.id, it, isTeacher)).join('');
-
       return `
         <div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
           <div class="flex items-center justify-between px-5 py-4 border-b border-white/[0.06]">
@@ -861,45 +1252,32 @@
               <h3 class="font-serif text-lg text-white truncate">${escapeHtml(mod.title || 'Untitled Module')}</h3>
               <span class="text-[10px] text-gray-600 shrink-0">${items.length} item${items.length === 1 ? '' : 's'}</span>
             </div>
-            ${isTeacher ? `
-              <div class="flex items-center gap-1 shrink-0">
-                <button data-add-item data-module-id="${mod.id}" title="Add item"
-                  class="p-1.5 text-gray-500 hover:text-[#F59E0B] hover:bg-white/[0.05] rounded transition-all">
-                  <i data-lucide="plus" class="w-4 h-4"></i></button>
-                <button data-module-delete data-id="${mod.id}" data-title="${escapeHtml(mod.title||'')}" title="Delete module"
-                  class="p-1.5 text-gray-500 hover:text-red-400 hover:bg-white/[0.05] rounded transition-all">
-                  <i data-lucide="trash-2" class="w-4 h-4"></i></button>
-              </div>` : ''}
+            ${isTeacher ? `<div class="flex items-center gap-1 shrink-0">
+              <button data-add-item data-module-id="${mod.id}" title="Add item" class="p-1.5 text-gray-500 hover:text-[#F59E0B] hover:bg-white/[0.05] rounded transition-all"><i data-lucide="plus" class="w-4 h-4"></i></button>
+              <button data-module-delete data-id="${mod.id}" data-title="${escapeHtml(mod.title||'')}" title="Delete module" class="p-1.5 text-gray-500 hover:text-red-400 hover:bg-white/[0.05] rounded transition-all"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+            </div>` : ''}
           </div>
           <div class="divide-y divide-white/[0.04]">${itemsHtml}</div>
-        </div>
-      `;
+        </div>`;
     }
 
     function renderItemRow(slug, courseId, moduleId, item, isTeacher) {
       const meta = ITEM_TYPES.find(t => t.type === item.type) || ITEM_TYPES[0];
-      const extra = item.type === 'assignment' && item.points
-        ? `<span class="text-[10px] text-gray-600 ml-2">${item.points} pts${item.dueDate ? ' · Due ' + escapeHtml(formatDate(item.dueDate)) : ''}</span>`
+      const extra = item.type === 'assignment' && item.data?.points
+        ? `<span class="text-[10px] text-gray-600 ml-2">${item.data.points} pts${item.data.dueDate ? ' · Due ' + escapeHtml(formatDate(item.data.dueDate)) : ''}</span>`
         : '';
       return `
-        <div data-item-link="${item.id}" data-module-id="${moduleId}"
-          class="flex items-center gap-3 px-5 py-3 hover:bg-white/[0.03] cursor-pointer group transition-all">
+        <div data-item-link="${item.id}" data-module-id="${moduleId}" class="flex items-center gap-3 px-5 py-3 hover:bg-white/[0.03] cursor-pointer group transition-all">
           <i data-lucide="${meta.icon}" class="w-4 h-4 text-gray-500 group-hover:text-[#F59E0B] transition-colors shrink-0"></i>
           <div class="flex-1 min-w-0">
             <span class="text-sm text-gray-200 truncate">${escapeHtml(item.title || 'Untitled')}</span>
             <span class="text-[10px] uppercase tracking-wider text-gray-600 ml-3">${meta.label}</span>
             ${extra}
           </div>
-          ${isTeacher ? `<button data-item-delete data-id="${item.id}" data-module-id="${moduleId}" title="Delete item"
-            class="p-1 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all shrink-0">
-            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>` : `<i data-lucide="chevron-right" class="w-4 h-4 text-gray-700 shrink-0"></i>`}
-        </div>
-      `;
+          ${isTeacher ? `<button data-item-delete data-id="${item.id}" data-module-id="${moduleId}" title="Delete item" class="p-1 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all shrink-0"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>` : `<i data-lucide="chevron-right" class="w-4 h-4 text-gray-700 shrink-0"></i>`}
+        </div>`;
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // 🖼️ MODULE MODAL
-    // ═══════════════════════════════════════════════════════════════════
     function openModuleModal(slug, courseId) {
       const ov = document.createElement('div');
       ov.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 modal-overlay px-6';
@@ -908,8 +1286,7 @@
           <h3 class="font-serif text-2xl text-white mb-1">New Module</h3>
           <p class="text-gray-500 text-sm mb-6">A section to group your course content.</p>
           <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Module Title</label>
-          <input id="module-title" type="text" placeholder="Week 1: Introduction" autocomplete="off"
-            class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-6 transition-all" />
+          <input id="module-title" type="text" placeholder="Week 1: Introduction" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-6 transition-all" />
           <p id="module-error" class="text-red-400 text-sm mb-4 hidden"></p>
           <div class="flex gap-3">
             <button id="module-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button>
@@ -929,19 +1306,13 @@
         if (!title) { err.textContent = 'Please enter a title.'; err.classList.remove('hidden'); return; }
         btn.disabled = true; btn.textContent = 'Creating…';
         try {
-          // Determine next position by fetching count (approximate via timestamp)
-          await addDoc(collection(db, 'tenants', slug, 'courses', courseId, 'modules'), {
-            title, position: Date.now(), createdAt: serverTimestamp()
-          });
+          await addDoc(collection(db, 'tenants', slug, 'courses', courseId, 'modules'), { title, position: Date.now(), createdAt: serverTimestamp() });
           close();
         } catch(e) { console.error(e); btn.disabled = false; btn.textContent = 'Create'; err.textContent = 'Failed: ' + e.message; err.classList.remove('hidden'); }
       });
       setTimeout(() => ov.querySelector('#module-title').focus(), 50);
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // 🖼️ ITEM TYPE PICKER
-    // ═══════════════════════════════════════════════════════════════════
     function openItemTypeModal(slug, courseId, moduleId) {
       const ov = document.createElement('div');
       ov.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 modal-overlay px-6';
@@ -951,18 +1322,11 @@
           <p class="text-gray-500 text-sm mb-6">What kind of content?</p>
           <div class="space-y-2">
             ${ITEM_TYPES.map(t => `
-              <button data-type="${t.type}"
-                class="w-full flex items-center gap-4 px-4 py-3.5 bg-white/[0.03] border border-white/[0.08] rounded-lg hover:bg-white/[0.06] hover:border-[#F59E0B]/40 transition-all text-left group">
-                <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0">
-                  <i data-lucide="${t.icon}" class="w-4 h-4 text-[#F59E0B]"></i>
-                </div>
-                <div class="flex-1 min-w-0">
-                  <div class="text-sm text-white font-medium">${t.label}</div>
-                  <div class="text-xs text-gray-500">${t.desc}</div>
-                </div>
+              <button data-type="${t.type}" class="w-full flex items-center gap-4 px-4 py-3.5 bg-white/[0.03] border border-white/[0.08] rounded-lg hover:bg-white/[0.06] hover:border-[#F59E0B]/40 transition-all text-left group">
+                <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0"><i data-lucide="${t.icon}" class="w-4 h-4 text-[#F59E0B]"></i></div>
+                <div class="flex-1 min-w-0"><div class="text-sm text-white font-medium">${t.label}</div><div class="text-xs text-gray-500">${t.desc}</div></div>
                 <i data-lucide="chevron-right" class="w-4 h-4 text-gray-600 group-hover:text-[#F59E0B] transition-colors"></i>
-              </button>
-            `).join('')}
+              </button>`).join('')}
           </div>
           <button id="item-type-cancel" class="w-full mt-6 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button>
         </div>`;
@@ -972,52 +1336,35 @@
       ov.querySelector('#item-type-cancel').addEventListener('click', close);
       ov.addEventListener('click', e => { if (e.target === ov) close(); });
       ov.querySelectorAll('[data-type]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          close();
-          openItemEditor(slug, courseId, moduleId, null, btn.dataset.type);
-        });
+        btn.addEventListener('click', () => { close(); openItemEditor(slug, courseId, moduleId, null, btn.dataset.type); });
       });
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // 🖼️ ITEM EDITOR (create/edit)
-    // ═══════════════════════════════════════════════════════════════════
     function openItemEditor(slug, courseId, moduleId, existingItem, type) {
       const item = existingItem || { type, title: '', data: {} };
       const meta = ITEM_TYPES.find(t => t.type === item.type) || ITEM_TYPES[0];
-
       const ov = document.createElement('div');
       ov.className = 'fixed inset-0 z-50 flex items-start justify-center bg-black/60 modal-overlay px-6 py-10 overflow-y-auto';
       ov.innerHTML = `
         <div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-2xl w-full shadow-2xl my-8">
           <div class="p-8 pb-6 border-b border-white/[0.06] flex items-center justify-between">
             <div class="flex items-center gap-3">
-              <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center">
-                <i data-lucide="${meta.icon}" class="w-4 h-4 text-[#F59E0B]"></i>
-              </div>
-              <div>
-                <h3 class="font-serif text-2xl text-white">${existingItem ? 'Edit' : 'New'} ${meta.label}</h3>
-                <p class="text-gray-500 text-xs">${meta.desc}</p>
-              </div>
+              <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center"><i data-lucide="${meta.icon}" class="w-4 h-4 text-[#F59E0B]"></i></div>
+              <div><h3 class="font-serif text-2xl text-white">${existingItem ? 'Edit' : 'New'} ${meta.label}</h3><p class="text-gray-500 text-xs">${meta.desc}</p></div>
             </div>
             <button id="item-close" class="p-2 text-gray-500 hover:text-white rounded transition-all"><i data-lucide="x" class="w-5 h-5"></i></button>
           </div>
-
           <div class="p-8 space-y-5">
             <div>
               <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Title</label>
-              <input id="item-title" type="text" value="${escapeHtml(item.title || '')}" autocomplete="off"
-                class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
+              <input id="item-title" type="text" value="${escapeHtml(item.title || '')}" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
             </div>
-
             ${item.type === 'page' ? `
               <div>
                 <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Content</label>
                 <div class="bg-white/[0.02] border border-white/10 rounded-lg overflow-hidden">
                   <div id="quill-toolbar">
-                    <span class="ql-formats">
-                      <select class="ql-header"><option value="1"></option><option value="2"></option><option value="3"></option><option selected></option></select>
-                    </span>
+                    <span class="ql-formats"><select class="ql-header"><option value="1"></option><option value="2"></option><option value="3"></option><option selected></option></select></span>
                     <span class="ql-formats"><button class="ql-bold"></button><button class="ql-italic"></button><button class="ql-underline"></button></span>
                     <span class="ql-formats"><button class="ql-list" value="ordered"></button><button class="ql-list" value="bullet"></button></span>
                     <span class="ql-formats"><button class="ql-blockquote"></button><button class="ql-link"></button><button class="ql-image"></button></span>
@@ -1025,9 +1372,7 @@
                   </div>
                   <div id="quill-editor"></div>
                 </div>
-              </div>
-            ` : ''}
-
+              </div>` : ''}
             ${item.type === 'assignment' ? `
               <div>
                 <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Instructions</label>
@@ -1041,53 +1386,31 @@
                 </div>
               </div>
               <div class="grid grid-cols-2 gap-4">
-                <div>
-                  <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Points</label>
-                  <input id="item-points" type="number" min="0" value="${item.data?.points ?? 100}"
-                    class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
-                </div>
-                <div>
-                  <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Due Date</label>
-                  <input id="item-due" type="date" value="${toDateInput(item.data?.dueDate)}"
-                    class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
-                </div>
-              </div>
-            ` : ''}
-
+                <div><label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Points</label>
+                  <input id="item-points" type="number" min="0" value="${item.data?.points ?? 100}" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" /></div>
+                <div><label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Due Date</label>
+                  <input id="item-due" type="date" value="${toDateInput(item.data?.dueDate)}" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" /></div>
+              </div>` : ''}
             ${item.type === 'link' ? `
               <div>
                 <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">URL</label>
-                <input id="item-url" type="url" value="${escapeHtml(item.data?.url || '')}" placeholder="https://example.com" autocomplete="off"
-                  class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
-              </div>
-            ` : ''}
-
-            ${item.type === 'quiz' ? `
-              <div class="text-sm text-gray-500 italic">Quiz builder arrives in Phase 5. For now, you can create an empty quiz.</div>
-            ` : ''}
-
+                <input id="item-url" type="url" value="${escapeHtml(item.data?.url || '')}" placeholder="https://example.com" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
+              </div>` : ''}
+            ${item.type === 'quiz' ? `<div class="text-sm text-gray-500 italic">Quiz builder arrives in Phase 6. For now, you can create an empty quiz.</div>` : ''}
             <p id="item-error" class="text-red-400 text-sm hidden"></p>
           </div>
-
           <div class="p-8 pt-0 flex gap-3">
             <button id="item-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button>
-            <button id="item-save" class="flex-1 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60">
-              ${existingItem ? 'Save Changes' : 'Create'}
-            </button>
+            <button id="item-save" class="flex-1 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60">${existingItem ? 'Save Changes' : 'Create'}</button>
           </div>
         </div>`;
-
       document.body.appendChild(ov);
       refreshIcons();
 
-      // Quill setup
       let quill = null;
       if (item.type === 'page' || item.type === 'assignment') {
         const initialHtml = item.type === 'page' ? (item.data?.content || '') : (item.data?.description || '');
-        quill = new Quill(ov.querySelector('#quill-editor'), {
-          theme: 'snow',
-          modules: { toolbar: '#quill-toolbar' }
-        });
+        quill = new Quill(ov.querySelector('#quill-editor'), { theme: 'snow', modules: { toolbar: '#quill-toolbar' } });
         if (initialHtml) quill.clipboard.dangerouslyPasteHTML(initialHtml);
       }
 
@@ -1101,13 +1424,10 @@
         const err = ov.querySelector('#item-error');
         const btn = ov.querySelector('#item-save');
         err.classList.add('hidden');
-
         if (!title) { err.textContent = 'Please enter a title.'; err.classList.remove('hidden'); return; }
-
         const data = {};
-        if (item.type === 'page') {
-          data.content = sanitize(quill.root.innerHTML);
-        } else if (item.type === 'assignment') {
+        if (item.type === 'page') { data.content = sanitize(quill.root.innerHTML); }
+        else if (item.type === 'assignment') {
           data.description = sanitize(quill.root.innerHTML);
           data.points = Number(ov.querySelector('#item-points').value) || 0;
           const due = ov.querySelector('#item-due').value;
@@ -1117,43 +1437,35 @@
           if (!url) { err.textContent = 'Please enter a URL.'; err.classList.remove('hidden'); return; }
           data.url = url;
         }
-
         btn.disabled = true; btn.textContent = 'Saving…';
         try {
           if (existingItem) {
-            await updateDoc(doc(db, 'tenants', slug, 'courses', courseId, 'modules', moduleId, 'items', item.id), {
-              title, data, updatedAt: serverTimestamp()
-            });
+            await updateDoc(doc(db, 'tenants', slug, 'courses', courseId, 'modules', moduleId, 'items', item.id), { title, data, updatedAt: serverTimestamp() });
           } else {
-            await addDoc(collection(db, 'tenants', slug, 'courses', courseId, 'modules', moduleId, 'items'), {
-              type: item.type, title, data, position: Date.now(), createdAt: serverTimestamp()
-            });
+            await addDoc(collection(db, 'tenants', slug, 'courses', courseId, 'modules', moduleId, 'items'), { type: item.type, title, data, position: Date.now(), createdAt: serverTimestamp() });
           }
           close();
         } catch(e) { console.error(e); btn.disabled = false; btn.textContent = existingItem ? 'Save Changes' : 'Create'; err.textContent = 'Failed: ' + e.message; err.classList.remove('hidden'); }
       });
-
       setTimeout(() => ov.querySelector('#item-title').focus(), 50);
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // 🖼️ VIEW: ITEM (page / assignment / link / quiz)
+    // 🖼️ VIEW: ITEM
     // ═══════════════════════════════════════════════════════════════════
     async function viewItem(slug, tenant, roleInfo, courseId, moduleId, itemId) {
       render(`<div class="min-h-screen flex items-center justify-center text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i></div>`);
-
       const [cSnap, iSnap] = await Promise.all([
         getDoc(doc(db, 'tenants', slug, 'courses', courseId)),
         getDoc(doc(db, 'tenants', slug, 'courses', courseId, 'modules', moduleId, 'items', itemId))
       ]);
       if (!cSnap.exists() || !iSnap.exists()) return viewNotFound();
-
       const course = { id: cSnap.id, ...cSnap.data() };
       const item = { id: iSnap.id, ...iSnap.data() };
-      const isTeacher = roleInfo.role === 'teacher';
+      const isRealTeacher = roleInfo.role === 'teacher';
+      const isTeacherMode = isRealTeacher && !viewAsStudent;
       const meta = ITEM_TYPES.find(t => t.type === item.type) || ITEM_TYPES[0];
 
-      // Link type: redirect immediately
       if (item.type === 'link' && item.data?.url) {
         window.open(item.data.url, '_blank', 'noopener');
         navigate(`/${slug}/course/${courseId}`);
@@ -1165,56 +1477,57 @@
           ${renderSidebar(slug, tenant, roleInfo, 'course', course)}
           <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
             <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
+            ${viewAsStudent ? renderPreviewBanner() : ''}
             <header class="p-8 pb-4 z-10 relative">
               <a href="${buildUrl('/' + slug + '/course/' + courseId)}" class="text-xs text-gray-500 hover:text-[#F59E0B] transition-all inline-flex items-center gap-1 mb-3">
                 <i data-lucide="arrow-left" class="w-3 h-3"></i> Back to ${escapeHtml(course.title)}
               </a>
               <div class="flex items-center justify-between gap-4">
                 <div class="flex items-center gap-3 min-w-0">
-                  <div class="w-10 h-10 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0">
-                    <i data-lucide="${meta.icon}" class="w-5 h-5 text-[#F59E0B]"></i>
-                  </div>
+                  <div class="w-10 h-10 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0"><i data-lucide="${meta.icon}" class="w-5 h-5 text-[#F59E0B]"></i></div>
                   <div class="min-w-0">
                     <p class="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">${meta.label}</p>
                     <h2 class="font-serif text-2xl text-white truncate">${escapeHtml(item.title || 'Untitled')}</h2>
                   </div>
                 </div>
-                ${isTeacher ? `<button id="edit-item-btn"
-                  class="px-4 py-2 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all flex items-center gap-2 shrink-0">
-                  <i data-lucide="pencil" class="w-3.5 h-3.5"></i> Edit</button>` : ''}
+                <div class="flex items-center gap-3 shrink-0">
+                  ${isRealTeacher ? `
+                    <button id="toggle-preview-btn"
+                      class="px-4 py-2 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all flex items-center gap-2">
+                      <i data-lucide="${viewAsStudent ? 'eye-off' : 'eye'}" class="w-4 h-4"></i>
+                      ${viewAsStudent ? 'Exit Preview' : 'View as Student'}
+                    </button>` : ''}
+                  ${isTeacherMode ? `
+                    <button id="edit-item-btn"
+                      class="px-4 py-2 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all flex items-center gap-2">
+                      <i data-lucide="pencil" class="w-3.5 h-3.5"></i> Edit
+                    </button>` : ''}
+                </div>
               </div>
             </header>
             <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
-              <div id="item-content" class="max-w-3xl">
-                ${renderItemBody(item, isTeacher, courseId, moduleId)}
-              </div>
+              <div id="item-content" class="max-w-3xl">${renderItemBody(item, isTeacherMode, courseId, moduleId)}</div>
             </div>
           </main>
-        </div>
-      `);
+        </div>`);
+      attachPreviewBannerHandler();
 
-      if (isTeacher) {
-        document.getElementById('edit-item-btn').addEventListener('click', () => openItemEditor(slug, courseId, moduleId, item, item.type));
-      }
-      wireItemBody(slug, courseId, moduleId, itemId, item, isTeacher);
+      if (isRealTeacher) document.getElementById('toggle-preview-btn').addEventListener('click', () => setViewAsStudent(!viewAsStudent));
+      if (isTeacherMode) document.getElementById('edit-item-btn').addEventListener('click', () => openItemEditor(slug, courseId, moduleId, item, item.type));
+      wireItemBody(slug, courseId, moduleId, itemId, item, isTeacherMode);
     }
 
     function renderItemBody(item, isTeacher, courseId, moduleId) {
       if (item.type === 'page') {
         return `<div class="prose-ember">${sanitize(item.data?.content || '<p class="text-gray-500 italic">No content yet.</p>')}</div>`;
       }
-
       if (item.type === 'assignment') {
         const due = item.data?.dueDate;
         const points = item.data?.points ?? 0;
         return `
           <div class="mb-8 flex flex-wrap gap-3">
-            <div class="px-3 py-1.5 bg-[#F59E0B]/10 border border-[#F59E0B]/20 rounded-lg text-xs text-[#F59E0B] font-medium">
-              ${points} points
-            </div>
-            ${due ? `<div class="px-3 py-1.5 bg-white/[0.05] border border-white/[0.08] rounded-lg text-xs text-gray-400">
-              Due ${escapeHtml(formatDateTime(due))}
-            </div>` : ''}
+            <div class="px-3 py-1.5 bg-[#F59E0B]/10 border border-[#F59E0B]/20 rounded-lg text-xs text-[#F59E0B] font-medium">${points} points</div>
+            ${due ? `<div class="px-3 py-1.5 bg-white/[0.05] border border-white/[0.08] rounded-lg text-xs text-gray-400">Due ${escapeHtml(formatDateTime(due))}</div>` : ''}
           </div>
           <div class="prose-ember mb-8">${sanitize(item.data?.description || '<p class="text-gray-500 italic">No instructions yet.</p>')}</div>
           <div id="assignment-area">
@@ -1222,180 +1535,7 @@
               <div class="border border-dashed border-white/10 rounded-xl p-8 text-center">
                 <i data-lucide="inbox" class="w-8 h-8 text-gray-600 mx-auto mb-3"></i>
                 <p class="text-gray-500 text-sm">Submissions will appear here once students turn in their work.</p>
-              </div>
-            ` : `
+              </div>` : `
               <div class="bg-[#141414] border border-white/[0.08] rounded-xl p-6">
                 <h3 class="font-serif text-lg text-white mb-4">Submit your work</h3>
-                <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Your Submission</label>
-                <textarea id="submission-text" rows="6" placeholder="Type your answer here…"
-                  class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all font-sans"></textarea>
-                <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2 mt-4">Or a link (URL)</label>
-                <input id="submission-url" type="url" placeholder="https://docs.google.com/…"
-                  class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
-                <p id="submission-error" class="text-red-400 text-sm mt-3 hidden"></p>
-                <p id="submission-success" class="text-green-400 text-sm mt-3 hidden"></p>
-                <button id="submit-assignment-btn"
-                  class="mt-4 px-5 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">
-                  Submit Assignment
-                </button>
-              </div>
-            `}
-          </div>
-        `;
-      }
-
-      if (item.type === 'quiz') {
-        return `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center">
-          <i data-lucide="check-square" class="w-10 h-10 text-[#F59E0B] mx-auto mb-4"></i>
-          <p class="text-gray-500 text-sm">Quiz builder arrives in Phase 5.</p>
-        </div>`;
-      }
-
-      return `<p class="text-gray-500 italic">Unknown item type.</p>`;
-    }
-
-    function wireItemBody(slug, courseId, moduleId, itemId, item, isTeacher) {
-      if (item.type !== 'assignment' || isTeacher) return;
-      const btn = document.getElementById('submit-assignment-btn');
-      if (!btn) return;
-      btn.addEventListener('click', async () => {
-        const content = document.getElementById('submission-text').value.trim();
-        const url = document.getElementById('submission-url').value.trim();
-        const err = document.getElementById('submission-error');
-        const ok = document.getElementById('submission-success');
-        err.classList.add('hidden'); ok.classList.add('hidden');
-        if (!content && !url) { err.textContent = 'Please provide text or a link.'; err.classList.remove('hidden'); return; }
-        btn.disabled = true; btn.textContent = 'Submitting…';
-        try {
-          await addDoc(collection(db, 'tenants', slug, 'courses', courseId, 'submissions'), {
-            itemId, moduleId, studentId: currentUser.uid,
-            studentName: currentUser.displayName || 'Student',
-            content, url, submittedAt: serverTimestamp(),
-            grade: null, feedback: null
-          });
-          ok.textContent = 'Submitted! Your teacher will review it soon.';
-          ok.classList.remove('hidden');
-          btn.textContent = 'Submitted ✓';
-        } catch(e) {
-          console.error(e); btn.disabled = false; btn.textContent = 'Submit Assignment';
-          err.textContent = 'Failed: ' + e.message; err.classList.remove('hidden');
-        }
-      });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // 🖼️ SIDEBAR
-    // ═══════════════════════════════════════════════════════════════════
-    function renderSidebar(slug, tenant, roleInfo, active, course = null) {
-      const isTeacher = roleInfo.role === 'teacher';
-      const name = currentUser.displayName || roleInfo.data.displayName || currentUser.email || 'User';
-
-      const item = (href, icon, label, key, soon = false) => {
-        const isActive = active === key;
-        if (soon) return `<span class="flex items-center gap-3 px-3 py-2 text-sm text-gray-600">
-          <i data-lucide="${icon}" class="w-4 h-4"></i> ${label}
-          <span class="ml-auto text-[10px]">Soon</span>
-        </span>`;
-        return `<a href="${buildUrl(href)}"
-          class="flex items-center gap-3 px-3 py-2 text-sm ${isActive ? 'text-white bg-white/[0.05] border-l-2 border-[#F59E0B] rounded-r' : 'text-gray-400 hover:text-white hover:bg-white/[0.03] border-l-2 border-transparent rounded-r'} transition-all">
-          <i data-lucide="${icon}" class="w-4 h-4 ${isActive ? 'text-[#F59E0B]' : ''}"></i> ${label}
-        </a>`;
-      };
-
-      return `
-        <aside class="w-64 bg-[#050505] border-r border-white/[0.08] p-6 flex flex-col h-screen shrink-0">
-          <h1 class="font-serif text-xl mb-8">
-            <span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span>
-          </h1>
-          <div class="text-[10px] text-gray-500 uppercase tracking-widest mb-2">${course ? 'Course' : 'School'}</div>
-          <p class="text-white text-sm mb-8 truncate">${escapeHtml(course ? course.title : tenant.name)}</p>
-          <nav class="space-y-1">
-            ${course ? `
-              ${item('/' + slug + '/course/' + course.id, 'layers', 'Modules', 'course')}
-              ${isTeacher ? `<span class="flex items-center gap-3 px-3 py-2 text-sm text-gray-600">
-                <i data-lucide="users" class="w-4 h-4"></i> Roster <span class="ml-auto text-[10px]">Soon</span></span>` : ''}
-              <div class="pt-4 mt-4 border-t border-white/[0.06]">
-                <a href="${buildUrl('/' + slug)}" class="flex items-center gap-3 px-3 py-2 text-sm text-gray-500 hover:text-white transition-all">
-                  <i data-lucide="arrow-left" class="w-4 h-4"></i> All Courses
-                </a>
-              </div>
-            ` : `
-              ${item('/' + slug, 'layout-dashboard', 'Dashboard', 'dashboard')}
-              ${item('/' + slug + '/courses', 'book-open', 'Courses', 'courses', true)}
-              ${isTeacher ? item('/' + slug + '/students', 'users', 'Students', 'students', true) : ''}
-            `}
-          </nav>
-          <div class="mt-auto pt-6 border-t border-white/[0.08]">
-            <div class="flex items-center gap-3 mb-3">
-              ${currentUser.photoURL
-                ? `<img src="${currentUser.photoURL}" class="w-8 h-8 rounded-full border border-white/20" alt="">`
-                : `<div class="w-8 h-8 rounded-full bg-white/10"></div>`}
-              <div class="flex-1 min-w-0">
-                <p class="text-sm text-white truncate">${escapeHtml(name)}</p>
-                <p class="text-xs text-gray-500 truncate">${isTeacher ? 'Teacher' : 'Student'}</p>
-              </div>
-            </div>
-            <button data-signout class="w-full text-left text-xs text-gray-400 hover:text-red-400 transition-colors flex items-center gap-2">
-              <i data-lucide="log-out" class="w-3 h-3"></i> Sign Out
-            </button>
-          </div>
-        </aside>
-      `;
-    }
-
-    document.addEventListener('click', (e) => {
-      if (e.target.closest('[data-signout]')) signOut(auth);
-    });
-
-    function viewNotFound() {
-      render(`<div class="min-h-screen flex items-center justify-center text-center px-6"><div>
-        <h1 class="font-serif text-3xl text-white mb-2">404</h1>
-        <p class="text-gray-500">Page not found.</p>
-        <a href="${buildUrl('/')}" class="inline-block mt-6 text-sm text-[#F59E0B] hover:underline">← Back</a>
-      </div></div>`);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // 🔑 AUTH
-    // ═══════════════════════════════════════════════════════════════════
-    async function handleGoogleSignIn() {
-      try {
-        await signInWithPopup(auth, new GoogleAuthProvider());
-      } catch (e) {
-        console.error(e);
-        if (['auth/popup-closed-by-user','auth/cancelled-popup-request'].includes(e.code)) return;
-        alert('Sign-in failed: ' + e.message);
-      }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // 🚀 RENDER
-    // ═══════════════════════════════════════════════════════════════════
-    async function renderRoute() {
-      if (!authReady) return;
-      clearSubs();
-      const route = parseRoute();
-      try {
-        switch (route.type) {
-          case 'landing': viewLanding(); break;
-          case 'onboard': viewOnboard(); break;
-          case 'tenant':  await viewTenant(route.tenant, route.segments); break;
-          default:        viewNotFound();
-        }
-      } catch (e) {
-        console.error('Render failed:', e);
-        render(`<div class="min-h-screen flex items-center justify-center text-red-400 p-6 text-center">Error:<br>${escapeHtml(e.message)}</div>`);
-      }
-    }
-
-    render(`<div class="min-h-screen flex items-center justify-center text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i></div>`);
-    refreshIcons();
-
-    onAuthStateChanged(auth, (user) => {
-      currentUser = user;
-      authReady = true;
-      renderRoute();
-    });
-  </script>
-</body>
-</html>
+                <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2
