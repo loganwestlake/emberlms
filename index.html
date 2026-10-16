@@ -544,11 +544,12 @@
           const btn = document.getElementById('student-login-btn');
           const showErr = m => { err.textContent = m; err.classList.remove('hidden'); };
           err.classList.add('hidden');
-          if (!preselected) return showErr('Please select your school.');
-          const u = document.getElementById('student-username').value.trim().toLowerCase();
+             if (!preselected) return showErr('Please select your school.');
+          const rawU = document.getElementById('student-username').value.trim();
+          const u = rawU.toLowerCase().replace(/\s+/g, '_');
           const p = document.getElementById('student-password').value;
           if (!u || !p) return showErr('Enter both username and password.');
-          if (!/^[a-z0-9_]{3,20}$/.test(u)) return showErr('Invalid username format.');
+          if (u.length > 40) return showErr('Username is too long.');
           btn.disabled = true; btn.textContent = 'Signing in…';
           try {
             await signInWithEmailAndPassword(auth, `${u}@${preselected.slug}.emberlms.local`, p);
@@ -557,8 +558,13 @@
             else navigate(`/${preselected.slug}/pending`);
           } catch (e) {
             console.error(e); btn.disabled = false; btn.textContent = 'Sign In';
-            if (['auth/invalid-credential','auth/wrong-password','auth/user-not-found','auth/invalid-email'].includes(e.code)) showErr('Invalid username or password.');
-            else showErr('Sign-in failed. Try again.');
+            if (e.code === 'auth/invalid-email') {
+              showErr('Username contains invalid characters. Ask your teacher for your exact username.');
+            } else if (['auth/invalid-credential','auth/wrong-password','auth/user-not-found'].includes(e.code)) {
+              showErr('Incorrect username or password. Usernames are lowercase.');
+            } else {
+              showErr('Sign-in failed. Try again.');
+            }
           }
         };
         document.getElementById('student-login-btn').addEventListener('click', login);
@@ -1629,7 +1635,7 @@
         const btn = ov.querySelector('#student-create');
         err.classList.add('hidden');
         if (!firstName) { err.textContent = 'Enter a first name.'; err.classList.remove('hidden'); return; }
-        if (!/^[a-z0-9_]{3,20}$/.test(username)) { err.textContent = 'Username: 3–20 chars, lowercase, numbers, underscores.'; err.classList.remove('hidden'); return; }
+        if (!/^[a-z0-9_.-]{3,20}$/.test(username)) { err.textContent = 'Username must be 3–20 chars: lowercase letters, numbers, dots, dashes, underscores.'; err.classList.remove('hidden'); return; }
         if (password.length < 6) { err.textContent = 'Password must be at least 6 characters.'; err.classList.remove('hidden'); return; }
         btn.disabled = true; btn.textContent = 'Creating…';
         try {
