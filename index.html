@@ -6,12 +6,10 @@
   <title>Ember LMS</title>
   <meta name="description" content="The modern standard for learning.">
 
-  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
 
-  <!-- Tailwind -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -34,26 +32,19 @@
     }
   </script>
 
-  <!-- Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
-
-  <!-- HTML Sanitization (used in later phases) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
 
   <style>
-    /* Dark scrollbar */
     ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-track { background: #0A0A0A; }
     ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: #555; }
-
-    /* Smooth transitions */
     .transition-all {
       transition-property: all;
       transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
       transition-duration: 200ms;
     }
-
     body { -webkit-tap-highlight-color: transparent; }
   </style>
 </head>
@@ -62,25 +53,26 @@
 
   <script type="module">
     // ═══════════════════════════════════════════════════════════════════
-    // ⚙️  APP CONFIGURATION
+    // ⚙️  CONFIG
     // ═══════════════════════════════════════════════════════════════════
-    //
-    // BASE_PATH tells the router where the app lives.
-    //
-    //   Deploying to github.io/repo/emberlms/  →  '/repo/emberlms'
-    //   Deploying to github.io/emberlms/       →  '/emberlms'
-    //   Deploying to a custom domain (root)    →  ''
-    //
-    // If you're testing locally with Live Server or `npx serve`, use ''.
-    //
-    const BASE_PATH = '/emberlms';
+    const BASE_PATH = '/emberlms';   // Change per deployment (see notes)
 
     // ═══════════════════════════════════════════════════════════════════
     // 🔥 FIREBASE
     // ═══════════════════════════════════════════════════════════════════
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-    import { getAuth } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-    import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+    import {
+      getAuth,
+      GoogleAuthProvider,
+      signInWithPopup,
+      signInWithEmailAndPassword,
+      signOut,
+      onAuthStateChanged
+    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+    import {
+      getFirestore,
+      doc, getDoc, setDoc, serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
     import { getStorage } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
 
     const firebaseConfig = {
@@ -97,65 +89,48 @@
     const db = getFirestore(app);
     const storage = getStorage(app);
 
-    // Secondary app — ONLY used for creating/resetting student accounts.
-    // Prevents Firebase from logging the teacher out when a student is created.
     const secondaryApp = initializeApp(firebaseConfig, "Secondary");
     const secondaryAuth = getAuth(secondaryApp);
+    // (secondaryAuth used in Phase 3 for creating student accounts)
 
     // ═══════════════════════════════════════════════════════════════════
     // 🧭 ROUTER
     // ═══════════════════════════════════════════════════════════════════
-    const RESERVED = ['onboard', 'login', 'signup', 'api'];
+    const RESERVED = ['onboard', 'login', 'signup', 'api', 'assets'];
 
-    /**
-     * Strips the BASE_PATH from the current URL and returns the remaining
-     * path segments. Handles trailing slashes and encoded characters.
-     */
     function getAppSegments() {
       let pathname = decodeURIComponent(window.location.pathname);
-
-      // Remove the base path prefix if it exists
       if (BASE_PATH && pathname.startsWith(BASE_PATH)) {
         pathname = pathname.slice(BASE_PATH.length);
       }
-
       return pathname.split('/').filter(Boolean);
     }
 
-    /**
-     * Builds a full app URL given a relative path.
-     * e.g. buildUrl('/example') → '/repo/emberlms/example'
-     */
     function buildUrl(relative = '/') {
       const clean = relative.startsWith('/') ? relative : '/' + relative;
-      return (BASE_PATH + clean).replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+      const joined = (BASE_PATH + clean).replace(/\/+/g, '/');
+      return joined.replace(/\/$/, '') || '/';
     }
 
-    /**
-     * Parses the current URL and returns a route object.
-     */
+    function navigate(path) {
+      window.location.href = buildUrl(path);
+    }
+
     function parseRoute() {
-      // 1. If 404.html sent us here, restore the original URL path
       const savedPath = sessionStorage.getItem('ember_redirect_path');
       if (savedPath) {
         sessionStorage.removeItem('ember_redirect_path');
         window.history.replaceState(null, '', savedPath);
       }
 
-      // 2. Extract app segments (base path stripped)
       const segments = getAppSegments();
 
-      // 3. Route based on first segment
-      if (segments.length === 0) {
-        return { type: 'landing', tenant: null, segments: [] };
-      }
+      if (segments.length === 0) return { type: 'landing', tenant: null, segments: [] };
 
       const first = segments[0];
-
       if (RESERVED.includes(first)) {
         return { type: first, tenant: null, segments: segments.slice(1) };
       }
-
       return { type: 'tenant', tenant: first, segments: segments.slice(1) };
     }
 
@@ -173,9 +148,61 @@
       refreshIcons();
     }
 
+    function slugify(str) {
+      return str.toLowerCase()
+        .replace(/[^a-z0-9-]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+    }
+
+    function escapeHtml(str) {
+      return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🔐 AUTH STATE
+    // ═══════════════════════════════════════════════════════════════════
+    let currentUser = null;
+    let authReady = false;
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🧩 DATA HELPERS
+    // ═══════════════════════════════════════════════════════════════════
+    async function getTenant(slug) {
+      const snap = await getDoc(doc(db, 'tenants', slug));
+      return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+    }
+
+    async function getRoleInTenant(slug, uid) {
+      if (!uid) return null;
+      try {
+        const t = await getDoc(doc(db, 'tenants', slug, 'users', uid));
+        if (t.exists()) return { role: 'teacher', data: t.data() };
+
+        const s = await getDoc(doc(db, 'tenants', slug, 'students', uid));
+        if (s.exists()) return { role: 'student', data: s.data() };
+      } catch (err) {
+        console.error('Role lookup failed:', err);
+      }
+      return null;
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // 🖼️ VIEWS
     // ═══════════════════════════════════════════════════════════════════
+
+    // ── Loading ─────────────────────────────────────────────────────
+    function viewLoading() {
+      render(`
+        <div class="min-h-screen flex items-center justify-center text-gray-500">
+          <i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i>
+        </div>
+      `);
+    }
+
+    // ── Landing ─────────────────────────────────────────────────────
     function viewLanding() {
       render(`
         <div class="min-h-screen flex items-center justify-center relative overflow-hidden">
@@ -185,51 +212,371 @@
               <span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span>
             </h1>
             <p class="text-gray-500 text-lg mb-10">The modern standard for learning.</p>
-            <button class="px-6 py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all">
+            <a href="${buildUrl('/onboard')}"
+               class="inline-block px-6 py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all">
               Create a School
-            </button>
+            </a>
           </div>
         </div>
       `);
     }
 
-    async function viewTenant(slug) {
-      render(`<div class="min-h-screen flex items-center justify-center text-gray-500">Checking tenant…</div>`);
-
-      try {
-        const snap = await getDoc(doc(db, 'tenants', slug));
-
-        if (!snap.exists()) {
-          render(`
-            <div class="min-h-screen flex items-center justify-center text-center px-6">
-              <div>
-                <h1 class="font-serif text-3xl text-white mb-2">School not found</h1>
-                <p class="text-gray-500">No school exists at <span class="text-[#F59E0B]">/${slug}</span></p>
-                <a href="${buildUrl('/')}" class="inline-block mt-6 text-sm text-[#F59E0B] hover:underline">← Back to Ember LMS</a>
-              </div>
-            </div>
-          `);
-          return;
-        }
-
-        const tenant = snap.data();
-
+    // ── Onboard ─────────────────────────────────────────────────────
+    function viewOnboard() {
+      // Not signed in → show Google button
+      if (!currentUser) {
         render(`
-          <div class="min-h-screen flex items-center justify-center text-center px-6">
-            <div>
-              <p class="text-xs text-gray-500 tracking-wider uppercase mb-2">You are visiting</p>
-              <h1 class="font-serif text-4xl text-white mb-2">${tenant.name || slug}</h1>
-              <p class="text-gray-500 text-sm">Tenant slug: <span class="text-[#F59E0B]">/${slug}</span></p>
-              <p class="text-gray-600 text-sm mt-8">🔐 Login UI arrives in Phase 2</p>
+          <div class="min-h-screen flex items-center justify-center px-6 relative overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
+            <div class="max-w-md w-full text-center z-10">
+              <h1 class="font-serif text-4xl text-white mb-3">Create your school</h1>
+              <p class="text-gray-500 mb-8">Sign in with Google to get started.</p>
+
+              <button id="google-signin-btn"
+                class="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-medium py-3 px-4 rounded-lg hover:bg-gray-100 transition-all">
+                <svg class="w-5 h-5" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                Sign in with Google
+              </button>
+
+              <p class="text-xs text-gray-600 mt-6">
+                <a href="${buildUrl('/')}" class="hover:text-gray-400">← Back</a>
+              </p>
             </div>
           </div>
         `);
+        document.getElementById('google-signin-btn').addEventListener('click', handleGoogleSignIn);
+        return;
+      }
+
+      // Signed in → show school creation form
+      render(`
+        <div class="min-h-screen flex items-center justify-center px-6 relative overflow-hidden">
+          <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
+
+          <div class="max-w-md w-full z-10">
+            <h1 class="font-serif text-4xl text-white mb-3">Create your school</h1>
+            <p class="text-gray-500 mb-8">Give your school a name and a URL.</p>
+
+            <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">School Name</label>
+            <input id="school-name" type="text" placeholder="Example High School" autocomplete="off"
+              class="w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 focus:outline-none focus:border-[#8B5CF6] transition-all" />
+
+            <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">School URL</label>
+            <div class="flex items-center bg-white/[0.03] border border-white/10 rounded-lg mb-4 focus-within:border-[#8B5CF6] transition-all">
+              <span class="text-gray-500 text-sm pl-4 select-none">/${escapeHtml(BASE_PATH.replace(/^\//, ''))}/</span>
+              <input id="school-slug" type="text" placeholder="example" autocomplete="off"
+                class="flex-1 bg-transparent px-2 py-3 text-white focus:outline-none" />
+            </div>
+
+            <p id="onboard-error" class="text-red-400 text-sm mb-4 hidden"></p>
+
+            <button id="onboard-submit"
+              class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all">
+              Create School
+            </button>
+
+            <p class="text-xs text-gray-600 mt-6 text-center">
+              Signed in as ${escapeHtml(currentUser.email || '')} ·
+              <button id="signout-btn" class="hover:text-gray-400">Sign out</button>
+            </p>
+          </div>
+        </div>
+      `);
+
+      // Auto-slugify from name (until user manually edits the slug)
+      const nameInput = document.getElementById('school-name');
+      const slugInput = document.getElementById('school-slug');
+      nameInput.addEventListener('input', () => {
+        if (!slugInput.dataset.touched) slugInput.value = slugify(nameInput.value);
+      });
+      slugInput.addEventListener('input', () => { slugInput.dataset.touched = '1'; });
+
+      document.getElementById('onboard-submit').addEventListener('click', createSchool);
+      document.getElementById('signout-btn').addEventListener('click', () => signOut(auth));
+    }
+
+    async function createSchool() {
+      const name = document.getElementById('school-name').value.trim();
+      const slug = document.getElementById('school-slug').value.trim().toLowerCase();
+      const errorEl = document.getElementById('onboard-error');
+      const btn = document.getElementById('onboard-submit');
+
+      const showError = (msg) => {
+        errorEl.textContent = msg;
+        errorEl.classList.remove('hidden');
+      };
+
+      errorEl.classList.add('hidden');
+
+      if (!name) return showError('Please enter a school name.');
+      if (!/^[a-z0-9-]{3,30}$/.test(slug)) return showError('URL must be 3–30 characters: lowercase letters, numbers, hyphens.');
+      if (RESERVED.includes(slug)) return showError('That URL is reserved. Try another.');
+
+      btn.disabled = true;
+      btn.textContent = 'Creating…';
+
+      try {
+        const existing = await getDoc(doc(db, 'tenants', slug));
+        if (existing.exists()) {
+          btn.disabled = false;
+          btn.textContent = 'Create School';
+          return showError('That URL is already taken. Try another.');
+        }
+
+        await setDoc(doc(db, 'tenants', slug), {
+          name, slug,
+          ownerUid: currentUser.uid,
+          createdAt: serverTimestamp()
+        });
+
+        await setDoc(doc(db, 'tenants', slug, 'users', currentUser.uid), {
+          role: 'teacher',
+          email: currentUser.email,
+          displayName: currentUser.displayName,
+          photoURL: currentUser.photoURL,
+          createdAt: serverTimestamp()
+        });
+
+        navigate('/' + slug);
       } catch (err) {
         console.error(err);
-        render(`<div class="min-h-screen flex items-center justify-center text-red-400 p-6 text-center">Error loading tenant:<br>${err.message}</div>`);
+        btn.disabled = false;
+        btn.textContent = 'Create School';
+        showError('Something went wrong: ' + err.message);
       }
     }
 
+    // ── Tenant route ────────────────────────────────────────────────
+    async function viewTenant(slug, subSegments) {
+      viewLoading();
+
+      const tenant = await getTenant(slug);
+      if (!tenant) return viewTenantNotFound(slug);
+
+      if (!currentUser) return viewTenantLogin(slug, tenant);
+
+      const roleInfo = await getRoleInTenant(slug, currentUser.uid);
+      if (!roleInfo) return viewNoAccess(slug, tenant);
+
+      const sub = subSegments[0] || 'dashboard';
+      if (sub === 'dashboard') return viewDashboard(slug, tenant, roleInfo);
+
+      return viewNotFound();
+    }
+
+    function viewTenantNotFound(slug) {
+      render(`
+        <div class="min-h-screen flex items-center justify-center text-center px-6">
+          <div>
+            <h1 class="font-serif text-3xl text-white mb-2">School not found</h1>
+            <p class="text-gray-500">No school exists at <span class="text-[#F59E0B]">/${escapeHtml(slug)}</span></p>
+            <a href="${buildUrl('/')}" class="inline-block mt-6 text-sm text-[#F59E0B] hover:underline">← Back to Ember LMS</a>
+          </div>
+        </div>
+      `);
+    }
+
+    function viewNoAccess(slug, tenant) {
+      render(`
+        <div class="min-h-screen flex items-center justify-center text-center px-6">
+          <div class="max-w-md">
+            <h1 class="font-serif text-3xl text-white mb-2">${escapeHtml(tenant.name)}</h1>
+            <p class="text-gray-500 mb-8">You don't have access to this school yet. Contact your teacher to be enrolled.</p>
+            <button id="signout-nx" class="px-5 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">
+              Sign out
+            </button>
+          </div>
+        </div>
+      `);
+      document.getElementById('signout-nx').addEventListener('click', () => signOut(auth));
+    }
+
+    // ── Tenant login (split-screen) ─────────────────────────────────
+    function viewTenantLogin(slug, tenant) {
+      render(`
+        <div class="min-h-screen flex">
+          <!-- Left: atmosphere -->
+          <div class="hidden lg:flex w-1/2 bg-[#050505] relative overflow-hidden border-r border-white/[0.08]">
+            <div class="absolute bottom-0 left-0 w-[600px] h-[600px] rounded-full bg-[#F59E0B]/10 blur-[120px] pointer-events-none"></div>
+            <div class="relative z-10 flex flex-col justify-end p-16">
+              <p class="text-xs text-[#F59E0B] uppercase tracking-widest mb-4">Welcome</p>
+              <h1 class="font-serif text-5xl text-white leading-tight mb-4">
+                ${escapeHtml(tenant.name)}
+              </h1>
+              <p class="text-gray-500 text-base max-w-md">
+                Sign in to access your courses, assignments, and grades.
+              </p>
+            </div>
+          </div>
+
+          <!-- Right: form -->
+          <div class="w-full lg:w-1/2 flex items-center justify-center px-6 py-12 bg-[#0A0A0A]">
+            <div class="max-w-sm w-full">
+              <div class="lg:hidden mb-8">
+                <h1 class="font-serif text-3xl text-white mb-1">${escapeHtml(tenant.name)}</h1>
+                <p class="text-gray-500 text-sm">Sign in to continue</p>
+              </div>
+
+              <div class="hidden lg:block mb-8">
+                <h2 class="font-serif text-3xl text-white mb-1">Welcome back</h2>
+                <p class="text-gray-500 text-sm">Sign in to continue</p>
+              </div>
+
+              <!-- Teacher: Google -->
+              <button id="tenant-google-btn"
+                class="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-medium py-3 px-4 rounded-lg hover:bg-gray-100 transition-all">
+                <svg class="w-5 h-5" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                Continue as Teacher
+              </button>
+
+              <div class="flex items-center gap-4 my-6">
+                <div class="flex-1 h-px bg-white/[0.08]"></div>
+                <span class="text-xs text-gray-500 uppercase tracking-wider">or</span>
+                <div class="flex-1 h-px bg-white/[0.08]"></div>
+              </div>
+
+              <!-- Student: username/password -->
+              <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Username</label>
+              <input id="student-username" type="text" autocomplete="username"
+                class="w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 focus:outline-none focus:border-[#8B5CF6] transition-all" />
+
+              <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Password</label>
+              <input id="student-password" type="password" autocomplete="current-password"
+                class="w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 focus:outline-none focus:border-[#8B5CF6] transition-all" />
+
+              <p id="login-error" class="text-red-400 text-sm mb-4 hidden"></p>
+
+              <button id="student-login-btn"
+                class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:shadow-[0_0_25px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all">
+                Sign in as Student
+              </button>
+
+              <p class="text-xs text-gray-600 mt-6 text-center">
+                <a href="${buildUrl('/')}" class="hover:text-gray-400">← Back to Ember LMS</a>
+              </p>
+            </div>
+          </div>
+        </div>
+      `);
+
+      document.getElementById('tenant-google-btn').addEventListener('click', handleGoogleSignIn);
+      document.getElementById('student-login-btn').addEventListener('click', () => studentLogin(slug));
+      document.getElementById('student-password').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') studentLogin(slug);
+      });
+    }
+
+    async function studentLogin(slug) {
+      const username = document.getElementById('student-username').value.trim().toLowerCase();
+      const password = document.getElementById('student-password').value;
+      const errorEl = document.getElementById('login-error');
+      const btn = document.getElementById('student-login-btn');
+
+      const showError = (msg) => {
+        errorEl.textContent = msg;
+        errorEl.classList.remove('hidden');
+      };
+
+      errorEl.classList.add('hidden');
+
+      if (!username || !password) return showError('Enter both username and password.');
+      if (!/^[a-z0-9_]{3,20}$/.test(username)) return showError('Invalid username format.');
+
+      const email = `${username}@${slug}.emberlms.local`;
+
+      btn.disabled = true;
+      btn.textContent = 'Signing in…';
+
+      try {
+        await signInWithEmailAndPassword(auth, email, password);
+        // onAuthStateChanged will re-render
+      } catch (err) {
+        console.error(err);
+        btn.disabled = false;
+        btn.textContent = 'Sign in as Student';
+        if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
+          showError('Invalid username or password.');
+        } else {
+          showError('Sign-in failed. Try again.');
+        }
+      }
+    }
+
+    // ── Dashboard (Phase 2 placeholder) ─────────────────────────────
+    function viewDashboard(slug, tenant, roleInfo) {
+      const name = currentUser.displayName || roleInfo.data.displayName || currentUser.email || 'User';
+      const isTeacher = roleInfo.role === 'teacher';
+
+      render(`
+        <div class="min-h-screen flex">
+          <aside class="w-64 bg-[#050505] border-r border-white/[0.08] p-6 flex flex-col">
+            <h1 class="font-serif text-xl mb-8">
+              <span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span>
+            </h1>
+
+            <div class="text-[10px] text-gray-500 uppercase tracking-widest mb-2">School</div>
+            <p class="text-white text-sm mb-8 truncate">${escapeHtml(tenant.name)}</p>
+
+            <nav class="space-y-1">
+              <a href="${buildUrl('/' + slug)}" class="flex items-center gap-3 px-3 py-2 text-sm text-white bg-white/[0.05] border-l-2 border-[#F59E0B] rounded-r transition-all">
+                <i data-lucide="layout-dashboard" class="w-4 h-4 text-[#F59E0B]"></i> Dashboard
+              </a>
+              <span class="flex items-center gap-3 px-3 py-2 text-sm text-gray-600">
+                <i data-lucide="book-open" class="w-4 h-4"></i> Courses <span class="ml-auto text-[10px]">Soon</span>
+              </span>
+              ${isTeacher ? `
+                <span class="flex items-center gap-3 px-3 py-2 text-sm text-gray-600">
+                  <i data-lucide="users" class="w-4 h-4"></i> Students <span class="ml-auto text-[10px]">Soon</span>
+                </span>
+              ` : ''}
+            </nav>
+
+            <div class="mt-auto pt-6 border-t border-white/[0.08]">
+              <div class="flex items-center gap-3 mb-3">
+                ${currentUser.photoURL
+                  ? `<img src="${currentUser.photoURL}" class="w-8 h-8 rounded-full border border-white/20">`
+                  : `<div class="w-8 h-8 rounded-full bg-white/10"></div>`}
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm text-white truncate">${escapeHtml(name)}</p>
+                  <p class="text-xs text-gray-500 truncate">${isTeacher ? 'Teacher' : 'Student'}</p>
+                </div>
+              </div>
+              <button id="signout-dash" class="w-full text-left text-xs text-gray-400 hover:text-red-400 transition-colors flex items-center gap-2">
+                <i data-lucide="log-out" class="w-3 h-3"></i> Sign Out
+              </button>
+            </div>
+          </aside>
+
+          <main class="flex-1 p-10 relative overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
+            <div class="relative z-10">
+              <h2 class="font-serif text-3xl text-white mb-2">Dashboard</h2>
+              <p class="text-gray-500 text-sm mb-12">Welcome, ${escapeHtml(name)}.</p>
+
+              <div class="max-w-2xl p-10 border border-dashed border-white/10 rounded-xl text-center">
+                <i data-lucide="sparkles" class="w-8 h-8 text-[#F59E0B] mx-auto mb-4"></i>
+                <h3 class="font-serif text-xl text-white mb-2">Phase 2 complete</h3>
+                <p class="text-gray-500 text-sm">Authentication is live. Courses, students, and modules arrive in Phase 3.</p>
+              </div>
+            </div>
+          </main>
+        </div>
+      `);
+
+      document.getElementById('signout-dash').addEventListener('click', () => signOut(auth));
+    }
+
+    // ── 404 ─────────────────────────────────────────────────────────
     function viewNotFound() {
       render(`
         <div class="min-h-screen flex items-center justify-center text-center px-6">
@@ -243,24 +590,52 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // 🚀 MAIN
+    // 🔑 AUTH ACTIONS
     // ═══════════════════════════════════════════════════════════════════
-    async function main() {
+    async function handleGoogleSignIn() {
+      try {
+        const provider = new GoogleAuthProvider();
+        await signInWithPopup(auth, provider);
+        // onAuthStateChanged handles the rest
+      } catch (err) {
+        console.error('Google sign-in error:', err);
+        if (err.code === 'auth/popup-closed-by-user') return;
+        alert('Sign-in failed: ' + err.message);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🚀 RENDER LOOP
+    // ═══════════════════════════════════════════════════════════════════
+    async function renderRoute() {
+      if (!authReady) return;
       const route = parseRoute();
 
       switch (route.type) {
         case 'landing':
           viewLanding();
           break;
+        case 'onboard':
+          viewOnboard();
+          break;
         case 'tenant':
-          await viewTenant(route.tenant);
+          await viewTenant(route.tenant, route.segments);
           break;
         default:
           viewNotFound();
       }
     }
 
-    main();
+    // ═══════════════════════════════════════════════════════════════════
+    // 🏁 BOOT
+    // ═══════════════════════════════════════════════════════════════════
+    viewLoading();
+
+    onAuthStateChanged(auth, (user) => {
+      currentUser = user;
+      authReady = true;
+      renderRoute();
+    });
   </script>
 </body>
 </html>
