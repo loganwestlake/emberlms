@@ -37,7 +37,7 @@
   <!-- Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
-  <!-- HTML Sanitization (for later phases) -->
+  <!-- HTML Sanitization (used in later phases) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
 
   <style>
@@ -62,7 +62,21 @@
 
   <script type="module">
     // ═══════════════════════════════════════════════════════════════════
-    // FIREBASE
+    // ⚙️  APP CONFIGURATION
+    // ═══════════════════════════════════════════════════════════════════
+    //
+    // BASE_PATH tells the router where the app lives.
+    //
+    //   Deploying to github.io/repo/emberlms/  →  '/repo/emberlms'
+    //   Deploying to github.io/emberlms/       →  '/emberlms'
+    //   Deploying to a custom domain (root)    →  ''
+    //
+    // If you're testing locally with Live Server or `npx serve`, use ''.
+    //
+    const BASE_PATH = '/repo/emberlms';
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🔥 FIREBASE
     // ═══════════════════════════════════════════════════════════════════
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
     import { getAuth } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
@@ -89,25 +103,55 @@
     const secondaryAuth = getAuth(secondaryApp);
 
     // ═══════════════════════════════════════════════════════════════════
-    // ROUTER
+    // 🧭 ROUTER
     // ═══════════════════════════════════════════════════════════════════
-    const RESERVED = ['onboard', 'login', 'signup', 'api', 'css', 'js', 'assets'];
+    const RESERVED = ['onboard', 'login', 'signup', 'api'];
 
+    /**
+     * Strips the BASE_PATH from the current URL and returns the remaining
+     * path segments. Handles trailing slashes and encoded characters.
+     */
+    function getAppSegments() {
+      let pathname = decodeURIComponent(window.location.pathname);
+
+      // Remove the base path prefix if it exists
+      if (BASE_PATH && pathname.startsWith(BASE_PATH)) {
+        pathname = pathname.slice(BASE_PATH.length);
+      }
+
+      return pathname.split('/').filter(Boolean);
+    }
+
+    /**
+     * Builds a full app URL given a relative path.
+     * e.g. buildUrl('/example') → '/repo/emberlms/example'
+     */
+    function buildUrl(relative = '/') {
+      const clean = relative.startsWith('/') ? relative : '/' + relative;
+      return (BASE_PATH + clean).replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+    }
+
+    /**
+     * Parses the current URL and returns a route object.
+     */
     function parseRoute() {
-      // Restore URL if we were redirected by 404.html
+      // 1. If 404.html sent us here, restore the original URL path
       const savedPath = sessionStorage.getItem('ember_redirect_path');
       if (savedPath) {
         sessionStorage.removeItem('ember_redirect_path');
         window.history.replaceState(null, '', savedPath);
       }
 
-      const segments = window.location.pathname.split('/').filter(Boolean);
+      // 2. Extract app segments (base path stripped)
+      const segments = getAppSegments();
 
+      // 3. Route based on first segment
       if (segments.length === 0) {
         return { type: 'landing', tenant: null, segments: [] };
       }
 
       const first = segments[0];
+
       if (RESERVED.includes(first)) {
         return { type: first, tenant: null, segments: segments.slice(1) };
       }
@@ -116,7 +160,7 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // UI HELPERS
+    // 🎨 UI HELPERS
     // ═══════════════════════════════════════════════════════════════════
     const appEl = document.getElementById('app');
 
@@ -130,7 +174,7 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // VIEWS
+    // 🖼️ VIEWS
     // ═══════════════════════════════════════════════════════════════════
     function viewLanding() {
       render(`
@@ -161,7 +205,7 @@
               <div>
                 <h1 class="font-serif text-3xl text-white mb-2">School not found</h1>
                 <p class="text-gray-500">No school exists at <span class="text-[#F59E0B]">/${slug}</span></p>
-                <a href="/" class="inline-block mt-6 text-sm text-[#F59E0B] hover:underline">← Back to Ember LMS</a>
+                <a href="${buildUrl('/')}" class="inline-block mt-6 text-sm text-[#F59E0B] hover:underline">← Back to Ember LMS</a>
               </div>
             </div>
           `);
@@ -187,11 +231,19 @@
     }
 
     function viewNotFound() {
-      render(`<div class="min-h-screen flex items-center justify-center text-gray-500">404 — Not found</div>`);
+      render(`
+        <div class="min-h-screen flex items-center justify-center text-center px-6">
+          <div>
+            <h1 class="font-serif text-3xl text-white mb-2">404</h1>
+            <p class="text-gray-500">Page not found.</p>
+            <a href="${buildUrl('/')}" class="inline-block mt-6 text-sm text-[#F59E0B] hover:underline">← Back to Ember LMS</a>
+          </div>
+        </div>
+      `);
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // MAIN
+    // 🚀 MAIN
     // ═══════════════════════════════════════════════════════════════════
     async function main() {
       const route = parseRoute();
