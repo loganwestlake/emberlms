@@ -1538,4 +1538,151 @@
               </div>` : `
               <div class="bg-[#141414] border border-white/[0.08] rounded-xl p-6">
                 <h3 class="font-serif text-lg text-white mb-4">Submit your work</h3>
-                <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2
+                <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Your Submission</label>
+                <textarea id="submission-text" rows="6" placeholder="Type your answer here…" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all font-sans"></textarea>
+                <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2 mt-4">Or a link (URL)</label>
+                <input id="submission-url" type="url" placeholder="https://docs.google.com/…" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
+                <p id="submission-error" class="text-red-400 text-sm mt-3 hidden"></p>
+                <p id="submission-success" class="text-green-400 text-sm mt-3 hidden"></p>
+                <button id="submit-assignment-btn" class="mt-4 px-5 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">Submit Assignment</button>
+              </div>`}
+          </div>`;
+      }
+      if (item.type === 'quiz') {
+        return `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center">
+          <i data-lucide="check-square" class="w-10 h-10 text-[#F59E0B] mx-auto mb-4"></i>
+          <p class="text-gray-500 text-sm">Quiz builder arrives in Phase 6.</p>
+        </div>`;
+      }
+      return `<p class="text-gray-500 italic">Unknown item type.</p>`;
+    }
+
+    function wireItemBody(slug, courseId, moduleId, itemId, item, isTeacher) {
+      if (item.type !== 'assignment' || isTeacher) return;
+      const btn = document.getElementById('submit-assignment-btn');
+      if (!btn) return;
+      btn.addEventListener('click', async () => {
+        const content = document.getElementById('submission-text').value.trim();
+        const url = document.getElementById('submission-url').value.trim();
+        const err = document.getElementById('submission-error');
+        const ok = document.getElementById('submission-success');
+        err.classList.add('hidden'); ok.classList.add('hidden');
+        if (!content && !url) { err.textContent = 'Please provide text or a link.'; err.classList.remove('hidden'); return; }
+        btn.disabled = true; btn.textContent = 'Submitting…';
+        try {
+          await addDoc(collection(db, 'tenants', slug, 'courses', courseId, 'submissions'), {
+            itemId, moduleId, studentId: currentUser.uid,
+            studentName: currentUser.displayName || 'Student',
+            content, url, submittedAt: serverTimestamp(), grade: null, feedback: null
+          });
+          ok.textContent = 'Submitted! Your teacher will review it soon.';
+          ok.classList.remove('hidden');
+          btn.textContent = 'Submitted ✓';
+        } catch(e) {
+          console.error(e); btn.disabled = false; btn.textContent = 'Submit Assignment';
+          err.textContent = 'Failed: ' + e.message; err.classList.remove('hidden');
+        }
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🖼️ SIDEBAR
+    // ═══════════════════════════════════════════════════════════════════
+    function renderSidebar(slug, tenant, roleInfo, active, course = null) {
+      const isRealTeacher = roleInfo.role === 'teacher';
+      const name = currentUser.displayName || roleInfo.data.displayName || currentUser.email || 'User';
+      const effectiveRoleLabel = isRealTeacher && viewAsStudent ? 'Student (preview)' : (isRealTeacher ? 'Teacher' : 'Student');
+
+      const item = (href, icon, label, key, soon = false) => {
+        const isActive = active === key;
+        if (soon) return `<span class="flex items-center gap-3 px-3 py-2 text-sm text-gray-600"><i data-lucide="${icon}" class="w-4 h-4"></i> ${label} <span class="ml-auto text-[10px]">Soon</span></span>`;
+        return `<a href="${buildUrl(href)}" class="flex items-center gap-3 px-3 py-2 text-sm ${isActive ? 'text-white bg-white/[0.05] border-l-2 border-[#F59E0B] rounded-r' : 'text-gray-400 hover:text-white hover:bg-white/[0.03] border-l-2 border-transparent rounded-r'} transition-all">
+          <i data-lucide="${icon}" class="w-4 h-4 ${isActive ? 'text-[#F59E0B]' : ''}"></i> ${label}
+        </a>`;
+      };
+
+      return `
+        <aside class="w-64 bg-[#050505] border-r border-white/[0.08] p-6 flex flex-col h-screen shrink-0">
+          <h1 class="font-serif text-xl mb-8"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></h1>
+          <div class="text-[10px] text-gray-500 uppercase tracking-widest mb-2">${course ? 'Course' : 'School'}</div>
+          <p class="text-white text-sm mb-8 truncate">${escapeHtml(course ? course.title : tenant.name)}</p>
+          <nav class="space-y-1">
+            ${course ? `
+              ${item('/' + slug + '/course/' + course.id, 'layers', 'Modules', 'course')}
+              ${isRealTeacher ? item('/' + slug + '/course/' + course.id + '/roster', 'users', 'Roster', 'roster') : ''}
+              <div class="pt-4 mt-4 border-t border-white/[0.06]">
+                <a href="${buildUrl('/' + slug)}" class="flex items-center gap-3 px-3 py-2 text-sm text-gray-500 hover:text-white transition-all"><i data-lucide="arrow-left" class="w-4 h-4"></i> All Courses</a>
+              </div>
+            ` : `
+              ${item('/' + slug, 'layout-dashboard', 'Dashboard', 'dashboard')}
+              ${isRealTeacher ? item('/' + slug + '/students', 'users', 'Students', 'students') : ''}
+            `}
+          </nav>
+          <div class="mt-auto pt-6 border-t border-white/[0.08]">
+            <div class="flex items-center gap-3 mb-3">
+              ${currentUser.photoURL
+                ? `<img src="${currentUser.photoURL}" class="w-8 h-8 rounded-full border border-white/20" alt="">`
+                : `<div class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-xs text-white">${escapeHtml((name[0]||'U').toUpperCase())}</div>`}
+              <div class="flex-1 min-w-0">
+                <p class="text-sm text-white truncate">${escapeHtml(name)}</p>
+                <p class="text-xs ${viewAsStudent && isRealTeacher ? 'text-[#F59E0B]' : 'text-gray-500'} truncate">${effectiveRoleLabel}</p>
+              </div>
+            </div>
+            <button data-signout class="w-full text-left text-xs text-gray-400 hover:text-red-400 transition-colors flex items-center gap-2"><i data-lucide="log-out" class="w-3 h-3"></i> Sign Out</button>
+          </div>
+        </aside>`;
+    }
+
+    document.addEventListener('click', (e) => { if (e.target.closest('[data-signout]')) signOut(auth); });
+
+    function viewNotFound() {
+      render(`<div class="min-h-screen flex items-center justify-center text-center px-6"><div>
+        <h1 class="font-serif text-3xl text-white mb-2">404</h1>
+        <p class="text-gray-500">Page not found.</p>
+        <a href="${buildUrl('/')}" class="inline-block mt-6 text-sm text-[#F59E0B] hover:underline">← Back</a>
+      </div></div>`);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🔑 AUTH
+    // ═══════════════════════════════════════════════════════════════════
+    async function handleGoogleSignIn() {
+      try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+      catch (e) {
+        console.error(e);
+        if (['auth/popup-closed-by-user','auth/cancelled-popup-request'].includes(e.code)) return;
+        alert('Sign-in failed: ' + e.message);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🚀 RENDER
+    // ═══════════════════════════════════════════════════════════════════
+    async function renderRoute() {
+      if (!authReady) return;
+      clearSubs();
+      const route = parseRoute();
+      try {
+        switch (route.type) {
+          case 'landing': viewLanding(); break;
+          case 'onboard': viewOnboard(); break;
+          case 'tenant':  await viewTenant(route.tenant, route.segments); break;
+          default:        viewNotFound();
+        }
+      } catch (e) {
+        console.error('Render failed:', e);
+        render(`<div class="min-h-screen flex items-center justify-center text-red-400 p-6 text-center">Error:<br>${escapeHtml(e.message)}</div>`);
+      }
+    }
+
+    render(`<div class="min-h-screen flex items-center justify-center text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i></div>`);
+    refreshIcons();
+
+    onAuthStateChanged(auth, (user) => {
+      currentUser = user;
+      authReady = true;
+      renderRoute();
+    });
+  </script>
+</body>
+</html>
