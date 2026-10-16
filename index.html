@@ -1046,28 +1046,438 @@
     // ═══════════════════════════════════════════════════════════════
     // DISTRICT
     // ═══════════════════════════════════════════════════════════════
-    async function viewDistrict(districtId) {
+    async function viewDistrict(districtId, segs = []) {
       const dSnap = await getDoc(doc(db, 'districts', districtId));
       if (!dSnap.exists()) return viewNotFound();
-      const district = dSnap.data();
-      render(`
-        <div class="min-h-screen flex items-center justify-center px-6 relative overflow-hidden">
-          <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[600px] rounded-full bg-[#8B5CF6]/10 blur-[140px] pointer-events-none"></div>
-          <div class="max-w-2xl w-full text-center z-10">
-            <p class="text-xs text-[#8B5CF6] uppercase tracking-widest mb-3">District Admin</p>
-            <h1 class="font-serif text-4xl text-white mb-2">${escapeHtml(district.name || districtId)}</h1>
-            <p class="text-gray-500 mb-10">You are a district administrator.</p>
-            <div class="bg-[#141414] border border-dashed border-white/10 rounded-xl p-10">
-              <i data-lucide="building-2" class="w-10 h-10 text-[#8B5CF6] mx-auto mb-4"></i>
-              <h2 class="font-serif text-xl text-white mb-2">District dashboard</h2>
-              <p class="text-gray-500 text-sm">Oversight tools arrive in Phase 6F.</p>
-            </div>
-            <button id="district-signout" class="mt-8 px-5 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Sign out</button>
-          </div>
-        </div>`);
-      document.getElementById('district-signout').addEventListener('click', () => signOut(auth));
+      const district = { id: dSnap.id, ...dSnap.data() };
+
+      if (!currentUser) return navigate('/login');
+      if (!(district.adminUids || []).includes(currentUser.uid)) {
+        return render(`<div class="min-h-screen flex items-center justify-center text-center px-6"><div class="max-w-md">
+          <h1 class="font-serif text-3xl text-white mb-2">Access denied</h1>
+          <p class="text-gray-500 mb-8">You are not a district administrator for this district.</p>
+          <button data-signout class="px-5 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Sign out</button>
+        </div></div>`);
+      }
+
+      const sub = segs[0] || 'overview';
+      if (sub === 'schools') return viewDistrictSchools(districtId, district);
+      if (sub === 'teachers') return viewDistrictTeachers(districtId, district);
+      if (sub === 'planning') return viewDistrictStub(districtId, district, 'planning');
+      if (sub === 'attendance') return viewDistrictStub(districtId, district, 'attendance');
+      return viewDistrictOverview(districtId, district);
     }
 
+    function renderDistrictSidebar(districtId, district, active) {
+      const name = currentUser.displayName || currentUser.email || 'Admin';
+      const item = (href, icon, label, key, soon = false) => {
+        const isActive = active === key;
+        if (soon) return `<span class="flex items-center gap-3 px-3 py-2 text-sm text-gray-600"><i data-lucide="${icon}" class="w-4 h-4"></i> ${label} <span class="ml-auto text-[10px]">Soon</span></span>`;
+        return `<a href="${buildUrl(href)}" class="flex items-center gap-3 px-3 py-2 text-sm ${isActive ? 'text-white bg-white/[0.05] border-l-2 border-[#8B5CF6] rounded-r' : 'text-gray-400 hover:text-white hover:bg-white/[0.03] border-l-2 border-transparent rounded-r'} transition-all"><i data-lucide="${icon}" class="w-4 h-4 ${isActive ? 'text-[#8B5CF6]' : ''}"></i> ${label}</a>`;
+      };
+      return `<aside class="w-64 bg-[#050505] border-r border-white/[0.08] p-6 flex flex-col h-screen shrink-0">
+        <a href="${buildUrl('/')}" class="font-serif text-xl mb-8 block"><span class="text-[#8B5CF6]">Ember</span> <span class="text-white">LMS</span></a>
+        <div class="text-[10px] text-[#8B5CF6] uppercase tracking-widest mb-2">District</div>
+        <p class="text-white text-sm mb-6 truncate">${escapeHtml(district.name || districtId)}</p>
+        <nav class="space-y-1 overflow-y-auto flex-1 -mx-1 px-1">
+          <div class="text-[10px] text-gray-600 uppercase tracking-widest px-3 mb-2">Overview</div>
+          ${item('/district/' + districtId, 'layout-dashboard', 'Dashboard', 'overview')}
+          <div class="text-[10px] text-gray-600 uppercase tracking-widest px-3 mt-4 mb-2">Manage</div>
+          ${item('/district/' + districtId + '/schools', 'building-2', 'Schools', 'schools')}
+          ${item('/district/' + districtId + '/teachers', 'users', 'Teachers', 'teachers')}
+          <div class="text-[10px] text-gray-600 uppercase tracking-widest px-3 mt-4 mb-2">Insights</div>
+          ${item('/district/' + districtId + '/planning', 'clipboard-check', 'Planning', 'planning', true)}
+          ${item('/district/' + districtId + '/attendance', 'calendar-check', 'Attendance', 'attendance', true)}
+        </nav>
+        <div class="mt-4 pt-4 border-t border-white/[0.08]">
+          <div class="flex items-center gap-3 mb-3">
+            ${currentUser.photoURL ? `<img src="${currentUser.photoURL}" class="w-8 h-8 rounded-full border border-white/20" alt="">` : `<div class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-xs text-white">${escapeHtml((name[0]||'U').toUpperCase())}</div>`}
+            <div class="flex-1 min-w-0"><p class="text-sm text-white truncate">${escapeHtml(name)}</p><p class="text-xs text-[#8B5CF6] truncate">District Admin</p></div>
+          </div>
+          <button data-signout class="w-full text-left text-xs text-gray-400 hover:text-red-400 transition-colors flex items-center gap-2"><i data-lucide="log-out" class="w-3 h-3"></i> Sign Out</button>
+        </div>
+      </aside>`;
+    }
+
+    // Fetch all schools in a district + aggregate counts
+    async function getDistrictSchools(districtId) {
+      const snap = await getDocs(query(collection(db, 'tenants'), where('districtId', '==', districtId)));
+      const schools = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Fetch counts per school in parallel
+      await Promise.all(schools.map(async (s) => {
+        try {
+          const [teachersSnap, studentsSnap, coursesSnap] = await Promise.all([
+            getDocs(collection(db, 'tenants', s.id, 'users')),
+            getDocs(query(collection(db, 'tenants', s.id, 'students'), where('status', '==', 'approved'))),
+            getDocs(collection(db, 'tenants', s.id, 'courses'))
+          ]);
+          s._teacherCount = teachersSnap.size;
+          s._studentCount = studentsSnap.size;
+          s._courseCount = coursesSnap.size;
+        } catch(e) {
+          s._teacherCount = 0; s._studentCount = 0; s._courseCount = 0;
+        }
+      }));
+      return schools;
+    }
+
+    async function viewDistrictOverview(districtId, district) {
+      render(`
+        <div class="min-h-screen flex">
+          ${renderDistrictSidebar(districtId, district, 'overview')}
+          <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
+            <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#8B5CF6]/5 to-transparent pointer-events-none"></div>
+            <header class="p-8 pb-4 z-10 relative">
+              <p class="text-xs text-[#8B5CF6] uppercase tracking-widest mb-2">District Admin</p>
+              <h2 class="font-serif text-3xl text-white mb-1">${escapeHtml(district.name || districtId)}</h2>
+              <p class="text-xs text-gray-500">Overview of all schools in your district</p>
+            </header>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative" id="district-content">
+              <div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div>
+            </div>
+          </main>
+        </div>`);
+
+      try {
+        const schools = await getDistrictSchools(districtId);
+        const totalTeachers = schools.reduce((a, s) => a + (s._teacherCount || 0), 0);
+        const totalStudents = schools.reduce((a, s) => a + (s._studentCount || 0), 0);
+        const totalCourses = schools.reduce((a, s) => a + (s._courseCount || 0), 0);
+        const el = document.getElementById('district-content');
+        if (!el) return;
+
+        el.innerHTML = `
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 max-w-5xl mb-8">
+            ${[
+              { icon:'building-2', label:'Schools', value: schools.length, sub: schools.length === 0 ? 'None yet' : `${schools.length} in district`, href: buildUrl('/district/' + districtId + '/schools') },
+              { icon:'users', label:'Teachers', value: totalTeachers, sub: 'Across all schools', href: buildUrl('/district/' + districtId + '/teachers') },
+              { icon:'graduation-cap', label:'Students', value: totalStudents, sub: 'Approved enrollments', href: buildUrl('/district/' + districtId + '/schools') },
+              { icon:'book-open', label:'Courses', value: totalCourses, sub: 'Active courses', href: buildUrl('/district/' + districtId + '/schools') }
+            ].map(s => `
+              <a href="${s.href}" class="bg-[#141414] border border-white/[0.08] rounded-xl p-5 hover:border-white/20 hover:-translate-y-0.5 transition-all block">
+                <div class="w-9 h-9 rounded-lg bg-[#8B5CF6]/10 border border-[#8B5CF6]/20 flex items-center justify-center mb-3"><i data-lucide="${s.icon}" class="w-4 h-4 text-[#8B5CF6]"></i></div>
+                <div class="font-serif text-3xl text-white mb-0.5">${s.value}</div>
+                <div class="text-xs text-gray-400 mb-0.5">${s.label}</div>
+                <div class="text-[10px] text-gray-600">${s.sub}</div>
+              </a>`).join('')}
+          </div>
+
+          <div class="max-w-5xl bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
+            <div class="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
+              <h3 class="font-serif text-lg text-white">Schools</h3>
+              <a href="${buildUrl('/district/' + districtId + '/schools')}" class="text-xs text-[#8B5CF6] hover:underline">View all →</a>
+            </div>
+            ${schools.length === 0 ? `
+              <div class="p-8 text-center">
+                <i data-lucide="building-2" class="w-8 h-8 text-gray-600 mx-auto mb-3"></i>
+                <p class="text-sm text-gray-500 mb-4">No schools in this district yet.</p>
+                <button data-create-school class="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#8B5CF6] to-[#7C3AED] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">
+                  <i data-lucide="plus" class="w-4 h-4"></i> Create first school
+                </button>
+              </div>
+            ` : `
+              <div class="divide-y divide-white/[0.04]">
+                ${schools.slice(0, 6).map(s => `
+                  <a href="${buildUrl('/' + s.id + '/admin')}" class="flex items-center gap-4 px-5 py-3 hover:bg-white/[0.02] transition-all group">
+                    <div class="w-9 h-9 rounded-lg bg-[#8B5CF6]/10 border border-[#8B5CF6]/20 flex items-center justify-center text-[10px] font-mono text-[#8B5CF6] shrink-0">${escapeHtml((s.slug || s.id).slice(0,3).toUpperCase())}</div>
+                    <div class="flex-1 min-w-0">
+                      <div class="text-sm text-white truncate group-hover:text-[#8B5CF6] transition-colors">${escapeHtml(s.name || s.id)}</div>
+                      <div class="text-xs text-gray-500 font-mono truncate">/${escapeHtml(s.id)}</div>
+                    </div>
+                    <div class="hidden md:flex items-center gap-4 text-xs text-gray-500 shrink-0">
+                      <span>${s._teacherCount || 0} teachers</span>
+                      <span>${s._studentCount || 0} students</span>
+                      <span>${s._courseCount || 0} courses</span>
+                    </div>
+                    <i data-lucide="chevron-right" class="w-4 h-4 text-gray-700 shrink-0"></i>
+                  </a>`).join('')}
+              </div>
+            `}
+          </div>
+
+          ${schools.length > 0 ? `
+            <div class="max-w-5xl mt-6">
+              <button data-create-school class="inline-flex items-center gap-2 px-4 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">
+                <i data-lucide="plus" class="w-4 h-4"></i> Create school
+              </button>
+            </div>
+          ` : ''}
+        `;
+        refreshIcons();
+        el.querySelectorAll('[data-create-school]').forEach(b => b.addEventListener('click', () => openCreateSchoolModal(districtId, district)));
+      } catch (e) {
+        console.error(e);
+        const el = document.getElementById('district-content');
+        if (el) el.innerHTML = `<div class="text-red-400 text-sm p-6">Failed to load district: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function viewDistrictSchools(districtId, district) {
+      render(`
+        <div class="min-h-screen flex">
+          ${renderDistrictSidebar(districtId, district, 'schools')}
+          <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
+            <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#8B5CF6]/5 to-transparent pointer-events-none"></div>
+            <header class="p-8 pb-4 flex justify-between items-center z-10 relative">
+              <div>
+                <p class="text-xs text-[#8B5CF6] uppercase tracking-widest mb-2">District Admin</p>
+                <h2 class="font-serif text-3xl text-white mb-1">Schools</h2>
+                <p class="text-xs text-gray-500">${escapeHtml(district.name || districtId)}</p>
+              </div>
+              <button id="create-school-btn" class="px-5 py-2.5 bg-gradient-to-r from-[#8B5CF6] to-[#7C3AED] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all flex items-center gap-2">
+                <i data-lucide="plus" class="w-4 h-4"></i> New School
+              </button>
+            </header>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
+              <div id="schools-list" class="max-w-4xl">
+                <div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div>
+              </div>
+            </div>
+          </main>
+        </div>`);
+
+      document.getElementById('create-school-btn').addEventListener('click', () => openCreateSchoolModal(districtId, district));
+
+      try {
+        const schools = await getDistrictSchools(districtId);
+        const el = document.getElementById('schools-list');
+        if (!el) return;
+
+        if (schools.length === 0) {
+          el.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center">
+            <i data-lucide="building-2" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i>
+            <h3 class="font-serif text-xl text-white mb-2">No schools yet</h3>
+            <p class="text-gray-500 text-sm mb-6">Create your first school to get started.</p>
+            <button id="empty-create" class="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[#8B5CF6] to-[#7C3AED] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">
+              <i data-lucide="plus" class="w-4 h-4"></i> Create first school
+            </button>
+          </div>`;
+          refreshIcons();
+          const emptyBtn = document.getElementById('empty-create');
+          if (emptyBtn) emptyBtn.addEventListener('click', () => openCreateSchoolModal(districtId, district));
+          return;
+        }
+
+        el.innerHTML = `
+          <div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
+            <div class="grid grid-cols-12 px-5 py-3 border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
+              <div class="col-span-4">School</div>
+              <div class="col-span-3">URL</div>
+              <div class="col-span-2">Teachers</div>
+              <div class="col-span-2">Students</div>
+              <div class="col-span-1"></div>
+            </div>
+            <div class="divide-y divide-white/[0.04]">
+              ${schools.map(s => `
+                <div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
+                  <div class="col-span-4 min-w-0">
+                    <a href="${buildUrl('/' + s.id + '/admin')}" class="text-sm text-white hover:text-[#8B5CF6] transition-colors truncate block">${escapeHtml(s.name || s.id)}</a>
+                  </div>
+                  <div class="col-span-3 text-xs text-gray-500 font-mono truncate">/${escapeHtml(s.id)}</div>
+                  <div class="col-span-2 text-xs text-gray-400">${s._teacherCount || 0}</div>
+                  <div class="col-span-2 text-xs text-gray-400">${s._studentCount || 0}</div>
+                  <div class="col-span-1 flex justify-end gap-1">
+                    <a href="${buildUrl('/' + s.id + '/admin')}" class="p-1.5 text-gray-500 hover:text-[#8B5CF6] opacity-0 group-hover:opacity-100 transition-all" title="Open school admin">
+                      <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+                    </a>
+                  </div>
+                </div>`).join('')}
+            </div>
+          </div>`;
+        refreshIcons();
+      } catch (e) {
+        console.error(e);
+        const el = document.getElementById('schools-list');
+        if (el) el.innerHTML = `<div class="text-red-400 text-sm p-6">Failed to load schools: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function viewDistrictTeachers(districtId, district) {
+      render(`
+        <div class="min-h-screen flex">
+          ${renderDistrictSidebar(districtId, district, 'teachers')}
+          <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
+            <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#8B5CF6]/5 to-transparent pointer-events-none"></div>
+            <header class="p-8 pb-4 z-10 relative">
+              <p class="text-xs text-[#8B5CF6] uppercase tracking-widest mb-2">District Admin</p>
+              <h2 class="font-serif text-3xl text-white mb-1">Teachers</h2>
+              <p class="text-xs text-gray-500">All teachers across the district</p>
+            </header>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
+              <div id="teachers-list" class="max-w-5xl">
+                <div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div>
+              </div>
+            </div>
+          </main>
+        </div>`);
+
+      try {
+        const schools = await getDistrictSchools(districtId);
+        const allTeachers = [];
+        await Promise.all(schools.map(async (s) => {
+          try {
+            const snap = await getDocs(collection(db, 'tenants', s.id, 'users'));
+            snap.docs.forEach(d => {
+              allTeachers.push({
+                uid: d.id,
+                ...d.data(),
+                _schoolId: s.id,
+                _schoolName: s.name || s.id
+              });
+            });
+          } catch(e) {}
+        }));
+        allTeachers.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+
+        const el = document.getElementById('teachers-list');
+        if (!el) return;
+
+        if (allTeachers.length === 0) {
+          el.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center">
+            <i data-lucide="users" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i>
+            <h3 class="font-serif text-xl text-white mb-2">No teachers yet</h3>
+            <p class="text-gray-500 text-sm">Create a school and share its join code with teachers.</p>
+          </div>`;
+          refreshIcons(); return;
+        }
+
+        el.innerHTML = `
+          <div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
+            <div class="grid grid-cols-12 px-5 py-3 border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
+              <div class="col-span-5">Teacher</div>
+              <div class="col-span-4">School</div>
+              <div class="col-span-2">Role</div>
+              <div class="col-span-1"></div>
+            </div>
+            <div class="divide-y divide-white/[0.04]">
+              ${allTeachers.map(t => {
+                const name = t.displayName || (t.email ? t.email.split('@')[0] : 'Teacher');
+                const isAdmin = t.role === 'admin';
+                return `<div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
+                  <div class="col-span-5 flex items-center gap-3 min-w-0">
+                    ${t.photoURL ? `<img src="${t.photoURL}" class="w-8 h-8 rounded-full border border-white/20 shrink-0" alt="">` : `<div class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-[10px] text-white shrink-0">${escapeHtml(initials(name))}</div>`}
+                    <div class="min-w-0">
+                      <div class="text-sm text-white truncate">${escapeHtml(name)}</div>
+                      <div class="text-xs text-gray-500 truncate">${escapeHtml(t.email || '')}</div>
+                    </div>
+                  </div>
+                  <div class="col-span-4 min-w-0">
+                    <a href="${buildUrl('/' + t._schoolId + '/admin/teachers')}" class="text-sm text-gray-300 hover:text-[#8B5CF6] transition-colors truncate block">${escapeHtml(t._schoolName)}</a>
+                  </div>
+                  <div class="col-span-2">
+                    <span class="px-2 py-1 text-[10px] uppercase tracking-wider rounded ${isAdmin ? 'bg-[#8B5CF6]/15 text-[#8B5CF6] border border-[#8B5CF6]/30' : 'bg-white/[0.04] text-gray-400 border border-white/10'}">${isAdmin ? 'Admin' : 'Teacher'}</span>
+                  </div>
+                  <div class="col-span-1 flex justify-end">
+                    <a href="${buildUrl('/' + t._schoolId + '/admin/teachers')}" class="p-1.5 text-gray-500 hover:text-[#8B5CF6] opacity-0 group-hover:opacity-100 transition-all" title="Open school">
+                      <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+                    </a>
+                  </div>
+                </div>`;
+              }).join('')}
+            </div>
+          </div>`;
+        refreshIcons();
+      } catch (e) {
+        console.error(e);
+        const el = document.getElementById('teachers-list');
+        if (el) el.innerHTML = `<div class="text-red-400 text-sm p-6">Failed to load teachers: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function viewDistrictStub(districtId, district, section) {
+      const titles = { planning: 'Planning', attendance: 'Attendance' };
+      const icons = { planning: 'clipboard-check', attendance: 'calendar-check' };
+      render(`
+        <div class="min-h-screen flex">
+          ${renderDistrictSidebar(districtId, district, section)}
+          <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
+            <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#8B5CF6]/5 to-transparent pointer-events-none"></div>
+            <header class="p-8 pb-4 z-10 relative">
+              <p class="text-xs text-[#8B5CF6] uppercase tracking-widest mb-2">District Admin</p>
+              <h2 class="font-serif text-3xl text-white mb-1">${titles[section]}</h2>
+            </header>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
+              <div class="max-w-2xl border border-dashed border-white/10 rounded-xl p-10 text-center">
+                <i data-lucide="${icons[section]}" class="w-10 h-10 text-[#8B5CF6] mx-auto mb-4"></i>
+                <h3 class="font-serif text-xl text-white mb-2">${titles[section]}</h3>
+                <p class="text-gray-500 text-sm">Coming in Phase ${section === 'planning' ? '6D' : '6E'}.</p>
+              </div>
+            </div>
+          </main>
+        </div>`);
+    }
+
+    function openCreateSchoolModal(districtId, district) {
+      const ov = document.createElement('div');
+      ov.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 modal-overlay px-6';
+      ov.innerHTML = `
+        <div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-md w-full p-8 shadow-2xl">
+          <h3 class="font-serif text-2xl text-white mb-1">New School</h3>
+          <p class="text-gray-500 text-sm mb-6">Add a school to <span class="text-white">${escapeHtml(district.name || districtId)}</span>.</p>
+          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">School Name</label>
+          <input id="school-name" type="text" placeholder="Lincoln High School" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
+          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">School URL</label>
+          <div class="flex items-center bg-white/[0.03] border border-white/10 rounded-lg mb-4 focus-within:border-[#8B5CF6] transition-all">
+            <span class="text-gray-500 text-xs pl-4 select-none">/${escapeHtml(BASE_PATH.replace(/^\//, ''))}/</span>
+            <input id="school-slug" type="text" placeholder="lincoln-high" autocomplete="off" class="flex-1 bg-transparent px-2 py-3 text-white focus:outline-none" />
+          </div>
+          <div class="mb-6 p-3 bg-[#8B5CF6]/5 border border-[#8B5CF6]/20 rounded-lg">
+            <p class="text-xs text-gray-400 leading-relaxed">You will automatically become the school admin of this school. A join code will be generated for teachers to join.</p>
+          </div>
+          <p id="create-error" class="text-red-400 text-sm mb-4 hidden"></p>
+          <div class="flex gap-3">
+            <button id="create-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button>
+            <button id="create-submit" class="flex-1 py-2.5 bg-gradient-to-r from-[#8B5CF6] to-[#7C3AED] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60">Create School</button>
+          </div>
+        </div>`;
+      document.body.appendChild(ov);
+      refreshIcons();
+
+      const nameEl = ov.querySelector('#school-name');
+      const slugEl = ov.querySelector('#school-slug');
+      nameEl.addEventListener('input', () => { if (!slugEl.dataset.touched) slugEl.value = slugify(nameEl.value); });
+      slugEl.addEventListener('input', () => { slugEl.dataset.touched = '1'; });
+      setTimeout(() => nameEl.focus(), 50);
+
+      const close = () => ov.remove();
+      ov.querySelector('#create-cancel').addEventListener('click', close);
+      ov.addEventListener('click', e => { if (e.target === ov) close(); });
+
+      ov.querySelector('#create-submit').addEventListener('click', async () => {
+        const name = nameEl.value.trim();
+        const slug = slugEl.value.trim().toLowerCase();
+        const err = ov.querySelector('#create-error');
+        const btn = ov.querySelector('#create-submit');
+        err.classList.add('hidden');
+        if (!name) { err.textContent = 'Enter a school name.'; err.classList.remove('hidden'); return; }
+        if (!/^[a-z0-9-]{3,30}$/.test(slug)) { err.textContent = 'URL must be 3–30 chars: lowercase, numbers, hyphens.'; err.classList.remove('hidden'); return; }
+        if (RESERVED.includes(slug)) { err.textContent = 'That URL is reserved.'; err.classList.remove('hidden'); return; }
+        btn.disabled = true; btn.textContent = 'Creating…';
+        try {
+          const ex = await getDoc(doc(db, 'tenants', slug));
+          if (ex.exists()) { btn.disabled = false; btn.textContent = 'Create School'; err.textContent = 'That URL is already taken.'; err.classList.remove('hidden'); return; }
+          await setDoc(doc(db, 'tenants', slug), {
+            type: 'school', name, slug,
+            districtId,
+            joinCode: genCode(),
+            ownerUid: currentUser.uid,
+            createdAt: serverTimestamp()
+          });
+          await setDoc(doc(db, 'tenants', slug, 'users', currentUser.uid), {
+            userId: currentUser.uid, role: 'admin',
+            email: currentUser.email || '',
+            displayName: currentUser.displayName || (currentUser.email ? currentUser.email.split('@')[0] : 'Admin'),
+            photoURL: currentUser.photoURL || null,
+            createdAt: serverTimestamp()
+          });
+          close();
+          renderRoute();
+        } catch (e) {
+          console.error(e); btn.disabled = false; btn.textContent = 'Create School';
+          err.textContent = 'Failed: ' + (e.message || e.code); err.classList.remove('hidden');
+        }
+      });
+    }
     // ═══════════════════════════════════════════════════════════════
     // TENANT ROUTING
     // ═══════════════════════════════════════════════════════════════
@@ -2293,7 +2703,7 @@
           case 'landing': viewLanding(); break;
           case 'login':   viewLogin(); break;
           case 'signup':  viewSignup(); break;
-          case 'district': await viewDistrict(route.segments[0]); break;
+          case 'district': await viewDistrict(route.segments[0], route.segments.slice(1)); break;
           case 'tenant':  await viewTenant(route.tenant, route.segments); break;
           default:        viewNotFound();
         }
