@@ -159,6 +159,34 @@
     }
     function isValidEmail(e) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e); }
     function initials(name) { return String(name||'?').trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase(); }
+    function currentISOWeek() {
+      const d = new Date();
+      const target = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      const dayNum = target.getUTCDay() || 7;
+      target.setUTCDate(target.getUTCDate() + 4 - dayNum);
+      const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+      const weekNo = Math.ceil((((target - yearStart) / 86400000) + 1) / 7);
+      return `${target.getUTCFullYear()}-W${String(weekNo).padStart(2,'0')}`;
+    }
+    function describeWeek(week) {
+      if (!week) return '';
+      const m = week.match(/^(\d{4})-W(\d{2})$/);
+      if (!m) return week;
+      return `Week ${parseInt(m[2])}, ${m[1]}`;
+    }
+    function weekDateRange(week) {
+      const m = String(week || '').match(/^(\d{4})-W(\d{2})$/);
+      if (!m) return '';
+      const y = parseInt(m[1]), w = parseInt(m[2]);
+      const jan4 = new Date(y, 0, 4);
+      const dayNum = jan4.getDay() || 7;
+      const monday = new Date(jan4);
+      monday.setDate(jan4.getDate() - dayNum + 1 + (w - 1) * 7);
+      const friday = new Date(monday);
+      friday.setDate(monday.getDate() + 4);
+      const fmt = d => d.toLocaleDateString(undefined, { month:'short', day:'numeric' });
+      return `${fmt(monday)} – ${fmt(friday)}`;
+    }
 
     let currentUser = null;
     let authReady = false;
@@ -292,8 +320,8 @@
                 { icon:'layers', title:'Modules & Items', desc:'Pages, assignments, links, and quizzes — organized into clean modules.' },
                 { icon:'users', title:'Student Accounts', desc:'Create usernames and passwords. No emails required.' },
                 { icon:'building-2', title:'Schools & Districts', desc:'District admins oversee multiple schools. School admins oversee their teachers.' },
-                { icon:'clipboard-check', title:'Planning Reviews', desc:'Teachers submit lesson plans. Admins review and comment.' },
-                { icon:'calendar-check', title:'Attendance', desc:'Take attendance per course, per day. Admins see aggregated rates.' },
+                { icon:'clipboard-check', title:'Planning Reviews', desc:'Teachers submit weekly lesson plans. Admins review and comment.' },
+                { icon:'bell', title:'Announcements', desc:'Post updates to a course. Students see them the moment they log in.' },
                 { icon:'lock', title:'Yours, isolated', desc:'Each school gets its own URL. Data never crosses tenants.' }
               ].map(f => `
                 <div class="bg-[#141414] border border-white/[0.08] rounded-xl p-6 hover:border-white/20 hover:-translate-y-0.5 transition-all">
@@ -331,7 +359,6 @@
       const params = new URLSearchParams(window.location.search);
       let mode = params.get('as') === 'student' ? 'student' : 'staff';
       const preselectFromUrl = params.get('school');
-
       let preselected = null;
       let preselectedLoaded = false;
 
@@ -362,8 +389,7 @@
                   <div class="mb-6 p-4 bg-[#F59E0B]/10 border border-[#F59E0B]/20 rounded-lg">
                     <p class="text-[10px] text-[#F59E0B] uppercase tracking-wider mb-1">Already signed in</p>
                     <p class="text-sm text-white mb-1 truncate">${escapeHtml(currentUser.email || currentUser.displayName || '')}</p>
-                    <p class="text-xs text-gray-500 mb-3">You're signed in on this device.</p>
-                    <div class="flex gap-2">
+                    <div class="flex gap-2 mt-3">
                       <button id="lg-goto" class="flex-1 py-2 bg-[#F59E0B] text-white text-xs font-medium rounded-lg hover:brightness-110 transition-all">Go to my account</button>
                       <button id="lg-signout" class="flex-1 py-2 bg-white/[0.05] border border-white/10 text-white text-xs rounded-lg hover:bg-white/[0.08] transition-all">Sign out</button>
                     </div>
@@ -398,26 +424,18 @@
         if (soBtn) soBtn.addEventListener('click', () => signOut(auth));
 
         const body = document.getElementById('login-body');
-
-        // ── STAFF ──
         if (mode === 'staff') {
           body.innerHTML = `
             <button id="google-signin-btn" class="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-medium py-3 px-4 rounded-lg hover:bg-gray-100 transition-all">
               <svg class="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
               Continue with Google
             </button>
-            <div class="flex items-center gap-4 my-6">
-              <div class="flex-1 h-px bg-white/[0.08]"></div>
-              <span class="text-xs text-gray-500 uppercase tracking-wider">or</span>
-              <div class="flex-1 h-px bg-white/[0.08]"></div>
-            </div>
+            <div class="flex items-center gap-4 my-6"><div class="flex-1 h-px bg-white/[0.08]"></div><span class="text-xs text-gray-500 uppercase tracking-wider">or</span><div class="flex-1 h-px bg-white/[0.08]"></div></div>
             <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Email</label>
             <input id="staff-email" type="email" autocomplete="email" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
             <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Password</label>
             <input id="staff-password" type="password" autocomplete="current-password" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-3 transition-all" />
-            <div class="flex justify-end mb-4">
-              <button id="staff-forgot" type="button" class="text-xs text-gray-500 hover:text-[#F59E0B] transition-colors">Forgot password?</button>
-            </div>
+            <div class="flex justify-end mb-4"><button id="staff-forgot" type="button" class="text-xs text-gray-500 hover:text-[#F59E0B] transition-colors">Forgot password?</button></div>
             <p id="login-error" class="text-red-400 text-sm mb-4 hidden"></p>
             <button id="staff-login-btn" class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_15px_rgba(245,158,11,0.2)] hover:brightness-110 transition-all disabled:opacity-60">Sign In</button>`;
           document.getElementById('google-signin-btn').addEventListener('click', handleStaffGoogleSignIn);
@@ -436,8 +454,7 @@
               const cred = await signInWithEmailAndPassword(auth, email, password);
               const dest = await resolveDestinationForUser(cred.user);
               suppressAuthRouting = false;
-              if (dest) navigate(dest);
-              else navigate('/signup');
+              if (dest) navigate(dest); else navigate('/signup');
             } catch (e) {
               suppressAuthRouting = false;
               console.error(e); btn.disabled = false; btn.textContent = 'Sign In';
@@ -456,7 +473,6 @@
           return;
         }
 
-        // ── STUDENT ──
         if (preselectFromUrl && !preselectedLoaded) {
           preselectedLoaded = true;
           preselected = { slug: preselectFromUrl, name: preselectFromUrl };
@@ -491,7 +507,6 @@
         const searchEl = document.getElementById('school-search');
         const resultsEl = document.getElementById('school-results');
         let st;
-
         searchEl.addEventListener('input', () => {
           clearTimeout(st);
           const q = searchEl.value.trim();
@@ -500,23 +515,16 @@
           st = setTimeout(async () => {
             try {
               const results = await searchSchools(q);
-              if (!results.length) {
-                resultsEl.innerHTML = `<div class="p-4 text-sm text-gray-500">No schools found.</div>`;
-              } else {
-                resultsEl.innerHTML = results.map(s => `
-                  <button type="button" data-slug="${escapeHtml(s.slug)}" data-name="${escapeHtml(s.name)}"
-                    class="w-full text-left px-4 py-3 hover:bg-white/[0.05] border-b border-white/[0.04] last:border-0 transition-all">
-                    <div class="text-sm text-white">${escapeHtml(s.name)}</div>
-                    <div class="text-xs text-gray-500 font-mono">/${escapeHtml(s.slug)}</div>
-                  </button>`).join('');
-              }
+              if (!results.length) resultsEl.innerHTML = `<div class="p-4 text-sm text-gray-500">No schools found.</div>`;
+              else resultsEl.innerHTML = results.map(s => `
+                <button type="button" data-slug="${escapeHtml(s.slug)}" data-name="${escapeHtml(s.name)}"
+                  class="w-full text-left px-4 py-3 hover:bg-white/[0.05] border-b border-white/[0.04] last:border-0 transition-all">
+                  <div class="text-sm text-white">${escapeHtml(s.name)}</div>
+                  <div class="text-xs text-gray-500 font-mono">/${escapeHtml(s.slug)}</div>
+                </button>`).join('');
               resultsEl.classList.remove('hidden');
               resultsEl.querySelectorAll('[data-slug]').forEach(b => {
-                const pick = (ev) => {
-                  ev.preventDefault();
-                  preselected = { slug: b.dataset.slug, name: b.dataset.name };
-                  renderLogin();
-                };
+                const pick = (ev) => { ev.preventDefault(); preselected = { slug: b.dataset.slug, name: b.dataset.name }; renderLogin(); };
                 b.addEventListener('mousedown', pick);
                 b.addEventListener('click', pick);
               });
@@ -525,11 +533,7 @@
         });
 
         const clearBtn = document.getElementById('clear-school');
-        if (clearBtn) clearBtn.addEventListener('click', () => {
-          preselected = null;
-          preselectedLoaded = true;
-          renderLogin();
-        });
+        if (clearBtn) clearBtn.addEventListener('click', () => { preselected = null; preselectedLoaded = true; renderLogin(); });
 
         const login = async () => {
           const err = document.getElementById('login-error');
@@ -546,23 +550,17 @@
           try {
             await signInWithEmailAndPassword(auth, `${u}@${preselected.slug}.emberlms.local`, p);
             const dest = await resolveDestinationForUser(auth.currentUser);
-            if (dest) navigate(dest);
-            else navigate(`/${preselected.slug}/pending`);
+            if (dest) navigate(dest); else navigate(`/${preselected.slug}/pending`);
           } catch (e) {
             console.error(e); btn.disabled = false; btn.textContent = 'Sign In';
-            if (e.code === 'auth/invalid-email') {
-              showErr('Username contains invalid characters. Ask your teacher for your exact username.');
-            } else if (['auth/invalid-credential','auth/wrong-password','auth/user-not-found'].includes(e.code)) {
-              showErr('Incorrect username or password. Usernames are lowercase.');
-            } else {
-              showErr('Sign-in failed. Try again.');
-            }
+            if (e.code === 'auth/invalid-email') showErr('Username contains invalid characters.');
+            else if (['auth/invalid-credential','auth/wrong-password','auth/user-not-found'].includes(e.code)) showErr('Incorrect username or password. Usernames are lowercase.');
+            else showErr('Sign-in failed. Try again.');
           }
         };
         document.getElementById('student-login-btn').addEventListener('click', login);
         document.getElementById('student-password').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
       };
-
       renderLogin();
     }
 
@@ -572,8 +570,7 @@
         const cred = await signInWithPopup(auth, new GoogleAuthProvider());
         const dest = await resolveDestinationForUser(cred.user);
         suppressAuthRouting = false;
-        if (dest) navigate(dest);
-        else navigate('/signup');
+        if (dest) navigate(dest); else navigate('/signup');
       } catch (e) {
         suppressAuthRouting = false;
         console.error(e);
@@ -621,11 +618,7 @@
           <svg class="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
           Continue with Google
         </button>
-        <div class="flex items-center gap-4 my-6">
-          <div class="flex-1 h-px bg-white/[0.08]"></div>
-          <span class="text-xs text-gray-500 uppercase tracking-wider">or</span>
-          <div class="flex-1 h-px bg-white/[0.08]"></div>
-        </div>
+        <div class="flex items-center gap-4 my-6"><div class="flex-1 h-px bg-white/[0.08]"></div><span class="text-xs text-gray-500 uppercase tracking-wider">or</span><div class="flex-1 h-px bg-white/[0.08]"></div></div>
         <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Email</label>
         <input data-email type="email" autocomplete="email" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
         <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Password</label>
@@ -903,11 +896,7 @@
                 </button>`).join('');
               resultsEl.classList.remove('hidden');
               resultsEl.querySelectorAll('[data-slug]').forEach(b => {
-                const pick = (ev) => {
-                  ev.preventDefault();
-                  w.data.school = { slug: b.dataset.slug, name: b.dataset.name };
-                  renderWizard();
-                };
+                const pick = (ev) => { ev.preventDefault(); w.data.school = { slug: b.dataset.slug, name: b.dataset.name }; renderWizard(); };
                 b.addEventListener('mousedown', pick);
                 b.addEventListener('click', pick);
               });
@@ -1086,7 +1075,6 @@
       const dSnap = await getDoc(doc(db, 'districts', districtId));
       if (!dSnap.exists()) return viewNotFound();
       const district = { id: dSnap.id, ...dSnap.data() };
-
       if (!currentUser) return navigate('/login');
       if (!(district.adminUids || []).includes(currentUser.uid)) {
         return render(`<div class="min-h-screen flex items-center justify-center text-center px-6"><div class="max-w-md">
@@ -1095,11 +1083,10 @@
           <button data-signout class="px-5 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Sign out</button>
         </div></div>`);
       }
-
       const sub = segs[0] || 'overview';
       if (sub === 'schools') return viewDistrictSchools(districtId, district);
       if (sub === 'teachers') return viewDistrictTeachers(districtId, district);
-      if (sub === 'planning') return viewDistrictStub(districtId, district, 'planning');
+      if (sub === 'planning') return viewDistrictPlanning(districtId, district);
       if (sub === 'attendance') return viewDistrictStub(districtId, district, 'attendance');
       return viewDistrictOverview(districtId, district);
     }
@@ -1122,7 +1109,7 @@
           ${item('/district/' + districtId + '/schools', 'building-2', 'Schools', 'schools')}
           ${item('/district/' + districtId + '/teachers', 'users', 'Teachers', 'teachers')}
           <div class="text-[10px] text-gray-600 uppercase tracking-widest px-3 mt-4 mb-2">Insights</div>
-          ${item('/district/' + districtId + '/planning', 'clipboard-check', 'Planning', 'planning', true)}
+          ${item('/district/' + districtId + '/planning', 'clipboard-check', 'Planning', 'planning')}
           ${item('/district/' + districtId + '/attendance', 'calendar-check', 'Attendance', 'attendance', true)}
         </nav>
         <div class="mt-4 pt-4 border-t border-white/[0.08]">
@@ -1148,9 +1135,7 @@
           s._teacherCount = teachersSnap.size;
           s._studentCount = studentsSnap.size;
           s._courseCount = coursesSnap.size;
-        } catch(e) {
-          s._teacherCount = 0; s._studentCount = 0; s._courseCount = 0;
-        }
+        } catch(e) { s._teacherCount = 0; s._studentCount = 0; s._courseCount = 0; }
       }));
       return schools;
     }
@@ -1171,7 +1156,6 @@
             </div>
           </main>
         </div>`);
-
       try {
         const schools = await getDistrictSchools(districtId);
         const totalTeachers = schools.reduce((a, s) => a + (s._teacherCount || 0), 0);
@@ -1179,14 +1163,13 @@
         const totalCourses = schools.reduce((a, s) => a + (s._courseCount || 0), 0);
         const el = document.getElementById('district-content');
         if (!el) return;
-
         el.innerHTML = `
           <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 max-w-5xl mb-8">
             ${[
               { icon:'building-2', label:'Schools', value: schools.length, sub: schools.length === 0 ? 'None yet' : `${schools.length} in district`, href: buildUrl('/district/' + districtId + '/schools') },
               { icon:'users', label:'Teachers', value: totalTeachers, sub: 'Across all schools', href: buildUrl('/district/' + districtId + '/teachers') },
-              { icon:'graduation-cap', label:'Students', value: totalStudents, sub: 'Approved enrollments', href: buildUrl('/district/' + districtId + '/schools') },
-              { icon:'book-open', label:'Courses', value: totalCourses, sub: 'Active courses', href: buildUrl('/district/' + districtId + '/schools') }
+              { icon:'graduation-cap', label:'Students', value: totalStudents, sub: 'Approved', href: buildUrl('/district/' + districtId + '/schools') },
+              { icon:'book-open', label:'Courses', value: totalCourses, sub: 'Active', href: buildUrl('/district/' + districtId + '/schools') }
             ].map(s => `
               <a href="${s.href}" class="bg-[#141414] border border-white/[0.08] rounded-xl p-5 hover:border-white/20 hover:-translate-y-0.5 transition-all block">
                 <div class="w-9 h-9 rounded-lg bg-[#8B5CF6]/10 border border-[#8B5CF6]/20 flex items-center justify-center mb-3"><i data-lucide="${s.icon}" class="w-4 h-4 text-[#8B5CF6]"></i></div>
@@ -1195,7 +1178,6 @@
                 <div class="text-[10px] text-gray-600">${s.sub}</div>
               </a>`).join('')}
           </div>
-
           <div class="max-w-5xl bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
             <div class="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
               <h3 class="font-serif text-lg text-white">Schools</h3>
@@ -1228,21 +1210,14 @@
               </div>
             `}
           </div>
-
-          ${schools.length > 0 ? `
-            <div class="max-w-5xl mt-6">
-              <button data-create-school class="inline-flex items-center gap-2 px-4 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">
-                <i data-lucide="plus" class="w-4 h-4"></i> Create school
-              </button>
-            </div>
-          ` : ''}
+          ${schools.length > 0 ? `<div class="max-w-5xl mt-6"><button data-create-school class="inline-flex items-center gap-2 px-4 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all"><i data-lucide="plus" class="w-4 h-4"></i> Create school</button></div>` : ''}
         `;
         refreshIcons();
         el.querySelectorAll('[data-create-school]').forEach(b => b.addEventListener('click', () => openCreateSchoolModal(districtId, district)));
       } catch (e) {
         console.error(e);
         const el = document.getElementById('district-content');
-        if (el) el.innerHTML = `<div class="text-red-400 text-sm p-6">Failed to load district: ${escapeHtml(e.message)}</div>`;
+        if (el) el.innerHTML = `<div class="text-red-400 text-sm p-6">Failed: ${escapeHtml(e.message)}</div>`;
       }
     }
 
@@ -1263,67 +1238,40 @@
               </button>
             </header>
             <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
-              <div id="schools-list" class="max-w-4xl">
-                <div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div>
-              </div>
+              <div id="schools-list" class="max-w-4xl"><div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div>
             </div>
           </main>
         </div>`);
-
       document.getElementById('create-school-btn').addEventListener('click', () => openCreateSchoolModal(districtId, district));
-
       try {
         const schools = await getDistrictSchools(districtId);
         const el = document.getElementById('schools-list');
         if (!el) return;
-
         if (schools.length === 0) {
           el.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center">
             <i data-lucide="building-2" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i>
             <h3 class="font-serif text-xl text-white mb-2">No schools yet</h3>
-            <p class="text-gray-500 text-sm mb-6">Create your first school to get started.</p>
-            <button id="empty-create" class="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[#8B5CF6] to-[#7C3AED] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">
-              <i data-lucide="plus" class="w-4 h-4"></i> Create first school
-            </button>
+            <button id="empty-create" class="mt-6 inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[#8B5CF6] to-[#7C3AED] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all"><i data-lucide="plus" class="w-4 h-4"></i> Create first school</button>
           </div>`;
           refreshIcons();
-          const emptyBtn = document.getElementById('empty-create');
-          if (emptyBtn) emptyBtn.addEventListener('click', () => openCreateSchoolModal(districtId, district));
+          const eb = document.getElementById('empty-create'); if (eb) eb.addEventListener('click', () => openCreateSchoolModal(districtId, district));
           return;
         }
-
-        el.innerHTML = `
-          <div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
-            <div class="grid grid-cols-12 px-5 py-3 border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
-              <div class="col-span-4">School</div>
-              <div class="col-span-3">URL</div>
-              <div class="col-span-2">Teachers</div>
-              <div class="col-span-2">Students</div>
-              <div class="col-span-1"></div>
-            </div>
-            <div class="divide-y divide-white/[0.04]">
-              ${schools.map(s => `
-                <div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
-                  <div class="col-span-4 min-w-0">
-                    <a href="${buildUrl('/' + s.id + '/admin')}" class="text-sm text-white hover:text-[#8B5CF6] transition-colors truncate block">${escapeHtml(s.name || s.id)}</a>
-                  </div>
-                  <div class="col-span-3 text-xs text-gray-500 font-mono truncate">/${escapeHtml(s.id)}</div>
-                  <div class="col-span-2 text-xs text-gray-400">${s._teacherCount || 0}</div>
-                  <div class="col-span-2 text-xs text-gray-400">${s._studentCount || 0}</div>
-                  <div class="col-span-1 flex justify-end gap-1">
-                    <a href="${buildUrl('/' + s.id + '/admin')}" class="p-1.5 text-gray-500 hover:text-[#8B5CF6] opacity-0 group-hover:opacity-100 transition-all" title="Open school admin">
-                      <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
-                    </a>
-                  </div>
-                </div>`).join('')}
-            </div>
-          </div>`;
+        el.innerHTML = `<div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
+          <div class="grid grid-cols-12 px-5 py-3 border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
+            <div class="col-span-4">School</div><div class="col-span-3">URL</div><div class="col-span-2">Teachers</div><div class="col-span-2">Students</div><div class="col-span-1"></div>
+          </div>
+          <div class="divide-y divide-white/[0.04]">
+            ${schools.map(s => `<div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
+              <div class="col-span-4 min-w-0"><a href="${buildUrl('/' + s.id + '/admin')}" class="text-sm text-white hover:text-[#8B5CF6] transition-colors truncate block">${escapeHtml(s.name || s.id)}</a></div>
+              <div class="col-span-3 text-xs text-gray-500 font-mono truncate">/${escapeHtml(s.id)}</div>
+              <div class="col-span-2 text-xs text-gray-400">${s._teacherCount || 0}</div>
+              <div class="col-span-2 text-xs text-gray-400">${s._studentCount || 0}</div>
+              <div class="col-span-1 flex justify-end"><a href="${buildUrl('/' + s.id + '/admin')}" class="p-1.5 text-gray-500 hover:text-[#8B5CF6] opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="external-link" class="w-3.5 h-3.5"></i></a></div>
+            </div>`).join('')}
+          </div></div>`;
         refreshIcons();
-      } catch (e) {
-        console.error(e);
-        const el = document.getElementById('schools-list');
-        if (el) el.innerHTML = `<div class="text-red-400 text-sm p-6">Failed to load schools: ${escapeHtml(e.message)}</div>`;
-      }
+      } catch (e) { console.error(e); }
     }
 
     async function viewDistrictTeachers(districtId, district) {
@@ -1338,88 +1286,85 @@
               <p class="text-xs text-gray-500">All teachers across the district</p>
             </header>
             <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
-              <div id="teachers-list" class="max-w-5xl">
-                <div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div>
-              </div>
+              <div id="teachers-list" class="max-w-5xl"><div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div>
             </div>
           </main>
         </div>`);
-
       try {
         const schools = await getDistrictSchools(districtId);
         const allTeachers = [];
         await Promise.all(schools.map(async (s) => {
           try {
             const snap = await getDocs(collection(db, 'tenants', s.id, 'users'));
-            snap.docs.forEach(d => {
-              allTeachers.push({
-                uid: d.id, ...d.data(),
-                _schoolId: s.id,
-                _schoolName: s.name || s.id
-              });
-            });
+            snap.docs.forEach(d => allTeachers.push({ uid: d.id, ...d.data(), _schoolId: s.id, _schoolName: s.name || s.id }));
           } catch(e) {}
         }));
         allTeachers.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
-
         const el = document.getElementById('teachers-list');
         if (!el) return;
-
-        if (allTeachers.length === 0) {
-          el.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center">
-            <i data-lucide="users" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i>
-            <h3 class="font-serif text-xl text-white mb-2">No teachers yet</h3>
-            <p class="text-gray-500 text-sm">Create a school and share its join code with teachers.</p>
-          </div>`;
-          refreshIcons(); return;
-        }
-
-        el.innerHTML = `
-          <div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
-            <div class="grid grid-cols-12 px-5 py-3 border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
-              <div class="col-span-5">Teacher</div>
-              <div class="col-span-4">School</div>
-              <div class="col-span-2">Role</div>
-              <div class="col-span-1"></div>
-            </div>
-            <div class="divide-y divide-white/[0.04]">
-              ${allTeachers.map(t => {
-                const name = t.displayName || (t.email ? t.email.split('@')[0] : 'Teacher');
-                const isAdmin = t.role === 'admin';
-                return `<div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
-                  <div class="col-span-5 flex items-center gap-3 min-w-0">
-                    ${t.photoURL ? `<img src="${t.photoURL}" class="w-8 h-8 rounded-full border border-white/20 shrink-0" alt="">` : `<div class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-[10px] text-white shrink-0">${escapeHtml(initials(name))}</div>`}
-                    <div class="min-w-0">
-                      <div class="text-sm text-white truncate">${escapeHtml(name)}</div>
-                      <div class="text-xs text-gray-500 truncate">${escapeHtml(t.email || '')}</div>
-                    </div>
-                  </div>
-                  <div class="col-span-4 min-w-0">
-                    <a href="${buildUrl('/' + t._schoolId + '/admin/teachers')}" class="text-sm text-gray-300 hover:text-[#8B5CF6] transition-colors truncate block">${escapeHtml(t._schoolName)}</a>
-                  </div>
-                  <div class="col-span-2">
-                    <span class="px-2 py-1 text-[10px] uppercase tracking-wider rounded ${isAdmin ? 'bg-[#8B5CF6]/15 text-[#8B5CF6] border border-[#8B5CF6]/30' : 'bg-white/[0.04] text-gray-400 border border-white/10'}">${isAdmin ? 'Admin' : 'Teacher'}</span>
-                  </div>
-                  <div class="col-span-1 flex justify-end">
-                    <a href="${buildUrl('/' + t._schoolId + '/admin/teachers')}" class="p-1.5 text-gray-500 hover:text-[#8B5CF6] opacity-0 group-hover:opacity-100 transition-all" title="Open school">
-                      <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
-                    </a>
-                  </div>
-                </div>`;
-              }).join('')}
-            </div>
-          </div>`;
+        if (allTeachers.length === 0) { el.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center"><i data-lucide="users" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i><h3 class="font-serif text-xl text-white mb-2">No teachers yet</h3></div>`; refreshIcons(); return; }
+        el.innerHTML = `<div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
+          <div class="grid grid-cols-12 px-5 py-3 border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
+            <div class="col-span-5">Teacher</div><div class="col-span-4">School</div><div class="col-span-2">Role</div><div class="col-span-1"></div>
+          </div>
+          <div class="divide-y divide-white/[0.04]">
+            ${allTeachers.map(t => {
+              const name = t.displayName || (t.email ? t.email.split('@')[0] : 'Teacher');
+              const isAdmin = t.role === 'admin';
+              return `<div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
+                <div class="col-span-5 flex items-center gap-3 min-w-0">
+                  ${t.photoURL ? `<img src="${t.photoURL}" class="w-8 h-8 rounded-full border border-white/20 shrink-0" alt="">` : `<div class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-[10px] text-white shrink-0">${escapeHtml(initials(name))}</div>`}
+                  <div class="min-w-0"><div class="text-sm text-white truncate">${escapeHtml(name)}</div><div class="text-xs text-gray-500 truncate">${escapeHtml(t.email || '')}</div></div>
+                </div>
+                <div class="col-span-4 min-w-0"><a href="${buildUrl('/' + t._schoolId + '/admin/teachers')}" class="text-sm text-gray-300 hover:text-[#8B5CF6] transition-colors truncate block">${escapeHtml(t._schoolName)}</a></div>
+                <div class="col-span-2"><span class="px-2 py-1 text-[10px] uppercase tracking-wider rounded ${isAdmin ? 'bg-[#8B5CF6]/15 text-[#8B5CF6] border border-[#8B5CF6]/30' : 'bg-white/[0.04] text-gray-400 border border-white/10'}">${isAdmin ? 'Admin' : 'Teacher'}</span></div>
+                <div class="col-span-1 flex justify-end"><a href="${buildUrl('/' + t._schoolId + '/admin/teachers')}" class="p-1.5 text-gray-500 hover:text-[#8B5CF6] opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="external-link" class="w-3.5 h-3.5"></i></a></div>
+              </div>`;
+            }).join('')}
+          </div></div>`;
         refreshIcons();
-      } catch (e) {
-        console.error(e);
-        const el = document.getElementById('teachers-list');
-        if (el) el.innerHTML = `<div class="text-red-400 text-sm p-6">Failed to load teachers: ${escapeHtml(e.message)}</div>`;
-      }
+      } catch (e) { console.error(e); }
+    }
+
+    async function viewDistrictPlanning(districtId, district) {
+      render(`
+        <div class="min-h-screen flex">
+          ${renderDistrictSidebar(districtId, district, 'planning')}
+          <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
+            <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#8B5CF6]/5 to-transparent pointer-events-none"></div>
+            <header class="p-8 pb-4 z-10 relative">
+              <p class="text-xs text-[#8B5CF6] uppercase tracking-widest mb-2">District Admin</p>
+              <h2 class="font-serif text-3xl text-white mb-1">Planning</h2>
+              <p class="text-xs text-gray-500">All submitted lesson plans across the district</p>
+            </header>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
+              <div id="plans-list" class="max-w-5xl"><div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div>
+            </div>
+          </main>
+        </div>`);
+      try {
+        const schools = await getDistrictSchools(districtId);
+        const allPlans = [];
+        await Promise.all(schools.map(async (s) => {
+          try {
+            const snap = await getDocs(collection(db, 'tenants', s.id, 'plans'));
+            snap.docs.forEach(d => allPlans.push({ id: d.id, ...d.data(), _schoolId: s.id, _schoolName: s.name || s.id }));
+          } catch(e) {}
+        }));
+        allPlans.sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0));
+        const el = document.getElementById('plans-list');
+        if (!el) return;
+        if (allPlans.length === 0) { el.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center"><i data-lucide="clipboard-check" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i><h3 class="font-serif text-xl text-white mb-2">No plans submitted yet</h3></div>`; refreshIcons(); return; }
+        el.innerHTML = renderPlanTable(allPlans, true);
+        refreshIcons();
+        el.querySelectorAll('[data-review-plan]').forEach(btn => btn.addEventListener('click', () => {
+          const plan = allPlans.find(p => p.id === btn.dataset.reviewPlan && p._schoolId === btn.dataset.schoolId);
+          if (plan) openPlanReviewModal(plan._schoolId, plan);
+        }));
+      } catch (e) { console.error(e); }
     }
 
     function viewDistrictStub(districtId, district, section) {
-      const titles = { planning: 'Planning', attendance: 'Attendance' };
-      const icons = { planning: 'clipboard-check', attendance: 'calendar-check' };
       render(`
         <div class="min-h-screen flex">
           ${renderDistrictSidebar(districtId, district, section)}
@@ -1427,13 +1372,13 @@
             <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#8B5CF6]/5 to-transparent pointer-events-none"></div>
             <header class="p-8 pb-4 z-10 relative">
               <p class="text-xs text-[#8B5CF6] uppercase tracking-widest mb-2">District Admin</p>
-              <h2 class="font-serif text-3xl text-white mb-1">${titles[section]}</h2>
+              <h2 class="font-serif text-3xl text-white mb-1">${section[0].toUpperCase()+section.slice(1)}</h2>
             </header>
             <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
               <div class="max-w-2xl border border-dashed border-white/10 rounded-xl p-10 text-center">
-                <i data-lucide="${icons[section]}" class="w-10 h-10 text-[#8B5CF6] mx-auto mb-4"></i>
-                <h3 class="font-serif text-xl text-white mb-2">${titles[section]}</h3>
-                <p class="text-gray-500 text-sm">Coming in Phase ${section === 'planning' ? '6D' : '6E'}.</p>
+                <i data-lucide="calendar-check" class="w-10 h-10 text-[#8B5CF6] mx-auto mb-4"></i>
+                <h3 class="font-serif text-xl text-white mb-2">${section[0].toUpperCase()+section.slice(1)}</h3>
+                <p class="text-gray-500 text-sm">Coming in Phase 6E.</p>
               </div>
             </div>
           </main>
@@ -1454,9 +1399,7 @@
             <span class="text-gray-500 text-xs pl-4 select-none">/${escapeHtml(BASE_PATH.replace(/^\//, ''))}/</span>
             <input id="school-slug" type="text" placeholder="lincoln-high" autocomplete="off" class="flex-1 bg-transparent px-2 py-3 text-white focus:outline-none" />
           </div>
-          <div class="mb-6 p-3 bg-[#8B5CF6]/5 border border-[#8B5CF6]/20 rounded-lg">
-            <p class="text-xs text-gray-400 leading-relaxed">You will automatically become the school admin of this school. A join code will be generated for teachers to join.</p>
-          </div>
+          <div class="mb-6 p-3 bg-[#8B5CF6]/5 border border-[#8B5CF6]/20 rounded-lg"><p class="text-xs text-gray-400 leading-relaxed">You will automatically become the school admin. A join code will be generated for teachers.</p></div>
           <p id="create-error" class="text-red-400 text-sm mb-4 hidden"></p>
           <div class="flex gap-3">
             <button id="create-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button>
@@ -1486,19 +1429,13 @@
         try {
           const ex = await getDoc(doc(db, 'tenants', slug));
           if (ex.exists()) { btn.disabled = false; btn.textContent = 'Create School'; err.textContent = 'That URL is already taken.'; err.classList.remove('hidden'); return; }
-          await setDoc(doc(db, 'tenants', slug), {
-            type: 'school', name, slug, districtId,
-            joinCode: genCode(), ownerUid: currentUser.uid, createdAt: serverTimestamp()
-          });
+          await setDoc(doc(db, 'tenants', slug), { type:'school', name, slug, districtId, joinCode: genCode(), ownerUid: currentUser.uid, createdAt: serverTimestamp() });
           await setDoc(doc(db, 'tenants', slug, 'users', currentUser.uid), {
-            userId: currentUser.uid, role: 'admin',
-            email: currentUser.email || '',
+            userId: currentUser.uid, role: 'admin', email: currentUser.email || '',
             displayName: currentUser.displayName || (currentUser.email ? currentUser.email.split('@')[0] : 'Admin'),
-            photoURL: currentUser.photoURL || null,
-            createdAt: serverTimestamp()
+            photoURL: currentUser.photoURL || null, createdAt: serverTimestamp()
           });
-          close();
-          renderRoute();
+          close(); renderRoute();
         } catch (e) {
           console.error(e); btn.disabled = false; btn.textContent = 'Create School';
           err.textContent = 'Failed: ' + (e.message || e.code); err.classList.remove('hidden');
@@ -1524,12 +1461,14 @@
       const sub = segs[0] || 'dashboard';
       if (sub === 'pending') return viewPending(slug, tenant);
       if (sub === 'rejected') return viewRejected(slug, tenant);
+      if (sub === 'planning') return viewPlanning(slug, tenant, roleInfo);
+      if (sub === 'announcements') return viewAnnouncements(slug, tenant, roleInfo);
       if (sub === 'admin') {
         const adminSub = segs[1];
         if (adminSub === 'teachers') return viewAdminTeachers(slug, tenant, roleInfo);
         if (adminSub === 'students') return viewStudents(slug, tenant, roleInfo);
         if (adminSub === 'courses') return viewAdminCourses(slug, tenant, roleInfo);
-        if (adminSub === 'planning') return viewAdminStubPage(slug, tenant, roleInfo, 'planning');
+        if (adminSub === 'planning') return viewAdminPlanning(slug, tenant, roleInfo);
         if (adminSub === 'attendance') return viewAdminStubPage(slug, tenant, roleInfo, 'attendance');
         return viewAdminOverview(slug, tenant, roleInfo);
       }
@@ -1543,11 +1482,7 @@
     }
 
     function viewTenantNotFound(slug) {
-      render(`<div class="min-h-screen flex items-center justify-center text-center px-6"><div>
-        <h1 class="font-serif text-3xl text-white mb-2">School not found</h1>
-        <p class="text-gray-500">No school exists at <span class="text-[#F59E0B]">/${escapeHtml(slug)}</span></p>
-        <a href="${buildUrl('/')}" class="inline-block mt-6 text-sm text-[#F59E0B] hover:underline">← Back</a>
-      </div></div>`);
+      render(`<div class="min-h-screen flex items-center justify-center text-center px-6"><div><h1 class="font-serif text-3xl text-white mb-2">School not found</h1><p class="text-gray-500">No school exists at <span class="text-[#F59E0B]">/${escapeHtml(slug)}</span></p><a href="${buildUrl('/')}" class="inline-block mt-6 text-sm text-[#F59E0B] hover:underline">← Back</a></div></div>`);
     }
     function viewNoAccess(slug, tenant) {
       render(`<div class="min-h-screen flex items-center justify-center text-center px-6"><div class="max-w-md">
@@ -1561,7 +1496,415 @@
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // ADMIN OVERVIEW
+    // TEACHER PLANNING
+    // ═══════════════════════════════════════════════════════════════
+    async function viewPlanning(slug, tenant, roleInfo) {
+      if (roleInfo.role !== 'teacher' && roleInfo.role !== 'admin') return viewNotFound();
+      render(`
+        <div class="min-h-screen flex">
+          ${renderSidebar(slug, tenant, roleInfo, 'planning')}
+          <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
+            <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
+            <header class="p-8 pb-4 flex justify-between items-center z-10 relative">
+              <div>
+                <h2 class="font-serif text-3xl text-white mb-1">My Lesson Plans</h2>
+                <p class="text-xs text-gray-500 tracking-wider uppercase font-medium">${escapeHtml(tenant.name)}</p>
+              </div>
+              <button id="new-plan-btn" class="px-5 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all flex items-center gap-2">
+                <i data-lucide="plus" class="w-4 h-4"></i> New Plan
+              </button>
+            </header>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
+              <div id="plans-list" class="max-w-4xl"><div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div>
+            </div>
+          </main>
+        </div>`);
+      document.getElementById('new-plan-btn').addEventListener('click', () => openPlanEditor(slug));
+      try {
+        const snap = await getDocs(query(collection(db, 'tenants', slug, 'plans'), where('teacherUid', '==', currentUser.uid)));
+        const plans = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        plans.sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0));
+        const el = document.getElementById('plans-list');
+        if (!el) return;
+        if (plans.length === 0) {
+          el.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center">
+            <i data-lucide="clipboard-check" class="w-10 h-10 text-[#F59E0B] mx-auto mb-4"></i>
+            <h3 class="font-serif text-xl text-white mb-2">No lesson plans yet</h3>
+            <p class="text-gray-500 text-sm">Click "New Plan" to write your first lesson plan.</p>
+          </div>`;
+          refreshIcons(); return;
+        }
+        el.innerHTML = renderPlanTable(plans, false);
+        refreshIcons();
+        el.querySelectorAll('[data-edit-plan]').forEach(btn => btn.addEventListener('click', () => {
+          const plan = plans.find(p => p.id === btn.dataset.editPlan);
+          if (plan) openPlanEditor(slug, plan);
+        }));
+        el.querySelectorAll('[data-delete-plan]').forEach(btn => btn.addEventListener('click', async () => {
+          if (confirm('Delete this lesson plan?')) {
+            await deleteDoc(doc(db, 'tenants', slug, 'plans', btn.dataset.deletePlan));
+            renderRoute();
+          }
+        }));
+      } catch (e) { console.error(e); }
+    }
+
+    function renderPlanTable(plans, showSchool) {
+      const statusBadge = (status) => {
+        if (status === 'reviewed') return `<span class="px-2 py-1 text-[10px] uppercase tracking-wider rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">Reviewed</span>`;
+        if (status === 'submitted') return `<span class="px-2 py-1 text-[10px] uppercase tracking-wider rounded bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/30">Submitted</span>`;
+        return `<span class="px-2 py-1 text-[10px] uppercase tracking-wider rounded bg-white/[0.04] text-gray-400 border border-white/10">Draft</span>`;
+      };
+      return `<div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
+        <div class="grid grid-cols-12 px-5 py-3 border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
+          <div class="col-span-5">Title</div>
+          ${showSchool ? `<div class="col-span-3">School & Teacher</div>` : `<div class="col-span-3">Week</div>`}
+          <div class="col-span-2">Status</div>
+          <div class="col-span-2 text-right">Actions</div>
+        </div>
+        <div class="divide-y divide-white/[0.04]">
+          ${plans.map(p => `
+            <div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
+              <div class="col-span-5 min-w-0">
+                <div class="text-sm text-white truncate">${escapeHtml(p.title || 'Untitled')}</div>
+                <div class="text-xs text-gray-500 truncate">${escapeHtml(describeWeek(p.week) || 'No week')} · ${escapeHtml(weekDateRange(p.week) || '')}</div>
+              </div>
+              ${showSchool ? `<div class="col-span-3 min-w-0"><div class="text-xs text-gray-300 truncate">${escapeHtml(p._schoolName || '')}</div><div class="text-[10px] text-gray-500 truncate">${escapeHtml(p.teacherName || '')}</div></div>` : `<div class="col-span-3 text-xs text-gray-400">${escapeHtml(describeWeek(p.week) || '')}</div>`}
+              <div class="col-span-2">${statusBadge(p.status)}</div>
+              <div class="col-span-2 flex justify-end gap-1">
+                ${showSchool ? `<button data-review-plan="${p.id}" data-school-id="${p._schoolId}" class="px-2.5 py-1 bg-white/[0.05] border border-white/10 text-white text-[11px] rounded-lg hover:bg-[#8B5CF6]/15 hover:border-[#8B5CF6]/40 hover:text-[#8B5CF6] transition-all">Review</button>`
+                  : `<button data-edit-plan="${p.id}" class="p-1.5 text-gray-500 hover:text-[#F59E0B] opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>
+                     <button data-delete-plan="${p.id}" class="p-1.5 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>`}
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`;
+    }
+
+    function openPlanEditor(slug, existingPlan = null) {
+      const isEdit = !!existingPlan;
+      const plan = existingPlan || { title: '', week: currentISOWeek(), subject: '', courseId: '', content: '', status: 'draft' };
+      const ov = document.createElement('div');
+      ov.className = 'fixed inset-0 z-50 flex items-start justify-center bg-black/60 modal-overlay px-6 py-10 overflow-y-auto';
+      ov.innerHTML = `
+        <div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-3xl w-full shadow-2xl my-8">
+          <div class="p-8 pb-6 border-b border-white/[0.06] flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center"><i data-lucide="clipboard-check" class="w-4 h-4 text-[#F59E0B]"></i></div>
+              <div><h3 class="font-serif text-2xl text-white">${isEdit ? 'Edit' : 'New'} Lesson Plan</h3><p class="text-gray-500 text-xs">Write weekly plans. Submit for admin review.</p></div>
+            </div>
+            <button id="plan-close" class="p-2 text-gray-500 hover:text-white rounded transition-all"><i data-lucide="x" class="w-5 h-5"></i></button>
+          </div>
+          <div class="p-8 space-y-5">
+            <div class="grid grid-cols-2 gap-4">
+              <div class="col-span-2">
+                <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Title</label>
+                <input id="plan-title" type="text" value="${escapeHtml(plan.title || '')}" placeholder="Photosynthesis — Week 5" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
+              </div>
+              <div>
+                <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Week</label>
+                <input id="plan-week" type="week" value="${escapeHtml(plan.week || currentISOWeek())}" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
+              </div>
+              <div>
+                <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Subject</label>
+                <input id="plan-subject" type="text" value="${escapeHtml(plan.subject || '')}" placeholder="Biology" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Plan Content</label>
+              <div class="bg-white/[0.02] border border-white/10 rounded-lg overflow-hidden">
+                <div id="quill-toolbar">
+                  <span class="ql-formats"><select class="ql-header"><option value="1"></option><option value="2"></option><option value="3"></option><option selected></option></select></span>
+                  <span class="ql-formats"><button class="ql-bold"></button><button class="ql-italic"></button><button class="ql-underline"></button></span>
+                  <span class="ql-formats"><button class="ql-list" value="ordered"></button><button class="ql-list" value="bullet"></button></span>
+                  <span class="ql-formats"><button class="ql-link"></button><button class="ql-clean"></button></span>
+                </div>
+                <div id="quill-editor"></div>
+              </div>
+            </div>
+            ${plan.reviewComment ? `<div class="p-4 bg-[#8B5CF6]/5 border border-[#8B5CF6]/20 rounded-lg"><p class="text-[10px] uppercase tracking-wider text-[#8B5CF6] mb-1">Admin Feedback</p><p class="text-sm text-gray-300">${escapeHtml(plan.reviewComment)}</p></div>` : ''}
+            <p id="plan-error" class="text-red-400 text-sm hidden"></p>
+          </div>
+          <div class="p-8 pt-0 flex gap-3 flex-wrap">
+            <button id="plan-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button>
+            <button id="plan-save-draft" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all disabled:opacity-60">Save Draft</button>
+            <button id="plan-submit" class="flex-1 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60">Submit for Review</button>
+          </div>
+        </div>`;
+      document.body.appendChild(ov);
+      refreshIcons();
+      const quill = new Quill(ov.querySelector('#quill-editor'), { theme: 'snow', modules: { toolbar: '#quill-toolbar' } });
+      if (plan.content) quill.clipboard.dangerouslyPasteHTML(plan.content);
+      const close = () => ov.remove();
+      ov.querySelector('#plan-close').addEventListener('click', close);
+      ov.querySelector('#plan-cancel').addEventListener('click', close);
+      ov.addEventListener('click', e => { if (e.target === ov) close(); });
+
+      const save = async (submit) => {
+        const title = ov.querySelector('#plan-title').value.trim();
+        const week = ov.querySelector('#plan-week').value;
+        const subject = ov.querySelector('#plan-subject').value.trim();
+        const content = sanitize(quill.root.innerHTML);
+        const err = ov.querySelector('#plan-error');
+        err.classList.add('hidden');
+        if (!title) { err.textContent = 'Enter a title.'; err.classList.remove('hidden'); return; }
+        if (!week) { err.textContent = 'Pick a week.'; err.classList.remove('hidden'); return; }
+        const payload = {
+          title, week, subject, content,
+          teacherUid: currentUser.uid,
+          teacherName: currentUser.displayName || currentUser.email || 'Teacher',
+          status: submit ? 'submitted' : 'draft',
+          updatedAt: serverTimestamp()
+        };
+        if (submit) payload.submittedAt = serverTimestamp();
+        try {
+          if (isEdit) {
+            await updateDoc(doc(db, 'tenants', slug, 'plans', plan.id), payload);
+          } else {
+            payload.createdAt = serverTimestamp();
+            payload.reviewComment = null;
+            payload.reviewedBy = null;
+            payload.reviewedAt = null;
+            await addDoc(collection(db, 'tenants', slug, 'plans'), payload);
+          }
+          close();
+          renderRoute();
+        } catch (e) {
+          console.error(e); err.textContent = 'Failed: ' + e.message; err.classList.remove('hidden');
+        }
+      };
+      ov.querySelector('#plan-save-draft').addEventListener('click', () => save(false));
+      ov.querySelector('#plan-submit').addEventListener('click', () => save(true));
+      setTimeout(() => ov.querySelector('#plan-title').focus(), 50);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ADMIN PLANNING
+    // ═══════════════════════════════════════════════════════════════
+    async function viewAdminPlanning(slug, tenant, roleInfo) {
+      if (roleInfo.role !== 'admin') return viewNotFound();
+      render(`
+        <div class="min-h-screen flex">
+          ${renderSidebar(slug, tenant, roleInfo, 'admin-planning')}
+          <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
+            <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
+            <header class="p-8 pb-4 z-10 relative">
+              <p class="text-xs text-[#F59E0B] uppercase tracking-widest mb-2">Admin</p>
+              <h2 class="font-serif text-3xl text-white mb-1">Lesson Planning</h2>
+              <p class="text-xs text-gray-500">Review teacher lesson plans for ${escapeHtml(tenant.name)}</p>
+            </header>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
+              <div class="max-w-4xl mb-4 flex gap-2" id="plan-filters">
+                <button data-filter="submitted" class="plan-filter-btn px-3 py-1.5 rounded-lg text-xs bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/30 font-medium transition-all">Needs Review</button>
+                <button data-filter="reviewed" class="plan-filter-btn px-3 py-1.5 rounded-lg text-xs bg-white/[0.04] text-gray-400 border border-white/10 hover:bg-white/[0.06] transition-all">Reviewed</button>
+                <button data-filter="all" class="plan-filter-btn px-3 py-1.5 rounded-lg text-xs bg-white/[0.04] text-gray-400 border border-white/10 hover:bg-white/[0.06] transition-all">All</button>
+              </div>
+              <div id="plans-list" class="max-w-4xl"><div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div>
+            </div>
+          </main>
+        </div>`);
+
+      let allPlans = [];
+      let currentFilter = 'submitted';
+
+      const renderList = () => {
+        const el = document.getElementById('plans-list');
+        if (!el) return;
+        let filtered = allPlans;
+        if (currentFilter === 'submitted') filtered = allPlans.filter(p => p.status === 'submitted');
+        else if (currentFilter === 'reviewed') filtered = allPlans.filter(p => p.status === 'reviewed');
+        if (filtered.length === 0) {
+          el.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center">
+            <i data-lucide="clipboard-check" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i>
+            <h3 class="font-serif text-xl text-white mb-2">${currentFilter === 'submitted' ? 'Nothing to review' : 'No plans found'}</h3>
+            <p class="text-gray-500 text-sm">${currentFilter === 'submitted' ? 'All caught up!' : 'Try a different filter.'}</p>
+          </div>`;
+          refreshIcons(); return;
+        }
+        el.innerHTML = renderPlanTable(filtered, false);
+        refreshIcons();
+        el.querySelectorAll('[data-edit-plan]').forEach(btn => btn.addEventListener('click', () => {
+          const plan = filtered.find(p => p.id === btn.dataset.editPlan);
+          if (plan) openPlanReviewModal(slug, plan);
+        }));
+      };
+
+      document.querySelectorAll('.plan-filter-btn').forEach(b => b.addEventListener('click', () => {
+        currentFilter = b.dataset.filter;
+        document.querySelectorAll('.plan-filter-btn').forEach(x => {
+          x.className = 'plan-filter-btn px-3 py-1.5 rounded-lg text-xs bg-white/[0.04] text-gray-400 border border-white/10 hover:bg-white/[0.06] transition-all';
+        });
+        b.className = 'plan-filter-btn px-3 py-1.5 rounded-lg text-xs bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/30 font-medium transition-all';
+        renderList();
+      }));
+
+      try {
+        const snap = await getDocs(collection(db, 'tenants', slug, 'plans'));
+        allPlans = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        allPlans.sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0));
+        renderList();
+      } catch (e) { console.error(e); }
+    }
+
+    function openPlanReviewModal(slug, plan) {
+      const ov = document.createElement('div');
+      ov.className = 'fixed inset-0 z-50 flex items-start justify-center bg-black/60 modal-overlay px-6 py-10 overflow-y-auto';
+      ov.innerHTML = `
+        <div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-3xl w-full shadow-2xl my-8">
+          <div class="p-8 pb-6 border-b border-white/[0.06] flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-lg bg-[#8B5CF6]/10 border border-[#8B5CF6]/20 flex items-center justify-center"><i data-lucide="clipboard-check" class="w-4 h-4 text-[#8B5CF6]"></i></div>
+              <div>
+                <h3 class="font-serif text-2xl text-white">${escapeHtml(plan.title || 'Untitled')}</h3>
+                <p class="text-gray-500 text-xs">${escapeHtml(plan.teacherName || '')} · ${escapeHtml(describeWeek(plan.week) || '')}</p>
+              </div>
+            </div>
+            <button id="rv-close" class="p-2 text-gray-500 hover:text-white rounded transition-all"><i data-lucide="x" class="w-5 h-5"></i></button>
+          </div>
+          <div class="p-8">
+            ${plan.subject ? `<p class="text-xs uppercase tracking-wider text-gray-500 mb-3">Subject: <span class="text-gray-300 normal-case tracking-normal">${escapeHtml(plan.subject)}</span></p>` : ''}
+            <div class="prose-ember bg-[#0A0A0A] border border-white/[0.08] rounded-lg p-6 mb-6 max-h-96 overflow-y-auto">${sanitize(plan.content || '<p class="text-gray-500 italic">No content.</p>')}</div>
+            <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Your Feedback</label>
+            <textarea id="rv-comment" rows="4" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all font-sans" placeholder="Looks great! Maybe add more group work...">${escapeHtml(plan.reviewComment || '')}</textarea>
+            <p id="rv-error" class="text-red-400 text-sm mt-3 hidden"></p>
+          </div>
+          <div class="p-8 pt-0 flex gap-3">
+            <button id="rv-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Close</button>
+            <button id="rv-approve" class="flex-1 py-2.5 bg-gradient-to-r from-[#8B5CF6] to-[#7C3AED] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">Save Review</button>
+          </div>
+        </div>`;
+      document.body.appendChild(ov);
+      refreshIcons();
+      const close = () => ov.remove();
+      ov.querySelector('#rv-close').addEventListener('click', close);
+      ov.querySelector('#rv-cancel').addEventListener('click', close);
+      ov.addEventListener('click', e => { if (e.target === ov) close(); });
+      ov.querySelector('#rv-approve').addEventListener('click', async () => {
+        const comment = ov.querySelector('#rv-comment').value.trim();
+        const err = ov.querySelector('#rv-error');
+        err.classList.add('hidden');
+        try {
+          await updateDoc(doc(db, 'tenants', slug, 'plans', plan.id), {
+            reviewComment: comment || null,
+            status: 'reviewed',
+            reviewedBy: currentUser.uid,
+            reviewedAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          });
+          close();
+          renderRoute();
+        } catch (e) { console.error(e); err.textContent = 'Failed: ' + e.message; err.classList.remove('hidden'); }
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ANNOUNCEMENTS (simple per-tenant feed)
+    // ═══════════════════════════════════════════════════════════════
+    async function viewAnnouncements(slug, tenant, roleInfo) {
+      const isTeacher = roleInfo.role === 'teacher' || roleInfo.role === 'admin';
+      render(`
+        <div class="min-h-screen flex">
+          ${renderSidebar(slug, tenant, roleInfo, 'announcements')}
+          <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
+            <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
+            <header class="p-8 pb-4 flex justify-between items-center z-10 relative">
+              <div>
+                <h2 class="font-serif text-3xl text-white mb-1">Announcements</h2>
+                <p class="text-xs text-gray-500 tracking-wider uppercase font-medium">${escapeHtml(tenant.name)}</p>
+              </div>
+              ${isTeacher ? `<button id="new-ann-btn" class="px-5 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all flex items-center gap-2"><i data-lucide="plus" class="w-4 h-4"></i> Post</button>` : ''}
+            </header>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
+              <div id="ann-list" class="max-w-3xl space-y-4"><div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div>
+            </div>
+          </main>
+        </div>`);
+      if (isTeacher) document.getElementById('new-ann-btn').addEventListener('click', () => openAnnouncementModal(slug));
+      const q = query(collection(db, 'tenants', slug, 'announcements'), orderBy('createdAt', 'desc'), limit(50));
+      const unsub = onSnapshot(q, (snap) => {
+        const el = document.getElementById('ann-list');
+        if (!el) return;
+        if (snap.empty) {
+          el.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center"><i data-lucide="bell" class="w-10 h-10 text-[#F59E0B] mx-auto mb-4"></i><h3 class="font-serif text-xl text-white mb-2">No announcements yet</h3>${isTeacher ? '<p class="text-gray-500 text-sm">Click "Post" to share an update.</p>' : ''}</div>`;
+          refreshIcons(); return;
+        }
+        el.innerHTML = snap.docs.map(d => {
+          const a = d.data();
+          return `<div class="bg-[#141414] border border-white/[0.08] rounded-xl p-6 group">
+            <div class="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h3 class="font-serif text-lg text-white mb-1">${escapeHtml(a.title || 'Untitled')}</h3>
+                <p class="text-xs text-gray-500">${escapeHtml(a.authorName || 'Teacher')} · ${escapeHtml(formatDateTime(a.createdAt))}</p>
+              </div>
+              ${isTeacher ? `<button data-del-ann="${d.id}" class="p-1.5 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>` : ''}
+            </div>
+            <div class="prose-ember text-sm">${sanitize(a.content || '')}</div>
+          </div>`;
+        }).join('');
+        refreshIcons();
+        el.querySelectorAll('[data-del-ann]').forEach(btn => btn.addEventListener('click', async () => {
+          if (confirm('Delete this announcement?')) await deleteDoc(doc(db, 'tenants', slug, 'announcements', btn.dataset.delAnn));
+        }));
+      });
+      unsubs.push(unsub);
+    }
+
+    function openAnnouncementModal(slug) {
+      const ov = document.createElement('div');
+      ov.className = 'fixed inset-0 z-50 flex items-start justify-center bg-black/60 modal-overlay px-6 py-10 overflow-y-auto';
+      ov.innerHTML = `
+        <div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-2xl w-full shadow-2xl my-8">
+          <div class="p-8 pb-6 border-b border-white/[0.06] flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center"><i data-lucide="megaphone" class="w-4 h-4 text-[#F59E0B]"></i></div>
+              <div><h3 class="font-serif text-2xl text-white">New Announcement</h3><p class="text-gray-500 text-xs">Share an update with everyone.</p></div>
+            </div>
+            <button id="an-close" class="p-2 text-gray-500 hover:text-white rounded transition-all"><i data-lucide="x" class="w-5 h-5"></i></button>
+          </div>
+          <div class="p-8 space-y-5">
+            <div><label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Title</label><input id="an-title" type="text" placeholder="Welcome to Week 5" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" /></div>
+            <div><label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Message</label>
+              <div class="bg-white/[0.02] border border-white/10 rounded-lg overflow-hidden">
+                <div id="quill-toolbar"><span class="ql-formats"><button class="ql-bold"></button><button class="ql-italic"></button></span><span class="ql-formats"><button class="ql-list" value="bullet"></button><button class="ql-link"></button></span><span class="ql-formats"><button class="ql-clean"></button></span></div>
+                <div id="quill-editor"></div>
+              </div>
+            </div>
+            <p id="an-error" class="text-red-400 text-sm hidden"></p>
+          </div>
+          <div class="p-8 pt-0 flex gap-3">
+            <button id="an-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button>
+            <button id="an-post" class="flex-1 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">Post</button>
+          </div>
+        </div>`;
+      document.body.appendChild(ov);
+      refreshIcons();
+      const quill = new Quill(ov.querySelector('#quill-editor'), { theme: 'snow', modules: { toolbar: '#quill-toolbar' } });
+      const close = () => ov.remove();
+      ov.querySelector('#an-close').addEventListener('click', close);
+      ov.querySelector('#an-cancel').addEventListener('click', close);
+      ov.addEventListener('click', e => { if (e.target === ov) close(); });
+      ov.querySelector('#an-post').addEventListener('click', async () => {
+        const title = ov.querySelector('#an-title').value.trim();
+        const content = sanitize(quill.root.innerHTML);
+        const err = ov.querySelector('#an-error');
+        err.classList.add('hidden');
+        if (!title) { err.textContent = 'Enter a title.'; err.classList.remove('hidden'); return; }
+        if (!content || content === '<p><br></p>') { err.textContent = 'Enter a message.'; err.classList.remove('hidden'); return; }
+        try {
+          await addDoc(collection(db, 'tenants', slug, 'announcements'), {
+            title, content,
+            authorUid: currentUser.uid,
+            authorName: currentUser.displayName || currentUser.email || 'Teacher',
+            createdAt: serverTimestamp()
+          });
+          close();
+        } catch (e) { console.error(e); err.textContent = 'Failed: ' + e.message; err.classList.remove('hidden'); }
+      });
+      setTimeout(() => ov.querySelector('#an-title').focus(), 50);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ADMIN OVERVIEW / STUB / TEACHERS / COURSES
     // ═══════════════════════════════════════════════════════════════
     async function viewAdminOverview(slug, tenant, roleInfo) {
       if (roleInfo.role !== 'admin') return viewNotFound();
@@ -1575,18 +1918,16 @@
               <h2 class="font-serif text-3xl text-white mb-1">${escapeHtml(tenant.name)}</h2>
               <p class="text-xs text-gray-500">School overview</p>
             </header>
-            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative" id="admin-content">
-              <div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div>
-            </div>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative" id="admin-content"><div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div>
           </main>
         </div>`);
-
       try {
-        const [teachersSnap, approvedSnap, pendingSnap, coursesSnap] = await Promise.all([
+        const [teachersSnap, approvedSnap, pendingSnap, coursesSnap, plansSnap] = await Promise.all([
           getDocs(collection(db, 'tenants', slug, 'users')),
           getDocs(query(collection(db, 'tenants', slug, 'students'), where('status', '==', 'approved'))),
           getDocs(query(collection(db, 'tenants', slug, 'students'), where('status', '==', 'pending'))),
-          getDocs(collection(db, 'tenants', slug, 'courses'))
+          getDocs(collection(db, 'tenants', slug, 'courses')),
+          getDocs(query(collection(db, 'tenants', slug, 'plans'), where('status', '==', 'submitted')))
         ]);
         const el = document.getElementById('admin-content');
         if (!el) return;
@@ -1594,15 +1935,15 @@
         const studentCount = approvedSnap.size;
         const pendingCount = pendingSnap.size;
         const courseCount = coursesSnap.size;
+        const planReviewCount = plansSnap.size;
         const joinCode = tenant.joinCode || '——';
-
         el.innerHTML = `
           <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 max-w-5xl mb-8">
             ${[
               { icon:'users', label:'Students', value: studentCount, sub: pendingCount > 0 ? `${pendingCount} pending` : 'All approved', color:'text-[#F59E0B]', bg:'bg-[#F59E0B]/10', border:'border-[#F59E0B]/20', href: buildUrl('/' + slug + '/admin/students') },
               { icon:'user-cog', label:'Teachers', value: teacherCount, sub: 'Admins included', color:'text-[#8B5CF6]', bg:'bg-[#8B5CF6]/10', border:'border-[#8B5CF6]/20', href: buildUrl('/' + slug + '/admin/teachers') },
               { icon:'book-open', label:'Courses', value: courseCount, sub: 'Total', color:'text-teal-400', bg:'bg-teal-400/10', border:'border-teal-400/20', href: buildUrl('/' + slug + '/admin/courses') },
-              { icon:'clock', label:'Pending', value: pendingCount, sub: pendingCount > 0 ? 'Needs review' : 'Nothing to review', color: pendingCount > 0 ? 'text-rose-400' : 'text-gray-500', bg: pendingCount > 0 ? 'bg-rose-400/10' : 'bg-white/[0.03]', border: pendingCount > 0 ? 'border-rose-400/20' : 'border-white/10', href: buildUrl('/' + slug + '/admin/students') }
+              { icon:'clipboard-check', label:'Plans to review', value: planReviewCount, sub: planReviewCount > 0 ? 'Needs your attention' : 'All caught up', color: planReviewCount > 0 ? 'text-[#F59E0B]' : 'text-gray-500', bg: planReviewCount > 0 ? 'bg-[#F59E0B]/10' : 'bg-white/[0.03]', border: planReviewCount > 0 ? 'border-[#F59E0B]/20' : 'border-white/10', href: buildUrl('/' + slug + '/admin/planning') }
             ].map(s => `
               <a href="${s.href}" class="bg-[#141414] border border-white/[0.08] rounded-xl p-5 hover:border-white/20 hover:-translate-y-0.5 transition-all block">
                 <div class="w-9 h-9 rounded-lg ${s.bg} border ${s.border} flex items-center justify-center mb-3"><i data-lucide="${s.icon}" class="w-4 h-4 ${s.color}"></i></div>
@@ -1611,30 +1952,21 @@
                 <div class="text-[10px] text-gray-600">${s.sub}</div>
               </a>`).join('')}
           </div>
-
           <div class="grid lg:grid-cols-3 gap-4 max-w-5xl">
             <div class="lg:col-span-2 bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
               <div class="px-5 py-4 border-b border-white/[0.06]"><h3 class="font-serif text-lg text-white">Quick Actions</h3></div>
               <div class="p-5 grid grid-cols-2 gap-3">
-                <a href="${buildUrl('/' + slug + '/admin/teachers')}" class="flex items-center gap-3 p-3 bg-white/[0.02] border border-white/[0.06] rounded-lg hover:bg-white/[0.05] hover:border-[#F59E0B]/30 transition-all group">
-                  <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0"><i data-lucide="user-plus" class="w-4 h-4 text-[#F59E0B]"></i></div>
-                  <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">Add teachers</div><div class="text-xs text-gray-500">Share join code</div></div>
-                </a>
-                <a href="${buildUrl('/' + slug + '/admin/students')}" class="flex items-center gap-3 p-3 bg-white/[0.02] border border-white/[0.06] rounded-lg hover:bg-white/[0.05] hover:border-[#F59E0B]/30 transition-all group">
-                  <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0"><i data-lucide="graduation-cap" class="w-4 h-4 text-[#F59E0B]"></i></div>
-                  <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">Review students</div><div class="text-xs text-gray-500">${pendingCount} pending</div></div>
-                </a>
-                <a href="${buildUrl('/' + slug + '/admin/courses')}" class="flex items-center gap-3 p-3 bg-white/[0.02] border border-white/[0.06] rounded-lg hover:bg-white/[0.05] hover:border-[#F59E0B]/30 transition-all group">
-                  <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0"><i data-lucide="book-open" class="w-4 h-4 text-[#F59E0B]"></i></div>
-                  <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">View courses</div><div class="text-xs text-gray-500">${courseCount} total</div></div>
-                </a>
-                <a href="${buildUrl('/' + slug)}" class="flex items-center gap-3 p-3 bg-white/[0.02] border border-white/[0.06] rounded-lg hover:bg-white/[0.05] hover:border-[#F59E0B]/30 transition-all group">
-                  <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0"><i data-lucide="layout-dashboard" class="w-4 h-4 text-[#F59E0B]"></i></div>
-                  <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">My courses</div><div class="text-xs text-gray-500">View as teacher</div></div>
-                </a>
+                ${[
+                  { href: buildUrl('/' + slug + '/admin/teachers'), icon:'user-plus', label:'Add teachers', sub:'Share join code' },
+                  { href: buildUrl('/' + slug + '/admin/students'), icon:'graduation-cap', label:'Review students', sub:`${pendingCount} pending` },
+                  { href: buildUrl('/' + slug + '/admin/planning'), icon:'clipboard-check', label:'Review plans', sub:`${planReviewCount} to review` },
+                  { href: buildUrl('/' + slug + '/announcements'), icon:'megaphone', label:'Announce', sub:'Post an update' }
+                ].map(a => `<a href="${a.href}" class="flex items-center gap-3 p-3 bg-white/[0.02] border border-white/[0.06] rounded-lg hover:bg-white/[0.05] hover:border-[#F59E0B]/30 transition-all group">
+                  <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0"><i data-lucide="${a.icon}" class="w-4 h-4 text-[#F59E0B]"></i></div>
+                  <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${a.label}</div><div class="text-xs text-gray-500">${a.sub}</div></div>
+                </a>`).join('')}
               </div>
             </div>
-
             <div class="bg-[#141414] border border-white/[0.08] rounded-xl p-5">
               <p class="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Teacher Join Code</p>
               <div class="flex items-center gap-2 mb-3">
@@ -1642,33 +1974,23 @@
                 <button id="copy-join-code" class="p-1.5 text-gray-500 hover:text-[#F59E0B] rounded transition-all" title="Copy"><i data-lucide="clipboard" class="w-4 h-4"></i></button>
                 <button id="regen-join-code" class="p-1.5 text-gray-500 hover:text-[#F59E0B] rounded transition-all" title="Regenerate"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button>
               </div>
-              <p class="text-xs text-gray-500 leading-relaxed">Share this with teachers so they can join your school.</p>
+              <p class="text-xs text-gray-500 leading-relaxed">Share with teachers so they can join your school.</p>
             </div>
           </div>`;
         refreshIcons();
-
         const copyBtn = document.getElementById('copy-join-code');
-        if (copyBtn) copyBtn.addEventListener('click', async () => {
-          try { await navigator.clipboard.writeText(joinCode); alert('Copied!'); } catch(e) { prompt('Copy:', joinCode); }
-        });
+        if (copyBtn) copyBtn.addEventListener('click', async () => { try { await navigator.clipboard.writeText(joinCode); alert('Copied!'); } catch(e) { prompt('Copy:', joinCode); } });
         const regenBtn = document.getElementById('regen-join-code');
         if (regenBtn) regenBtn.addEventListener('click', async () => {
           if (!confirm('Regenerate join code? Current code will stop working.')) return;
-          const newCode = genCode();
-          await updateDoc(doc(db, 'tenants', slug), { joinCode: newCode });
+          await updateDoc(doc(db, 'tenants', slug), { joinCode: genCode() });
           renderRoute();
         });
-      } catch (e) {
-        console.error(e);
-        const el = document.getElementById('admin-content');
-        if (el) el.innerHTML = `<div class="text-red-400 text-sm p-6">Failed to load: ${escapeHtml(e.message)}</div>`;
-      }
+      } catch (e) { console.error(e); }
     }
 
     function viewAdminStubPage(slug, tenant, roleInfo, section) {
       if (roleInfo.role !== 'admin') return viewNotFound();
-      const titles = { planning: 'Planning', attendance: 'Attendance' };
-      const icons = { planning: 'clipboard-check', attendance: 'calendar-check' };
       render(`
         <div class="min-h-screen flex">
           ${renderSidebar(slug, tenant, roleInfo, 'admin-' + section)}
@@ -1676,22 +1998,19 @@
             <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
             <header class="p-8 pb-4 z-10 relative">
               <p class="text-xs text-[#F59E0B] uppercase tracking-widest mb-2">Admin</p>
-              <h2 class="font-serif text-3xl text-white mb-1">${titles[section]}</h2>
+              <h2 class="font-serif text-3xl text-white mb-1">${section[0].toUpperCase()+section.slice(1)}</h2>
             </header>
             <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
               <div class="max-w-2xl border border-dashed border-white/10 rounded-xl p-10 text-center">
-                <i data-lucide="${icons[section]}" class="w-10 h-10 text-[#F59E0B] mx-auto mb-4"></i>
-                <h3 class="font-serif text-xl text-white mb-2">${titles[section]}</h3>
-                <p class="text-gray-500 text-sm">Coming in Phase ${section === 'planning' ? '6D' : '6E'}.</p>
+                <i data-lucide="calendar-check" class="w-10 h-10 text-[#F59E0B] mx-auto mb-4"></i>
+                <h3 class="font-serif text-xl text-white mb-2">${section[0].toUpperCase()+section.slice(1)}</h3>
+                <p class="text-gray-500 text-sm">Coming in Phase 6E.</p>
               </div>
             </div>
           </main>
         </div>`);
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // ADMIN — TEACHERS
-    // ═══════════════════════════════════════════════════════════════
     async function viewAdminTeachers(slug, tenant, roleInfo) {
       if (roleInfo.role !== 'admin') return viewNotFound();
       render(`
@@ -1700,25 +2019,15 @@
           <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
             <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
             <header class="p-8 pb-4 flex justify-between items-center z-10 relative">
-              <div>
-                <p class="text-xs text-[#F59E0B] uppercase tracking-widest mb-2">Admin</p>
-                <h2 class="font-serif text-3xl text-white mb-1">Teachers</h2>
-                <p class="text-xs text-gray-500">${escapeHtml(tenant.name)}</p>
-              </div>
-              <button id="invite-teacher-btn" class="px-5 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all flex items-center gap-2">
-                <i data-lucide="user-plus" class="w-4 h-4"></i> Invite Teacher
-              </button>
+              <div><p class="text-xs text-[#F59E0B] uppercase tracking-widest mb-2">Admin</p><h2 class="font-serif text-3xl text-white mb-1">Teachers</h2><p class="text-xs text-gray-500">${escapeHtml(tenant.name)}</p></div>
+              <button id="invite-teacher-btn" class="px-5 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all flex items-center gap-2"><i data-lucide="user-plus" class="w-4 h-4"></i> Invite Teacher</button>
             </header>
             <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
-              <div id="teachers-list" class="max-w-4xl">
-                <div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div>
-              </div>
+              <div id="teachers-list" class="max-w-4xl"><div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div>
             </div>
           </main>
         </div>`);
-
       document.getElementById('invite-teacher-btn').addEventListener('click', () => openInviteTeacherModal(slug, tenant));
-
       try {
         const [teachersSnap, coursesSnap] = await Promise.all([
           getDocs(collection(db, 'tenants', slug, 'users')),
@@ -1726,92 +2035,48 @@
         ]);
         const courses = coursesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
         const el = document.getElementById('teachers-list');
-
-        if (teachersSnap.empty) {
-          el.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center">
-            <i data-lucide="user-cog" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i>
-            <h3 class="font-serif text-xl text-white mb-2">No teachers yet</h3>
-            <p class="text-gray-500 text-sm">Share your join code or invite teachers individually.</p>
-          </div>`;
-          refreshIcons(); return;
-        }
-
-        el.innerHTML = `
-          <div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
-            <div class="grid grid-cols-12 px-5 py-3 border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
-              <div class="col-span-5">Name</div>
-              <div class="col-span-3">Role</div>
-              <div class="col-span-2">Courses</div>
-              <div class="col-span-2 text-right">Actions</div>
-            </div>
-            <div class="divide-y divide-white/[0.04]">
-              ${teachersSnap.docs.map(d => {
-                const t = d.data();
-                const uid = d.id;
-                const isAdmin = t.role === 'admin';
-                const ownCourses = courses.filter(c => c.ownerUid === uid).length;
-                const name = t.displayName || (t.email ? t.email.split('@')[0] : 'Teacher');
-                const email = t.email || '';
-                const isSelf = uid === currentUser.uid;
-                return `<div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
-                  <div class="col-span-5 flex items-center gap-3 min-w-0">
-                    ${t.photoURL
-                      ? `<img src="${t.photoURL}" class="w-8 h-8 rounded-full border border-white/20 shrink-0" alt="">`
-                      : `<div class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-[10px] text-white shrink-0">${escapeHtml(initials(name))}</div>`}
-                    <div class="min-w-0">
-                      <div class="text-sm text-white truncate">${escapeHtml(name)} ${isSelf ? '<span class="text-[10px] text-[#F59E0B] ml-1">You</span>' : ''}</div>
-                      <div class="text-xs text-gray-500 truncate">${escapeHtml(email)}</div>
-                    </div>
-                  </div>
-                  <div class="col-span-3">
-                    <span class="px-2 py-1 text-[10px] uppercase tracking-wider rounded ${isAdmin ? 'bg-[#8B5CF6]/15 text-[#8B5CF6] border border-[#8B5CF6]/30' : 'bg-white/[0.04] text-gray-400 border border-white/10'}">${isAdmin ? 'Admin' : 'Teacher'}</span>
-                  </div>
-                  <div class="col-span-2 text-xs text-gray-500">${ownCourses} course${ownCourses === 1 ? '' : 's'}</div>
-                  <div class="col-span-2 flex justify-end gap-1">
-                    ${!isSelf ? `
-                      <button data-toggle-role data-id="${uid}" data-role="${isAdmin ? 'admin' : 'teacher'}" data-name="${escapeHtml(name)}" title="${isAdmin ? 'Demote to Teacher' : 'Promote to Admin'}"
-                        class="p-1.5 text-gray-500 hover:text-[#F59E0B] opacity-0 group-hover:opacity-100 transition-all">
-                        <i data-lucide="${isAdmin ? 'shield-off' : 'shield-check'}" class="w-3.5 h-3.5"></i>
-                      </button>
-                      <button data-remove-teacher data-id="${uid}" data-name="${escapeHtml(name)}" title="Remove from school"
-                        class="p-1.5 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all">
-                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
-                      </button>
-                    ` : `<span class="text-[10px] text-gray-600">—</span>`}
-                  </div>
-                </div>`;
-              }).join('')}
-            </div>
-          </div>`;
+        if (teachersSnap.empty) { el.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center"><i data-lucide="user-cog" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i><h3 class="font-serif text-xl text-white mb-2">No teachers yet</h3></div>`; refreshIcons(); return; }
+        el.innerHTML = `<div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
+          <div class="grid grid-cols-12 px-5 py-3 border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
+            <div class="col-span-5">Name</div><div class="col-span-3">Role</div><div class="col-span-2">Courses</div><div class="col-span-2 text-right">Actions</div>
+          </div>
+          <div class="divide-y divide-white/[0.04]">
+            ${teachersSnap.docs.map(d => {
+              const t = d.data(); const uid = d.id;
+              const isAdmin = t.role === 'admin';
+              const ownCourses = courses.filter(c => c.ownerUid === uid).length;
+              const name = t.displayName || (t.email ? t.email.split('@')[0] : 'Teacher');
+              const email = t.email || '';
+              const isSelf = uid === currentUser.uid;
+              return `<div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
+                <div class="col-span-5 flex items-center gap-3 min-w-0">
+                  ${t.photoURL ? `<img src="${t.photoURL}" class="w-8 h-8 rounded-full border border-white/20 shrink-0" alt="">` : `<div class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-[10px] text-white shrink-0">${escapeHtml(initials(name))}</div>`}
+                  <div class="min-w-0"><div class="text-sm text-white truncate">${escapeHtml(name)} ${isSelf ? '<span class="text-[10px] text-[#F59E0B] ml-1">You</span>' : ''}</div><div class="text-xs text-gray-500 truncate">${escapeHtml(email)}</div></div>
+                </div>
+                <div class="col-span-3"><span class="px-2 py-1 text-[10px] uppercase tracking-wider rounded ${isAdmin ? 'bg-[#8B5CF6]/15 text-[#8B5CF6] border border-[#8B5CF6]/30' : 'bg-white/[0.04] text-gray-400 border border-white/10'}">${isAdmin ? 'Admin' : 'Teacher'}</span></div>
+                <div class="col-span-2 text-xs text-gray-500">${ownCourses} course${ownCourses === 1 ? '' : 's'}</div>
+                <div class="col-span-2 flex justify-end gap-1">
+                  ${!isSelf ? `
+                    <button data-toggle-role data-id="${uid}" data-role="${isAdmin ? 'admin' : 'teacher'}" data-name="${escapeHtml(name)}" class="p-1.5 text-gray-500 hover:text-[#F59E0B] opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="${isAdmin ? 'shield-off' : 'shield-check'}" class="w-3.5 h-3.5"></i></button>
+                    <button data-remove-teacher data-id="${uid}" data-name="${escapeHtml(name)}" class="p-1.5 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+                  ` : `<span class="text-[10px] text-gray-600">—</span>`}
+                </div>
+              </div>`;
+            }).join('')}
+          </div></div>`;
         refreshIcons();
-
         el.querySelectorAll('[data-toggle-role]').forEach(btn => btn.addEventListener('click', async () => {
-          const uid = btn.dataset.id;
-          const currentRole = btn.dataset.role;
-          const name = btn.dataset.name;
-          const newRole = currentRole === 'admin' ? 'teacher' : 'admin';
-          const verb = newRole === 'admin' ? 'promote' : 'demote';
-          if (!confirm(`${verb.charAt(0).toUpperCase() + verb.slice(1)} ${name} to ${newRole}?`)) return;
-          try {
-            await updateDoc(doc(db, 'tenants', slug, 'users', uid), { role: newRole });
-            renderRoute();
-          } catch (e) { alert('Failed: ' + e.message); }
+          const newRole = btn.dataset.role === 'admin' ? 'teacher' : 'admin';
+          if (!confirm(`Change ${btn.dataset.name} to ${newRole}?`)) return;
+          await updateDoc(doc(db, 'tenants', slug, 'users', btn.dataset.id), { role: newRole });
+          renderRoute();
         }));
-
         el.querySelectorAll('[data-remove-teacher]').forEach(btn => btn.addEventListener('click', async () => {
-          const uid = btn.dataset.id;
-          const name = btn.dataset.name;
-          if (!confirm(`Remove ${name} from this school? Their courses will remain but they will lose access.`)) return;
-          try {
-            await deleteDoc(doc(db, 'tenants', slug, 'users', uid));
-            renderRoute();
-          } catch (e) { alert('Failed: ' + e.message); }
+          if (!confirm(`Remove ${btn.dataset.name} from this school?`)) return;
+          await deleteDoc(doc(db, 'tenants', slug, 'users', btn.dataset.id));
+          renderRoute();
         }));
-      } catch (e) {
-        console.error(e);
-        const el = document.getElementById('teachers-list');
-        if (el) el.innerHTML = `<div class="text-red-400 text-sm p-6">Failed to load teachers: ${escapeHtml(e.message)}</div>`;
-      }
+      } catch (e) { console.error(e); }
     }
 
     function openInviteTeacherModal(slug, tenant) {
@@ -1820,18 +2085,14 @@
       ov.innerHTML = `
         <div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-md w-full p-8 shadow-2xl">
           <h3 class="font-serif text-2xl text-white mb-1">Invite Teachers</h3>
-          <p class="text-gray-500 text-sm mb-6">Share this code with teachers so they can join <span class="text-white">${escapeHtml(tenant.name)}</span>.</p>
+          <p class="text-gray-500 text-sm mb-6">Share this code so teachers can join <span class="text-white">${escapeHtml(tenant.name)}</span>.</p>
           <div class="bg-[#0A0A0A] border border-white/[0.08] rounded-xl p-5 mb-6 text-center">
             <p class="text-[10px] uppercase tracking-wider text-gray-500 mb-3">Join Code</p>
-            <code id="invite-code" class="text-3xl font-mono text-[#F59E0B] tracking-[0.3em] block">${escapeHtml(tenant.joinCode || '——')}</code>
+            <code class="text-3xl font-mono text-[#F59E0B] tracking-[0.3em] block">${escapeHtml(tenant.joinCode || '——')}</code>
           </div>
-          <div class="space-y-2 mb-6">
-            <p class="text-xs text-gray-500 leading-relaxed">Teachers visit <span class="text-[#F59E0B]">${escapeHtml(window.location.origin + buildUrl('/signup'))}</span>, choose <span class="text-white">Teacher</span> → <span class="text-white">Join my school</span>, and enter the code above.</p>
-          </div>
+          <p class="text-xs text-gray-500 leading-relaxed mb-6">Teachers visit <span class="text-[#F59E0B]">${escapeHtml(window.location.origin + buildUrl('/signup'))}</span>, choose <span class="text-white">Teacher</span> → <span class="text-white">Join my school</span>, and enter the code.</p>
           <div class="flex gap-3">
-            <button id="invite-copy" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all flex items-center justify-center gap-2">
-              <i data-lucide="copy" class="w-4 h-4"></i> Copy code
-            </button>
+            <button id="invite-copy" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all flex items-center justify-center gap-2"><i data-lucide="copy" class="w-4 h-4"></i> Copy code</button>
             <button id="invite-close" class="flex-1 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">Done</button>
           </div>
         </div>`;
@@ -1845,17 +2106,10 @@
           await navigator.clipboard.writeText(tenant.joinCode || '');
           ov.querySelector('#invite-copy').innerHTML = '<i data-lucide="check" class="w-4 h-4"></i> Copied!';
           refreshIcons();
-          setTimeout(() => {
-            ov.querySelector('#invite-copy').innerHTML = '<i data-lucide="copy" class="w-4 h-4"></i> Copy code';
-            refreshIcons();
-          }, 2000);
         } catch(e) { prompt('Copy:', tenant.joinCode || ''); }
       });
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // ADMIN — COURSES
-    // ═══════════════════════════════════════════════════════════════
     async function viewAdminCourses(slug, tenant, roleInfo) {
       if (roleInfo.role !== 'admin') return viewNotFound();
       render(`
@@ -1863,19 +2117,10 @@
           ${renderSidebar(slug, tenant, roleInfo, 'admin-courses')}
           <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
             <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
-            <header class="p-8 pb-4 z-10 relative">
-              <p class="text-xs text-[#F59E0B] uppercase tracking-widest mb-2">Admin</p>
-              <h2 class="font-serif text-3xl text-white mb-1">Courses</h2>
-              <p class="text-xs text-gray-500">All courses in ${escapeHtml(tenant.name)}</p>
-            </header>
-            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
-              <div id="courses-list" class="max-w-5xl">
-                <div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div>
-              </div>
-            </div>
+            <header class="p-8 pb-4 z-10 relative"><p class="text-xs text-[#F59E0B] uppercase tracking-widest mb-2">Admin</p><h2 class="font-serif text-3xl text-white mb-1">Courses</h2><p class="text-xs text-gray-500">All courses in ${escapeHtml(tenant.name)}</p></header>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative"><div id="courses-list" class="max-w-5xl"><div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div></div>
           </main>
         </div>`);
-
       try {
         const [coursesSnap, teachersSnap] = await Promise.all([
           getDocs(query(collection(db, 'tenants', slug, 'courses'), orderBy('createdAt', 'desc'))),
@@ -1884,57 +2129,32 @@
         const teachersByUid = {};
         teachersSnap.docs.forEach(d => { teachersByUid[d.id] = d.data(); });
         const el = document.getElementById('courses-list');
-
-        if (coursesSnap.empty) {
-          el.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center">
-            <i data-lucide="book-open" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i>
-            <h3 class="font-serif text-xl text-white mb-2">No courses yet</h3>
-            <p class="text-gray-500 text-sm">Teachers create courses from their dashboard.</p>
-          </div>`;
-          refreshIcons(); return;
-        }
-
+        if (coursesSnap.empty) { el.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center"><i data-lucide="book-open" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i><h3 class="font-serif text-xl text-white mb-2">No courses yet</h3></div>`; refreshIcons(); return; }
         const enrollCounts = {};
-        await Promise.all(coursesSnap.docs.map(async d => {
-          try {
-            const enr = await getDocs(collection(db, 'tenants', slug, 'courses', d.id, 'enrollments'));
-            enrollCounts[d.id] = enr.size;
-          } catch(e) { enrollCounts[d.id] = 0; }
-        }));
-
-        el.innerHTML = `
-          <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
-            ${coursesSnap.docs.map(d => {
-              const c = d.data();
-              const grad = c.gradient || pickGradient(c.title);
-              const teacher = teachersByUid[c.ownerUid];
-              const teacherName = teacher ? (teacher.displayName || (teacher.email ? teacher.email.split('@')[0] : 'Teacher')) : 'Unknown';
-              const enrolled = enrollCounts[d.id] || 0;
-              return `<div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden hover:border-white/20 hover:-translate-y-0.5 transition-all group">
-                <div class="${grad} h-20 relative">
-                  <a href="${buildUrl('/' + slug + '/course/' + d.id)}" class="absolute inset-0" aria-label="Open course"></a>
+        await Promise.all(coursesSnap.docs.map(async d => { try { const e = await getDocs(collection(db, 'tenants', slug, 'courses', d.id, 'enrollments')); enrollCounts[d.id] = e.size; } catch(e) { enrollCounts[d.id] = 0; } }));
+        el.innerHTML = `<div class="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+          ${coursesSnap.docs.map(d => {
+            const c = d.data();
+            const grad = c.gradient || pickGradient(c.title);
+            const teacher = teachersByUid[c.ownerUid];
+            const teacherName = teacher ? (teacher.displayName || (teacher.email ? teacher.email.split('@')[0] : 'Teacher')) : 'Unknown';
+            const enrolled = enrollCounts[d.id] || 0;
+            return `<div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden hover:border-white/20 hover:-translate-y-0.5 transition-all">
+              <div class="${grad} h-20 relative"><a href="${buildUrl('/' + slug + '/course/' + d.id)}" class="absolute inset-0"></a></div>
+              <div class="p-5">
+                <p class="text-xs text-gray-500 mb-1 truncate">${escapeHtml(c.code || '')}</p>
+                <a href="${buildUrl('/' + slug + '/course/' + d.id)}" class="block font-serif text-lg text-white mb-3 hover:text-[#F59E0B] transition-colors truncate">${escapeHtml(c.title || 'Untitled')}</a>
+                <div class="flex items-center gap-2 mb-3">
+                  <div class="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-[10px] text-white shrink-0">${escapeHtml(initials(teacherName))}</div>
+                  <span class="text-xs text-gray-400 truncate">${escapeHtml(teacherName)}</span>
                 </div>
-                <div class="p-5">
-                  <p class="text-xs text-gray-500 mb-1 truncate">${escapeHtml(c.code || '')}</p>
-                  <a href="${buildUrl('/' + slug + '/course/' + d.id)}" class="block font-serif text-lg text-white mb-3 hover:text-[#F59E0B] transition-colors truncate">${escapeHtml(c.title || 'Untitled')}</a>
-                  <div class="flex items-center gap-2 mb-3">
-                    <div class="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-[10px] text-white shrink-0">${escapeHtml(initials(teacherName))}</div>
-                    <span class="text-xs text-gray-400 truncate">${escapeHtml(teacherName)}</span>
-                  </div>
-                  <div class="flex justify-between items-center text-xs text-gray-500">
-                    <span>${enrolled} student${enrolled === 1 ? '' : 's'}</span>
-                    <a href="${buildUrl('/' + slug + '/course/' + d.id + '/roster')}" class="hover:text-[#F59E0B] transition-colors">Roster →</a>
-                  </div>
-                </div>
-              </div>`;
-            }).join('')}
-          </div>`;
+                <div class="flex justify-between items-center text-xs text-gray-500"><span>${enrolled} student${enrolled === 1 ? '' : 's'}</span><a href="${buildUrl('/' + slug + '/course/' + d.id + '/roster')}" class="hover:text-[#F59E0B] transition-colors">Roster →</a></div>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>`;
         refreshIcons();
-      } catch (e) {
-        console.error(e);
-        const el = document.getElementById('courses-list');
-        if (el) el.innerHTML = `<div class="text-red-400 text-sm p-6">Failed to load courses: ${escapeHtml(e.message)}</div>`;
-      }
+      } catch (e) { console.error(e); }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -1949,11 +2169,7 @@
           <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
             <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
             <header class="p-8 pb-4 flex justify-between items-center z-10 relative">
-              <div>
-                ${isAdmin ? `<p class="text-xs text-[#F59E0B] uppercase tracking-widest mb-2">Admin</p>` : ''}
-                <h2 class="font-serif text-3xl text-white mb-1">Students</h2>
-                <p class="text-xs text-gray-500 tracking-wider uppercase font-medium">${escapeHtml(tenant.name)}</p>
-              </div>
+              <div>${isAdmin ? `<p class="text-xs text-[#F59E0B] uppercase tracking-widest mb-2">Admin</p>` : ''}<h2 class="font-serif text-3xl text-white mb-1">Students</h2><p class="text-xs text-gray-500 tracking-wider uppercase font-medium">${escapeHtml(tenant.name)}</p></div>
               <div class="flex items-center gap-3">
                 ${tenant.joinCode ? `<div class="hidden md:flex items-center gap-2 px-4 py-2.5 bg-white/[0.03] border border-white/[0.08] rounded-lg"><span class="text-xs text-gray-500">Join:</span><code class="text-sm font-mono text-[#F59E0B] tracking-widest">${escapeHtml(tenant.joinCode)}</code></div>` : ''}
                 <button id="add-student-btn" class="px-5 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all flex items-center gap-2"><i data-lucide="user-plus" class="w-4 h-4"></i> New Student</button>
@@ -1966,67 +2182,50 @@
           </main>
         </div>`);
       document.getElementById('add-student-btn').addEventListener('click', () => openCreateStudentModal(slug));
-
       const pendingUnsub = onSnapshot(query(collection(db, 'tenants', slug, 'students'), where('status', '==', 'pending')), (snap) => {
         const el = document.getElementById('pending-section');
         if (!el) return;
         if (snap.empty) { el.innerHTML = ''; return; }
         el.innerHTML = `<div class="bg-[#F59E0B]/5 border border-[#F59E0B]/20 rounded-xl overflow-hidden max-w-4xl">
           <div class="px-5 py-3 border-b border-[#F59E0B]/20 flex items-center gap-2"><i data-lucide="clock" class="w-4 h-4 text-[#F59E0B]"></i><span class="text-sm text-[#F59E0B] font-medium">${snap.size} pending approval</span></div>
-          <div class="divide-y divide-white/[0.04]">
-            ${snap.docs.map(d => { const s = d.data(); const n = s.displayName || `${s.firstName||''} ${s.lastName||''}`.trim() || s.username;
-              return `<div class="flex items-center px-5 py-3 gap-3">
-                <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(n)}</div><div class="text-xs text-gray-500 font-mono truncate">${escapeHtml(s.username||'')}</div></div>
-                <button data-approve="${d.id}" class="px-3 py-1.5 bg-[#F59E0B] text-white text-xs font-medium rounded-lg hover:brightness-110 transition-all">Approve</button>
-                <button data-reject="${d.id}" class="px-3 py-1.5 bg-white/[0.05] border border-white/10 text-gray-300 text-xs rounded-lg hover:bg-red-500/20 hover:text-red-400 hover:border-red-500/30 transition-all">Reject</button>
-              </div>`;
-            }).join('')}
-          </div></div>`;
+          <div class="divide-y divide-white/[0.04]">${snap.docs.map(d => { const s = d.data(); const n = s.displayName || `${s.firstName||''} ${s.lastName||''}`.trim() || s.username;
+            return `<div class="flex items-center px-5 py-3 gap-3"><div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(n)}</div><div class="text-xs text-gray-500 font-mono truncate">${escapeHtml(s.username||'')}</div></div>
+            <button data-approve="${d.id}" class="px-3 py-1.5 bg-[#F59E0B] text-white text-xs font-medium rounded-lg hover:brightness-110 transition-all">Approve</button>
+            <button data-reject="${d.id}" class="px-3 py-1.5 bg-white/[0.05] border border-white/10 text-gray-300 text-xs rounded-lg hover:bg-red-500/20 hover:text-red-400 transition-all">Reject</button></div>`;
+          }).join('')}</div></div>`;
         refreshIcons();
-        el.querySelectorAll('[data-approve]').forEach(b => b.addEventListener('click', async () => {
-          await updateDoc(doc(db, 'tenants', slug, 'students', b.dataset.approve), { status: 'approved', approvedBy: currentUser.uid, approvedAt: serverTimestamp() });
-        }));
-        el.querySelectorAll('[data-reject]').forEach(b => b.addEventListener('click', async () => {
-          if (confirm('Reject this student?')) await updateDoc(doc(db, 'tenants', slug, 'students', b.dataset.reject), { status: 'rejected', approvedBy: currentUser.uid, approvedAt: serverTimestamp() });
-        }));
+        el.querySelectorAll('[data-approve]').forEach(b => b.addEventListener('click', async () => { await updateDoc(doc(db, 'tenants', slug, 'students', b.dataset.approve), { status: 'approved', approvedBy: currentUser.uid, approvedAt: serverTimestamp() }); }));
+        el.querySelectorAll('[data-reject]').forEach(b => b.addEventListener('click', async () => { if (confirm('Reject this student?')) await updateDoc(doc(db, 'tenants', slug, 'students', b.dataset.reject), { status: 'rejected', approvedBy: currentUser.uid, approvedAt: serverTimestamp() }); }));
       });
       unsubs.push(pendingUnsub);
-
       const unsub = onSnapshot(query(collection(db, 'tenants', slug, 'students'), orderBy('createdAt', 'desc')), (snap) => {
         const list = document.getElementById('student-list');
         if (!list) return;
         const approved = snap.docs.filter(d => d.data().status !== 'pending');
-        if (approved.length === 0) {
-          list.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center"><i data-lucide="users" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i><h3 class="font-serif text-xl text-white mb-2">No students yet</h3><p class="text-gray-500 text-sm">Click "New Student" to create accounts, or share your join code.</p></div>`;
-          refreshIcons(); return;
-        }
+        if (approved.length === 0) { list.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center"><i data-lucide="users" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i><h3 class="font-serif text-xl text-white mb-2">No students yet</h3></div>`; refreshIcons(); return; }
         list.innerHTML = `<div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
           <div class="grid grid-cols-12 px-5 py-3 border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500"><div class="col-span-4">Name</div><div class="col-span-3">Username</div><div class="col-span-2">Status</div><div class="col-span-2">Courses</div><div class="col-span-1"></div></div>
-          <div class="divide-y divide-white/[0.04]">
-            ${approved.map(d => { const s = d.data(); const name = s.displayName || `${s.firstName||''} ${s.lastName||''}`.trim() || s.username;
-              const enrolled = (s.enrolledCourseIds || []).length; const status = s.status || 'approved';
-              return `<div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
-                <div class="col-span-4 text-sm text-white truncate">${escapeHtml(name)}</div>
-                <div class="col-span-3 text-sm text-gray-400 font-mono truncate">${escapeHtml(s.username || '')}</div>
-                <div class="col-span-2 text-xs ${status === 'approved' ? 'text-green-400' : 'text-red-400'}">${escapeHtml(status)}</div>
-                <div class="col-span-2 text-xs text-gray-500">${enrolled} course${enrolled === 1 ? '' : 's'}</div>
-                <div class="col-span-1 flex justify-end gap-1">
-                  <button data-copy-user data-user="${escapeHtml(s.username||'')}" title="Copy credentials" class="p-1.5 text-gray-500 hover:text-[#F59E0B] opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="clipboard" class="w-3.5 h-3.5"></i></button>
-                  <button data-delete-student data-id="${d.id}" data-name="${escapeHtml(name)}" title="Delete" class="p-1.5 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
-                </div>
-              </div>`;
-            }).join('')}
-          </div></div>`;
+          <div class="divide-y divide-white/[0.04]">${approved.map(d => { const s = d.data(); const name = s.displayName || `${s.firstName||''} ${s.lastName||''}`.trim() || s.username;
+            const enrolled = (s.enrolledCourseIds || []).length; const status = s.status || 'approved';
+            return `<div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
+              <div class="col-span-4 text-sm text-white truncate">${escapeHtml(name)}</div>
+              <div class="col-span-3 text-sm text-gray-400 font-mono truncate">${escapeHtml(s.username || '')}</div>
+              <div class="col-span-2 text-xs ${status === 'approved' ? 'text-green-400' : 'text-red-400'}">${escapeHtml(status)}</div>
+              <div class="col-span-2 text-xs text-gray-500">${enrolled} course${enrolled === 1 ? '' : 's'}</div>
+              <div class="col-span-1 flex justify-end gap-1">
+                <button data-copy-user data-user="${escapeHtml(s.username||'')}" class="p-1.5 text-gray-500 hover:text-[#F59E0B] opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="clipboard" class="w-3.5 h-3.5"></i></button>
+                <button data-delete-student data-id="${d.id}" data-name="${escapeHtml(name)}" class="p-1.5 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+              </div>
+            </div>`;
+          }).join('')}</div></div>`;
         refreshIcons();
-        list.querySelectorAll('[data-delete-student]').forEach(btn => btn.addEventListener('click', async () => {
-          if (confirm(`Delete student "${btn.dataset.name}"?`)) await deleteDoc(doc(db, 'tenants', slug, 'students', btn.dataset.id));
-        }));
+        list.querySelectorAll('[data-delete-student]').forEach(btn => btn.addEventListener('click', async () => { if (confirm(`Delete "${btn.dataset.name}"?`)) await deleteDoc(doc(db, 'tenants', slug, 'students', btn.dataset.id)); }));
         list.querySelectorAll('[data-copy-user]').forEach(btn => btn.addEventListener('click', async () => {
-          const studentDoc = snap.docs.find(d => d.data().username === btn.dataset.user);
-          if (studentDoc) {
-            const s = studentDoc.data();
+          const sDoc = snap.docs.find(d => d.data().username === btn.dataset.user);
+          if (sDoc) {
+            const s = sDoc.data();
             const text = `Ember LMS Login\nURL: ${window.location.origin}${buildUrl('/login?school=' + slug + '&as=student')}\nSchool: ${tenant.name}\nUsername: ${s.username}\nPassword: ${s.tempPassword || '(ask your teacher)'}`;
-            try { await navigator.clipboard.writeText(text); alert('Credentials copied!'); } catch(e) { prompt('Copy:', text); }
+            try { await navigator.clipboard.writeText(text); alert('Copied!'); } catch(e) { prompt('Copy:', text); }
           }
         }));
       });
@@ -2039,7 +2238,7 @@
       ov.innerHTML = `
         <div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-md w-full p-8 shadow-2xl">
           <h3 class="font-serif text-2xl text-white mb-1">New Student</h3>
-          <p class="text-gray-500 text-sm mb-6">Create a username and password for this student.</p>
+          <p class="text-gray-500 text-sm mb-6">Create a username and password.</p>
           <div class="grid grid-cols-2 gap-3 mb-4">
             <div><label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">First Name</label><input id="student-first" type="text" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" /></div>
             <div><label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Last Name</label><input id="student-last" type="text" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" /></div>
@@ -2047,10 +2246,7 @@
           <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Username</label>
           <input id="student-user" type="text" autocomplete="off" placeholder="auto-generated" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all font-mono text-sm" />
           <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Password</label>
-          <div class="flex gap-2 mb-6">
-            <input id="student-pass" type="text" autocomplete="off" class="input-glow flex-1 bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all font-mono text-sm" />
-            <button id="regen-pass" type="button" title="Regenerate" class="px-3 bg-white/[0.05] border border-white/10 text-gray-400 hover:text-[#F59E0B] rounded-lg transition-all"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button>
-          </div>
+          <div class="flex gap-2 mb-6"><input id="student-pass" type="text" class="input-glow flex-1 bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all font-mono text-sm" /><button id="regen-pass" type="button" class="px-3 bg-white/[0.05] border border-white/10 text-gray-400 hover:text-[#F59E0B] rounded-lg transition-all"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button></div>
           <p id="student-error" class="text-red-400 text-sm mb-4 hidden"></p>
           <div class="flex gap-3">
             <button id="student-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button>
@@ -2088,25 +2284,23 @@
         const btn = ov.querySelector('#student-create');
         err.classList.add('hidden');
         if (!firstName) { err.textContent = 'Enter a first name.'; err.classList.remove('hidden'); return; }
-        if (!/^[a-z0-9_.-]{3,20}$/.test(username)) { err.textContent = 'Username: 3–20 chars, lowercase letters, numbers, dots, dashes, underscores.'; err.classList.remove('hidden'); return; }
-        if (password.length < 6) { err.textContent = 'Password must be at least 6 characters.'; err.classList.remove('hidden'); return; }
+        if (!/^[a-z0-9_.-]{3,20}$/.test(username)) { err.textContent = 'Username: 3–20 chars.'; err.classList.remove('hidden'); return; }
+        if (password.length < 6) { err.textContent = 'Password too short.'; err.classList.remove('hidden'); return; }
         btn.disabled = true; btn.textContent = 'Creating…';
         try {
           const fakeEmail = `${username}@${slug}.emberlms.local`;
           const cred = await createUserWithEmailAndPassword(secondaryAuth, fakeEmail, password);
           await signOut(secondaryAuth);
           await setDoc(doc(db, 'tenants', slug, 'students', cred.user.uid), {
-            username, firstName, lastName,
-            displayName: `${firstName} ${lastName}`.trim(),
+            username, firstName, lastName, displayName: `${firstName} ${lastName}`.trim(),
             email: fakeEmail, role: 'student', status: 'approved',
             tempPassword: password, enrolledCourseIds: [],
-            approvedBy: currentUser.uid, approvedAt: serverTimestamp(),
-            createdAt: serverTimestamp()
+            approvedBy: currentUser.uid, approvedAt: serverTimestamp(), createdAt: serverTimestamp()
           });
           close();
         } catch (e) {
           console.error(e); btn.disabled = false; btn.textContent = 'Create Student';
-          if (e.code === 'auth/email-already-in-use') err.textContent = 'That username is already taken.';
+          if (e.code === 'auth/email-already-in-use') err.textContent = 'Username taken.';
           else err.textContent = 'Failed: ' + (e.message || e.code);
           err.classList.remove('hidden');
         }
@@ -2115,7 +2309,7 @@
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // DASHBOARD
+    // DASHBOARD / COURSE / MODULE / ITEM (condensed)
     // ═══════════════════════════════════════════════════════════════
     function viewDashboard(slug, tenant, roleInfo) {
       const isRealTeacher = roleInfo.role === 'teacher' || roleInfo.role === 'admin';
@@ -2128,26 +2322,18 @@
             <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
             ${viewAsStudent ? renderPreviewBanner() : ''}
             <header class="p-8 pb-4 flex justify-between items-center z-10 relative">
-              <div>
-                <h2 class="font-serif text-3xl text-white mb-1">${isStudent ? 'My Courses' : 'Dashboard'}</h2>
-                <p class="text-xs text-gray-500 tracking-wider uppercase font-medium">${escapeHtml(tenant.name)}</p>
-              </div>
+              <div><h2 class="font-serif text-3xl text-white mb-1">${isStudent ? 'My Courses' : 'Dashboard'}</h2><p class="text-xs text-gray-500 tracking-wider uppercase font-medium">${escapeHtml(tenant.name)}</p></div>
               <div class="flex items-center gap-3">
                 ${isRealTeacher ? `<button id="toggle-preview-btn" class="px-4 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all flex items-center gap-2"><i data-lucide="${viewAsStudent ? 'eye-off' : 'eye'}" class="w-4 h-4"></i> ${viewAsStudent ? 'Exit Preview' : 'View as Student'}</button>` : ''}
                 ${isTeacherMode ? `<button id="add-course-btn" class="px-5 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all flex items-center gap-2"><i data-lucide="plus" class="w-4 h-4"></i> New Course</button>` : ''}
               </div>
             </header>
-            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
-              <div id="course-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                <div class="col-span-full text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div>
-              </div>
-            </div>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative"><div id="course-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"><div class="col-span-full text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div></div>
           </main>
         </div>`);
       if (isRealTeacher) document.getElementById('toggle-preview-btn').addEventListener('click', () => setViewAsStudent(!viewAsStudent));
       if (isTeacherMode) document.getElementById('add-course-btn').addEventListener('click', () => openCourseModal(slug));
-      if (isStudent) subscribeToEnrolledCourses(slug, roleInfo);
-      else subscribeToOwnedCourses(slug, isTeacherMode);
+      if (isStudent) subscribeToEnrolledCourses(slug, roleInfo); else subscribeToOwnedCourses(slug, isTeacherMode);
     }
 
     function renderPreviewBanner() {
@@ -2156,10 +2342,7 @@
         <button id="exit-preview-banner" class="text-[#F59E0B] hover:text-white font-medium transition-colors">Exit Preview</button>
       </div>`;
     }
-    function attachPreviewBannerHandler() {
-      const btn = document.getElementById('exit-preview-banner');
-      if (btn) btn.addEventListener('click', () => setViewAsStudent(false));
-    }
+    function attachPreviewBannerHandler() { const b = document.getElementById('exit-preview-banner'); if (b) b.addEventListener('click', () => setViewAsStudent(false)); }
 
     function subscribeToOwnedCourses(slug, showDelete) {
       clearSubs();
@@ -2167,10 +2350,7 @@
       const unsub = onSnapshot(q, (snap) => {
         const grid = document.getElementById('course-grid');
         if (!grid) return;
-        if (snap.empty) {
-          grid.innerHTML = `<div class="col-span-full text-center py-20 border border-dashed border-white/10 rounded-xl"><i data-lucide="book-open" class="w-10 h-10 mx-auto mb-4 text-gray-600"></i><p class="text-lg text-white font-serif mb-1">No courses yet</p><p class="text-sm text-gray-500">${showDelete ? 'Click "New Course" to create your first one.' : ''}</p></div>`;
-          refreshIcons(); return;
-        }
+        if (snap.empty) { grid.innerHTML = `<div class="col-span-full text-center py-20 border border-dashed border-white/10 rounded-xl"><i data-lucide="book-open" class="w-10 h-10 mx-auto mb-4 text-gray-600"></i><p class="text-lg text-white font-serif mb-1">No courses yet</p><p class="text-sm text-gray-500">${showDelete ? 'Click "New Course" to create your first one.' : ''}</p></div>`; refreshIcons(); return; }
         grid.innerHTML = snap.docs.map(d => renderCourseCard(slug, d.id, d.data(), showDelete)).join('');
         refreshIcons(); wireCourseGrid(slug, showDelete);
       });
@@ -2183,16 +2363,13 @@
       const ids = roleInfo.data.enrolledCourseIds || [];
       const grid = document.getElementById('course-grid');
       if (!grid) return;
-      if (ids.length === 0) {
-        grid.innerHTML = `<div class="col-span-full text-center py-20 border border-dashed border-white/10 rounded-xl"><i data-lucide="book-open" class="w-10 h-10 mx-auto mb-4 text-gray-600"></i><p class="text-lg text-white font-serif mb-1">No courses yet</p></div>`;
-        refreshIcons(); return;
-      }
+      if (ids.length === 0) { grid.innerHTML = `<div class="col-span-full text-center py-20 border border-dashed border-white/10 rounded-xl"><i data-lucide="book-open" class="w-10 h-10 mx-auto mb-4 text-gray-600"></i><p class="text-lg text-white font-serif mb-1">No courses yet</p></div>`; refreshIcons(); return; }
       try {
         const courses = await Promise.all(ids.map(async (id) => { const s = await getDoc(doc(db, 'tenants', slug, 'courses', id)); return s.exists() ? { id: s.id, ...s.data() } : null; }));
         const valid = courses.filter(Boolean);
         grid.innerHTML = valid.map(c => renderCourseCard(slug, c.id, c, false)).join('');
         refreshIcons(); wireCourseGrid(slug, false);
-      } catch (e) { console.error(e); grid.innerHTML = `<div class="col-span-full text-red-400 text-sm p-6">Failed.</div>`; }
+      } catch (e) { console.error(e); }
     }
 
     function wireCourseGrid(slug, showDelete) {
@@ -2209,23 +2386,20 @@
 
     function renderCourseCard(slug, id, course, showDelete) {
       const grad = course.gradient || pickGradient(course.title);
-      return `
-        <div data-course-link="${id}" class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden cursor-pointer hover:-translate-y-1 hover:border-white/20 transition-all group flex flex-col">
-          <div class="${grad} h-24 relative">
-            ${showDelete ? `<button data-action="delete" data-id="${id}" data-title="${escapeHtml(course.title || '')}" class="absolute top-2 right-2 p-1.5 bg-black/30 hover:bg-red-500/80 rounded text-white/80 hover:text-white opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>` : ''}
+      return `<div data-course-link="${id}" class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden cursor-pointer hover:-translate-y-1 hover:border-white/20 transition-all group flex flex-col">
+        <div class="${grad} h-24 relative">${showDelete ? `<button data-action="delete" data-id="${id}" data-title="${escapeHtml(course.title || '')}" class="absolute top-2 right-2 p-1.5 bg-black/30 hover:bg-red-500/80 rounded text-white/80 hover:text-white opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>` : ''}</div>
+        <div class="p-5 flex-1 flex flex-col">
+          <p class="text-xs text-gray-500 mb-1 truncate">${escapeHtml(course.code || '')}</p>
+          <h4 class="font-serif text-lg text-white mb-1 truncate">${escapeHtml(course.title || 'Untitled')}</h4>
+          <p class="text-xs text-gray-500 truncate mb-4">Created ${escapeHtml(formatDate(course.createdAt))}</p>
+          <div class="mt-auto flex gap-4 text-gray-500">
+            <i data-lucide="megaphone" class="w-4 h-4 hover:text-[#F59E0B] transition-colors"></i>
+            <i data-lucide="file-text" class="w-4 h-4 hover:text-[#F59E0B] transition-colors"></i>
+            <i data-lucide="message-square" class="w-4 h-4 hover:text-[#F59E0B] transition-colors"></i>
+            <i data-lucide="folder" class="w-4 h-4 hover:text-[#F59E0B] transition-colors"></i>
           </div>
-          <div class="p-5 flex-1 flex flex-col">
-            <p class="text-xs text-gray-500 mb-1 truncate">${escapeHtml(course.code || '')}</p>
-            <h4 class="font-serif text-lg text-white mb-1 truncate">${escapeHtml(course.title || 'Untitled')}</h4>
-            <p class="text-xs text-gray-500 truncate mb-4">Created ${escapeHtml(formatDate(course.createdAt))}</p>
-            <div class="mt-auto flex gap-4 text-gray-500">
-              <i data-lucide="megaphone" class="w-4 h-4 hover:text-[#F59E0B] transition-colors"></i>
-              <i data-lucide="file-text" class="w-4 h-4 hover:text-[#F59E0B] transition-colors"></i>
-              <i data-lucide="message-square" class="w-4 h-4 hover:text-[#F59E0B] transition-colors"></i>
-              <i data-lucide="folder" class="w-4 h-4 hover:text-[#F59E0B] transition-colors"></i>
-            </div>
-          </div>
-        </div>`;
+        </div>
+      </div>`;
     }
 
     async function createCourse(slug, data) {
@@ -2241,51 +2415,36 @@
     function openCourseModal(slug) {
       const ov = document.createElement('div');
       ov.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 modal-overlay px-6';
-      ov.innerHTML = `
-        <div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-md w-full p-8 shadow-2xl">
-          <h3 class="font-serif text-2xl text-white mb-1">New Course</h3>
-          <p class="text-gray-500 text-sm mb-6">Create a course for your students.</p>
-          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Course Name</label>
-          <input id="course-title" type="text" placeholder="English 1" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
-          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Course Code</label>
-          <input id="course-code" type="text" placeholder="01 - English 1" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
-          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Color</label>
-          <div id="gradient-picker" class="grid grid-cols-6 gap-2 mb-6">
-            ${GRADIENTS.map((g, i) => `<button type="button" data-grad="${g}" class="${g} h-9 rounded-lg border-2 ${i === 0 ? 'border-white' : 'border-transparent'} hover:border-white/50 transition-all"></button>`).join('')}
-          </div>
-          <p id="course-error" class="text-red-400 text-sm mb-4 hidden"></p>
-          <div class="flex gap-3">
-            <button id="course-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button>
-            <button id="course-create" class="flex-1 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">Create</button>
-          </div>
-        </div>`;
+      ov.innerHTML = `<div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-md w-full p-8 shadow-2xl">
+        <h3 class="font-serif text-2xl text-white mb-1">New Course</h3><p class="text-gray-500 text-sm mb-6">Create a course for your students.</p>
+        <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Course Name</label>
+        <input id="course-title" type="text" placeholder="English 1" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
+        <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Course Code</label>
+        <input id="course-code" type="text" placeholder="01 - English 1" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
+        <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Color</label>
+        <div id="gradient-picker" class="grid grid-cols-6 gap-2 mb-6">${GRADIENTS.map((g, i) => `<button type="button" data-grad="${g}" class="${g} h-9 rounded-lg border-2 ${i === 0 ? 'border-white' : 'border-transparent'} hover:border-white/50 transition-all"></button>`).join('')}</div>
+        <p id="course-error" class="text-red-400 text-sm mb-4 hidden"></p>
+        <div class="flex gap-3"><button id="course-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button><button id="course-create" class="flex-1 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">Create</button></div>
+      </div>`;
       document.body.appendChild(ov);
       let grad = GRADIENTS[0];
-      ov.querySelectorAll('[data-grad]').forEach(b => b.addEventListener('click', () => {
-        grad = b.dataset.grad;
-        ov.querySelectorAll('[data-grad]').forEach(x => x.classList.replace('border-white','border-transparent'));
-        b.classList.replace('border-transparent','border-white');
-      }));
+      ov.querySelectorAll('[data-grad]').forEach(b => b.addEventListener('click', () => { grad = b.dataset.grad; ov.querySelectorAll('[data-grad]').forEach(x => x.classList.replace('border-white','border-transparent')); b.classList.replace('border-transparent','border-white'); }));
       const close = () => ov.remove();
       ov.querySelector('#course-cancel').addEventListener('click', close);
       ov.addEventListener('click', e => { if (e.target === ov) close(); });
       ov.querySelector('#course-create').addEventListener('click', async () => {
         const title = ov.querySelector('#course-title').value.trim();
         const code = ov.querySelector('#course-code').value.trim();
-        const err = ov.querySelector('#course-error');
-        const btn = ov.querySelector('#course-create');
+        const err = ov.querySelector('#course-error'); const btn = ov.querySelector('#course-create');
         err.classList.add('hidden');
-        if (!title) { err.textContent = 'Enter a course name.'; err.classList.remove('hidden'); return; }
+        if (!title) { err.textContent = 'Enter a name.'; err.classList.remove('hidden'); return; }
         btn.disabled = true; btn.textContent = 'Creating…';
         try { await createCourse(slug, { title, code, gradient: grad }); close(); }
-        catch(e) { console.error(e); btn.disabled = false; btn.textContent = 'Create'; err.textContent = 'Failed: ' + e.message; err.classList.remove('hidden'); }
+        catch(e) { console.error(e); btn.disabled = false; btn.textContent = 'Create'; err.textContent = 'Failed.'; err.classList.remove('hidden'); }
       });
       setTimeout(() => ov.querySelector('#course-title').focus(), 50);
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // COURSE ROSTER
-    // ═══════════════════════════════════════════════════════════════
     async function viewCourseRoster(slug, tenant, roleInfo, courseId) {
       if (roleInfo.role !== 'teacher' && roleInfo.role !== 'admin') return viewNotFound();
       const cSnap = await getDoc(doc(db, 'tenants', slug, 'courses', courseId));
@@ -2298,15 +2457,13 @@
           <main class="flex-1 flex flex-col h-screen overflow-hidden relative">
             <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
             <header class="p-8 pb-4 z-10 relative">
-              <a href="${buildUrl('/' + slug + '/course/' + courseId)}" class="text-xs text-gray-500 hover:text-[#F59E0B] transition-all inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left" class="w-3 h-3"></i> Back to ${escapeHtml(course.title)}</a>
+              <a href="${buildUrl('/' + slug + '/course/' + courseId)}" class="text-xs text-gray-500 hover:text-[#F59E0B] transition-all inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left" class="w-3 h-3"></i> Back</a>
               <div class="flex items-center justify-between gap-4">
                 <div class="flex items-center gap-4 min-w-0"><div class="${grad} w-12 h-12 rounded-xl shrink-0"></div><div class="min-w-0"><p class="text-xs text-gray-500 mb-0.5">Roster</p><h2 class="font-serif text-3xl text-white truncate">${escapeHtml(course.title || 'Untitled')}</h2></div></div>
                 <button id="enroll-btn" class="px-5 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all flex items-center gap-2"><i data-lucide="user-plus" class="w-4 h-4"></i> Enroll Students</button>
               </div>
             </header>
-            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
-              <div id="roster-list" class="max-w-4xl"><div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div>
-            </div>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative"><div id="roster-list" class="max-w-4xl"><div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div></div>
           </main>
         </div>`);
       document.getElementById('enroll-btn').addEventListener('click', () => openEnrollModal(slug, courseId));
@@ -2316,16 +2473,14 @@
         if (snap.empty) { list.innerHTML = `<div class="border border-dashed border-white/10 rounded-xl p-10 text-center"><i data-lucide="users" class="w-10 h-10 text-gray-600 mx-auto mb-4"></i><h3 class="font-serif text-xl text-white mb-2">No students enrolled</h3></div>`; refreshIcons(); return; }
         list.innerHTML = `<div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
           <div class="grid grid-cols-12 px-5 py-3 border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500"><div class="col-span-5">Name</div><div class="col-span-4">Username</div><div class="col-span-2">Enrolled</div><div class="col-span-1"></div></div>
-          <div class="divide-y divide-white/[0.04]">
-            ${snap.docs.map(d => { const e = d.data();
-              return `<div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
-                <div class="col-span-5 text-sm text-white truncate">${escapeHtml(e.studentName || '')}</div>
-                <div class="col-span-4 text-sm text-gray-400 font-mono truncate">${escapeHtml(e.username || '')}</div>
-                <div class="col-span-2 text-xs text-gray-500">${escapeHtml(formatDate(e.enrolledAt))}</div>
-                <div class="col-span-1 flex justify-end"><button data-unenroll data-id="${d.id}" data-name="${escapeHtml(e.studentName||'')}" class="p-1.5 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="x" class="w-3.5 h-3.5"></i></button></div>
-              </div>`;
-            }).join('')}
-          </div></div>`;
+          <div class="divide-y divide-white/[0.04]">${snap.docs.map(d => { const e = d.data();
+            return `<div class="grid grid-cols-12 px-5 py-3 items-center hover:bg-white/[0.02] group transition-all">
+              <div class="col-span-5 text-sm text-white truncate">${escapeHtml(e.studentName || '')}</div>
+              <div class="col-span-4 text-sm text-gray-400 font-mono truncate">${escapeHtml(e.username || '')}</div>
+              <div class="col-span-2 text-xs text-gray-500">${escapeHtml(formatDate(e.enrolledAt))}</div>
+              <div class="col-span-1 flex justify-end"><button data-unenroll data-id="${d.id}" data-name="${escapeHtml(e.studentName||'')}" class="p-1.5 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"><i data-lucide="x" class="w-3.5 h-3.5"></i></button></div>
+            </div>`;
+          }).join('')}</div></div>`;
         refreshIcons();
         list.querySelectorAll('[data-unenroll]').forEach(btn => btn.addEventListener('click', async () => {
           if (confirm(`Remove "${btn.dataset.name}"?`)) {
@@ -2348,17 +2503,10 @@
       ov.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 modal-overlay px-6';
       ov.innerHTML = `<div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-md w-full shadow-2xl flex flex-col max-h-[80vh]">
         <div class="p-6 border-b border-white/[0.06]"><h3 class="font-serif text-2xl text-white mb-1">Enroll Students</h3></div>
-        <div class="flex-1 overflow-y-auto p-4">
-          ${available.length === 0 ? `<div class="text-center py-8 px-4"><p class="text-gray-500 text-sm">${allSnap.empty ? 'No approved students yet.' : 'All students are enrolled.'}</p></div>`
-            : available.map(s => `<label class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/[0.03] cursor-pointer transition-all">
-                <input type="checkbox" data-student-id="${s.id}" data-name="${escapeHtml(s.displayName || s.username || '')}" data-username="${escapeHtml(s.username || '')}" class="w-4 h-4 accent-[#F59E0B]" />
-                <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(s.displayName || s.username || '')}</div><div class="text-xs text-gray-500 font-mono truncate">${escapeHtml(s.username || '')}</div></div>
-              </label>`).join('')}
-        </div>
-        <div class="p-6 border-t border-white/[0.06] flex gap-3">
-          <button id="enroll-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button>
-          <button id="enroll-confirm" class="flex-1 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60" ${available.length === 0 ? 'disabled' : ''}>Enroll Selected</button>
-        </div></div>`;
+        <div class="flex-1 overflow-y-auto p-4">${available.length === 0 ? `<div class="text-center py-8 px-4"><p class="text-gray-500 text-sm">${allSnap.empty ? 'No approved students yet.' : 'All students enrolled.'}</p></div>`
+          : available.map(s => `<label class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/[0.03] cursor-pointer transition-all"><input type="checkbox" data-student-id="${s.id}" data-name="${escapeHtml(s.displayName || s.username || '')}" data-username="${escapeHtml(s.username || '')}" class="w-4 h-4 accent-[#F59E0B]" /><div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(s.displayName || s.username || '')}</div><div class="text-xs text-gray-500 font-mono truncate">${escapeHtml(s.username || '')}</div></div></label>`).join('')}</div>
+        <div class="p-6 border-t border-white/[0.06] flex gap-3"><button id="enroll-cancel" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button><button id="enroll-confirm" class="flex-1 py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60" ${available.length === 0 ? 'disabled' : ''}>Enroll Selected</button></div>
+      </div>`;
       document.body.appendChild(ov);
       refreshIcons();
       const close = () => ov.remove();
@@ -2367,8 +2515,7 @@
       ov.querySelector('#enroll-confirm').addEventListener('click', async () => {
         const checks = [...ov.querySelectorAll('input[type="checkbox"]:checked')];
         if (checks.length === 0) { close(); return; }
-        const btn = ov.querySelector('#enroll-confirm');
-        btn.disabled = true; btn.textContent = 'Enrolling…';
+        const btn = ov.querySelector('#enroll-confirm'); btn.disabled = true; btn.textContent = 'Enrolling…';
         try {
           await Promise.all(checks.map(c => (async () => {
             const sid = c.dataset.studentId;
@@ -2380,9 +2527,6 @@
       });
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // COURSE VIEW
-    // ═══════════════════════════════════════════════════════════════
     async function viewCourse(slug, tenant, roleInfo, courseId) {
       const cSnap = await getDoc(doc(db, 'tenants', slug, 'courses', courseId));
       if (!cSnap.exists()) return viewNotFound();
@@ -2397,7 +2541,7 @@
             <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
             ${viewAsStudent ? renderPreviewBanner() : ''}
             <header class="p-8 pb-4 z-10 relative">
-              <a href="${buildUrl('/' + slug)}" class="text-xs text-gray-500 hover:text-[#F59E0B] transition-all inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left" class="w-3 h-3"></i> Back to Dashboard</a>
+              <a href="${buildUrl('/' + slug)}" class="text-xs text-gray-500 hover:text-[#F59E0B] transition-all inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left" class="w-3 h-3"></i> Back</a>
               <div class="flex items-center justify-between gap-4">
                 <div class="flex items-center gap-4 min-w-0"><div class="${grad} w-12 h-12 rounded-xl shrink-0"></div><div class="min-w-0"><p class="text-xs text-gray-500 mb-0.5 truncate">${escapeHtml(course.code || '')}</p><h2 class="font-serif text-3xl text-white truncate">${escapeHtml(course.title || 'Untitled')}</h2></div></div>
                 <div class="flex items-center gap-3 shrink-0">
@@ -2406,9 +2550,7 @@
                 </div>
               </div>
             </header>
-            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative">
-              <div id="modules-list" class="max-w-3xl space-y-4"><div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div>
-            </div>
+            <div class="flex-1 p-8 pt-4 overflow-y-auto z-10 relative"><div id="modules-list" class="max-w-3xl space-y-4"><div class="text-center py-20 text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin mx-auto"></i></div></div></div>
           </main>
         </div>`);
       attachPreviewBannerHandler();
@@ -2434,14 +2576,8 @@
         refreshIcons();
         list.querySelectorAll('[data-item-link]').forEach(el => el.addEventListener('click', (e) => { e.preventDefault(); navigate(`/${slug}/course/${courseId}/item/${el.dataset.moduleId}/${el.dataset.itemLink}`); }));
         if (isTeacher) {
-          list.querySelectorAll('[data-module-delete]').forEach(btn => btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            if (confirm(`Delete module?`)) await deleteDoc(doc(db, 'tenants', slug, 'courses', courseId, 'modules', btn.dataset.id));
-          }));
-          list.querySelectorAll('[data-item-delete]').forEach(btn => btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            if (confirm('Delete this item?')) await deleteDoc(doc(db, 'tenants', slug, 'courses', courseId, 'modules', btn.dataset.moduleId, 'items', btn.dataset.id));
-          }));
+          list.querySelectorAll('[data-module-delete]').forEach(btn => btn.addEventListener('click', async (e) => { e.stopPropagation(); if (confirm('Delete module?')) await deleteDoc(doc(db, 'tenants', slug, 'courses', courseId, 'modules', btn.dataset.id)); }));
+          list.querySelectorAll('[data-item-delete]').forEach(btn => btn.addEventListener('click', async (e) => { e.stopPropagation(); if (confirm('Delete item?')) await deleteDoc(doc(db, 'tenants', slug, 'courses', courseId, 'modules', btn.dataset.moduleId, 'items', btn.dataset.id)); }));
           list.querySelectorAll('[data-add-item]').forEach(btn => btn.addEventListener('click', () => openItemTypeModal(slug, courseId, btn.dataset.moduleId)));
         }
       });
@@ -2449,11 +2585,10 @@
     }
 
     function renderModuleCard(slug, courseId, mod, items, isTeacher, idx) {
-      const itemsHtml = items.length === 0 ? `<p class="text-xs text-gray-600 italic py-3 px-5">No items yet</p>`
-        : items.map(it => renderItemRow(slug, courseId, mod.id, it, isTeacher)).join('');
+      const itemsHtml = items.length === 0 ? `<p class="text-xs text-gray-600 italic py-3 px-5">No items yet</p>` : items.map(it => renderItemRow(slug, courseId, mod.id, it, isTeacher)).join('');
       return `<div class="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
         <div class="flex items-center justify-between px-5 py-4 border-b border-white/[0.06]">
-          <div class="flex items-center gap-3 min-w-0"><span class="text-[10px] font-mono text-gray-600 tracking-wider">${String(idx).padStart(2,'0')}</span><h3 class="font-serif text-lg text-white truncate">${escapeHtml(mod.title || 'Untitled')}</h3><span class="text-[10px] text-gray-600 shrink-0">${items.length} item${items.length === 1 ? '' : 's'}</span></div>
+          <div class="flex items-center gap-3 min-w-0"><span class="text-[10px] font-mono text-gray-600">${String(idx).padStart(2,'0')}</span><h3 class="font-serif text-lg text-white truncate">${escapeHtml(mod.title || 'Untitled')}</h3><span class="text-[10px] text-gray-600">${items.length} item${items.length === 1 ? '' : 's'}</span></div>
           ${isTeacher ? `<div class="flex items-center gap-1 shrink-0"><button data-add-item data-module-id="${mod.id}" class="p-1.5 text-gray-500 hover:text-[#F59E0B] hover:bg-white/[0.05] rounded transition-all"><i data-lucide="plus" class="w-4 h-4"></i></button><button data-module-delete data-id="${mod.id}" class="p-1.5 text-gray-500 hover:text-red-400 hover:bg-white/[0.05] rounded transition-all"><i data-lucide="trash-2" class="w-4 h-4"></i></button></div>` : ''}
         </div>
         <div class="divide-y divide-white/[0.04]">${itemsHtml}</div></div>`;
@@ -2473,8 +2608,7 @@
       const ov = document.createElement('div');
       ov.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 modal-overlay px-6';
       ov.innerHTML = `<div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-md w-full p-8 shadow-2xl">
-        <h3 class="font-serif text-2xl text-white mb-1">New Module</h3>
-        <p class="text-gray-500 text-sm mb-6">A section to group your content.</p>
+        <h3 class="font-serif text-2xl text-white mb-1">New Module</h3><p class="text-gray-500 text-sm mb-6">A section to group content.</p>
         <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Module Title</label>
         <input id="module-title" type="text" placeholder="Week 1" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-6 transition-all" />
         <p id="module-error" class="text-red-400 text-sm mb-4 hidden"></p>
@@ -2486,13 +2620,12 @@
       ov.addEventListener('click', e => { if (e.target === ov) close(); });
       ov.querySelector('#module-create').addEventListener('click', async () => {
         const title = ov.querySelector('#module-title').value.trim();
-        const err = ov.querySelector('#module-error');
-        const btn = ov.querySelector('#module-create');
+        const err = ov.querySelector('#module-error'); const btn = ov.querySelector('#module-create');
         err.classList.add('hidden');
         if (!title) { err.textContent = 'Enter a title.'; err.classList.remove('hidden'); return; }
         btn.disabled = true; btn.textContent = 'Creating…';
         try { await addDoc(collection(db, 'tenants', slug, 'courses', courseId, 'modules'), { title, position: Date.now(), createdAt: serverTimestamp() }); close(); }
-        catch(e) { console.error(e); btn.disabled = false; btn.textContent = 'Create'; err.textContent = 'Failed: ' + e.message; err.classList.remove('hidden'); }
+        catch(e) { console.error(e); btn.disabled = false; btn.textContent = 'Create'; err.textContent = 'Failed.'; err.classList.remove('hidden'); }
       });
       setTimeout(() => ov.querySelector('#module-title').focus(), 50);
     }
@@ -2501,15 +2634,12 @@
       const ov = document.createElement('div');
       ov.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 modal-overlay px-6';
       ov.innerHTML = `<div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-md w-full p-8 shadow-2xl">
-        <h3 class="font-serif text-2xl text-white mb-1">Add Item</h3>
-        <p class="text-gray-500 text-sm mb-6">What kind of content?</p>
-        <div class="space-y-2">
-          ${ITEM_TYPES.map(t => `<button data-type="${t.type}" class="w-full flex items-center gap-4 px-4 py-3.5 bg-white/[0.03] border border-white/[0.08] rounded-lg hover:bg-white/[0.06] hover:border-[#F59E0B]/40 transition-all text-left group">
-            <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0"><i data-lucide="${t.icon}" class="w-4 h-4 text-[#F59E0B]"></i></div>
-            <div class="flex-1 min-w-0"><div class="text-sm text-white font-medium">${t.label}</div><div class="text-xs text-gray-500">${t.desc}</div></div>
-            <i data-lucide="chevron-right" class="w-4 h-4 text-gray-600 group-hover:text-[#F59E0B] transition-colors"></i>
-          </button>`).join('')}
-        </div>
+        <h3 class="font-serif text-2xl text-white mb-1">Add Item</h3><p class="text-gray-500 text-sm mb-6">What kind of content?</p>
+        <div class="space-y-2">${ITEM_TYPES.map(t => `<button data-type="${t.type}" class="w-full flex items-center gap-4 px-4 py-3.5 bg-white/[0.03] border border-white/[0.08] rounded-lg hover:bg-white/[0.06] hover:border-[#F59E0B]/40 transition-all text-left group">
+          <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0"><i data-lucide="${t.icon}" class="w-4 h-4 text-[#F59E0B]"></i></div>
+          <div class="flex-1 min-w-0"><div class="text-sm text-white font-medium">${t.label}</div><div class="text-xs text-gray-500">${t.desc}</div></div>
+          <i data-lucide="chevron-right" class="w-4 h-4 text-gray-600 group-hover:text-[#F59E0B] transition-colors"></i>
+        </button>`).join('')}</div>
         <button id="item-type-cancel" class="w-full mt-6 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Cancel</button>
       </div>`;
       document.body.appendChild(ov);
@@ -2555,8 +2685,7 @@
       ov.addEventListener('click', e => { if (e.target === ov) close(); });
       ov.querySelector('#item-save').addEventListener('click', async () => {
         const title = ov.querySelector('#item-title').value.trim();
-        const err = ov.querySelector('#item-error');
-        const btn = ov.querySelector('#item-save');
+        const err = ov.querySelector('#item-error'); const btn = ov.querySelector('#item-save');
         err.classList.add('hidden');
         if (!title) { err.textContent = 'Enter a title.'; err.classList.remove('hidden'); return; }
         const data = {};
@@ -2576,14 +2705,11 @@
           if (existingItem) await updateDoc(doc(db, 'tenants', slug, 'courses', courseId, 'modules', moduleId, 'items', item.id), { title, data, updatedAt: serverTimestamp() });
           else await addDoc(collection(db, 'tenants', slug, 'courses', courseId, 'modules', moduleId, 'items'), { type: item.type, title, data, position: Date.now(), createdAt: serverTimestamp() });
           close();
-        } catch(e) { console.error(e); btn.disabled = false; btn.textContent = existingItem ? 'Save Changes' : 'Create'; err.textContent = 'Failed: ' + e.message; err.classList.remove('hidden'); }
+        } catch(e) { console.error(e); btn.disabled = false; btn.textContent = existingItem ? 'Save Changes' : 'Create'; err.textContent = 'Failed.'; err.classList.remove('hidden'); }
       });
       setTimeout(() => ov.querySelector('#item-title').focus(), 50);
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // ITEM VIEW
-    // ═══════════════════════════════════════════════════════════════
     async function viewItem(slug, tenant, roleInfo, courseId, moduleId, itemId) {
       render(`<div class="min-h-screen flex items-center justify-center text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i></div>`);
       const [cSnap, iSnap] = await Promise.all([
@@ -2604,7 +2730,7 @@
             <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#F59E0B]/5 to-transparent pointer-events-none"></div>
             ${viewAsStudent ? renderPreviewBanner() : ''}
             <header class="p-8 pb-4 z-10 relative">
-              <a href="${buildUrl('/' + slug + '/course/' + courseId)}" class="text-xs text-gray-500 hover:text-[#F59E0B] transition-all inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left" class="w-3 h-3"></i> Back to ${escapeHtml(course.title)}</a>
+              <a href="${buildUrl('/' + slug + '/course/' + courseId)}" class="text-xs text-gray-500 hover:text-[#F59E0B] transition-all inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left" class="w-3 h-3"></i> Back</a>
               <div class="flex items-center justify-between gap-4">
                 <div class="flex items-center gap-3 min-w-0"><div class="w-10 h-10 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0"><i data-lucide="${meta.icon}" class="w-5 h-5 text-[#F59E0B]"></i></div><div class="min-w-0"><p class="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">${meta.label}</p><h2 class="font-serif text-2xl text-white truncate">${escapeHtml(item.title || 'Untitled')}</h2></div></div>
                 <div class="flex items-center gap-3 shrink-0">
@@ -2661,9 +2787,8 @@
       const isPersonal = tenant.type === 'personal';
       const name = currentUser.displayName || roleInfo.data.displayName || currentUser.email || 'User';
       const roleLabel = isRealTeacher && viewAsStudent ? 'Student (preview)' : (isAdmin ? 'Admin' : (isRealTeacher ? 'Teacher' : 'Student'));
-      const item = (href, icon, label, key, soon = false) => {
+      const item = (href, icon, label, key) => {
         const isActive = active === key;
-        if (soon) return `<span class="flex items-center gap-3 px-3 py-2 text-sm text-gray-600"><i data-lucide="${icon}" class="w-4 h-4"></i> ${label} <span class="ml-auto text-[10px]">Soon</span></span>`;
         return `<a href="${buildUrl(href)}" class="flex items-center gap-3 px-3 py-2 text-sm ${isActive ? 'text-white bg-white/[0.05] border-l-2 border-[#F59E0B] rounded-r' : 'text-gray-400 hover:text-white hover:bg-white/[0.03] border-l-2 border-transparent rounded-r'} transition-all"><i data-lucide="${icon}" class="w-4 h-4 ${isActive ? 'text-[#F59E0B]' : ''}"></i> ${label}</a>`;
       };
       let navContent = '';
@@ -2677,17 +2802,25 @@
           <div class="text-[10px] text-gray-600 uppercase tracking-widest px-3 mb-2">School</div>
           ${item('/' + slug, 'layout-dashboard', 'Dashboard', 'dashboard')}
           ${item('/' + slug + '/admin', 'shield-check', 'Admin', 'admin-overview')}
+          ${item('/' + slug + '/announcements', 'megaphone', 'Announcements', 'announcements')}
           <div class="text-[10px] text-gray-600 uppercase tracking-widest px-3 mt-4 mb-2">Manage</div>
           ${item('/' + slug + '/admin/students', 'users', 'Students', 'admin-students')}
           ${item('/' + slug + '/admin/teachers', 'user-cog', 'Teachers', 'admin-teachers')}
           ${item('/' + slug + '/admin/courses', 'book-open', 'Courses', 'admin-courses')}
           <div class="text-[10px] text-gray-600 uppercase tracking-widest px-3 mt-4 mb-2">Insights</div>
-          ${item('/' + slug + '/admin/planning', 'clipboard-check', 'Planning', 'admin-planning', true)}
-          ${item('/' + slug + '/admin/attendance', 'calendar-check', 'Attendance', 'admin-attendance', true)}`;
+          ${item('/' + slug + '/admin/planning', 'clipboard-check', 'Planning', 'admin-planning')}`;
+      } else if (isRealTeacher) {
+        navContent = `
+          <div class="text-[10px] text-gray-600 uppercase tracking-widest px-3 mb-2">Classroom</div>
+          ${item('/' + slug, 'layout-dashboard', 'Dashboard', 'dashboard')}
+          ${item('/' + slug + '/students', 'users', 'Students', 'students')}
+          ${item('/' + slug + '/announcements', 'megaphone', 'Announcements', 'announcements')}
+          ${item('/' + slug + '/planning', 'clipboard-check', 'Lesson Plans', 'planning')}`;
       } else {
         navContent = `
-          ${item('/' + slug, 'layout-dashboard', 'Dashboard', 'dashboard')}
-          ${isRealTeacher ? item('/' + slug + '/students', 'users', 'Students', 'students') : ''}`;
+          <div class="text-[10px] text-gray-600 uppercase tracking-widest px-3 mb-2">Classroom</div>
+          ${item('/' + slug, 'layout-dashboard', 'My Courses', 'dashboard')}
+          ${item('/' + slug + '/announcements', 'megaphone', 'Announcements', 'announcements')}`;
       }
       return `<aside class="w-64 bg-[#050505] border-r border-white/[0.08] p-6 flex flex-col h-screen shrink-0">
         <a href="${buildUrl('/')}" class="font-serif text-xl mb-8 block"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></a>
@@ -2710,9 +2843,6 @@
       render(`<div class="min-h-screen flex items-center justify-center text-center px-6"><div><h1 class="font-serif text-3xl text-white mb-2">404</h1><p class="text-gray-500">Page not found.</p><a href="${buildUrl('/')}" class="inline-block mt-6 text-sm text-[#F59E0B] hover:underline">← Back</a></div></div>`);
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // RENDER
-    // ═══════════════════════════════════════════════════════════════
     async function renderRoute() {
       if (!authReady) return;
       clearSubs();
@@ -2743,9 +2873,7 @@
       if (user && route.type === 'landing') {
         try {
           const dest = await resolveDestinationForUser(user);
-          if (dest && dest !== '/signup' && dest !== '/login' && dest !== '/') {
-            navigate(dest); return;
-          }
+          if (dest && dest !== '/signup' && dest !== '/login' && dest !== '/') { navigate(dest); return; }
         } catch (e) { console.warn('Redirect check failed', e); }
       }
       renderRoute();
