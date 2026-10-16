@@ -74,6 +74,8 @@
 
   <script type="module">
     // ═══════════════════════════════════════════════════════════════════
+    // CONFIG
+    // ═══════════════════════════════════════════════════════════════════
     const BASE_PATH = '/emberlms';
     const RESERVED = ['login','signup','picker','onboard','api','assets','district'];
     const GRADIENTS = ['grad-amber','grad-violet','grad-teal','grad-rose','grad-blue','grad-emerald'];
@@ -84,6 +86,8 @@
       { type:'quiz',       label:'Quiz',       icon:'check-square',   desc:'Auto-graded questions' },
     ];
 
+    // ═══════════════════════════════════════════════════════════════════
+    // FIREBASE
     // ═══════════════════════════════════════════════════════════════════
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
     import {
@@ -115,6 +119,8 @@
     const secondaryAuth = getAuth(secondaryApp);
 
     // ═══════════════════════════════════════════════════════════════════
+    // ROUTER
+    // ═══════════════════════════════════════════════════════════════════
     function getAppSegments() {
       let p = decodeURIComponent(window.location.pathname);
       if (BASE_PATH && p.startsWith(BASE_PATH)) p = p.slice(BASE_PATH.length);
@@ -136,6 +142,8 @@
       return { type: 'tenant', tenant: first, segments: segs.slice(1) };
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // HELPERS
     // ═══════════════════════════════════════════════════════════════════
     const appEl = document.getElementById('app');
     function refreshIcons() { if (window.lucide) window.lucide.createIcons(); }
@@ -164,6 +172,8 @@
     function isValidEmail(e) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e); }
 
     // ═══════════════════════════════════════════════════════════════════
+    // STATE
+    // ═══════════════════════════════════════════════════════════════════
     let currentUser = null;
     let authReady = false;
     let unsubs = [];
@@ -177,6 +187,8 @@
       renderRoute();
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // DATA
     // ═══════════════════════════════════════════════════════════════════
     async function getTenant(slug) { const s = await getDoc(doc(db, 'tenants', slug)); return s.exists() ? { id: s.id, ...s.data() } : null; }
     async function getRoleInTenant(slug, uid) {
@@ -213,19 +225,20 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // AUTH ROUTING
+    // ═══════════════════════════════════════════════════════════════════
     async function resolveDestinationForUser(user) {
-      if (!user) return '/signup';
+      if (!user) return null;
 
-      // 1. District admin? (uid-based)
+      // 1. District admin?
       try {
         const dSnap = await getDocs(query(collection(db, 'districts'), where('adminUids', 'array-contains', user.uid), limit(1)));
         if (!dSnap.empty) return `/district/${dSnap.docs[0].id}`;
       } catch(e) { console.warn('district lookup failed', e); }
 
-      // 2. Teacher/admin in any tenant? (uid-based via collection group)
+      // 2. Teacher/admin in any tenant?
       try {
         const tSnap = await getDocs(query(collectionGroup(db, 'users'), where('userId', '==', user.uid), limit(2)));
-        // fallback: try email match if userId field isn't set
         if (!tSnap.empty) {
           const first = tSnap.docs[0];
           const tenantRef = first.ref.parent.parent;
@@ -245,7 +258,7 @@
         }
       } catch(e) { console.warn('teacher lookup failed', e); }
 
-      // 3. Student in any tenant? (email match)
+      // 3. Student in any tenant?
       if (user.email) {
         try {
           const sSnap = await getDocs(query(collectionGroup(db, 'students'), where('email', '==', user.email), limit(1)));
@@ -260,33 +273,67 @@
         } catch(e) { console.warn('student lookup failed', e); }
       }
 
-      return '/signup';
+      return null;
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // 🖼️ VIEW: LANDING
+    // VIEW: LANDING
     // ═══════════════════════════════════════════════════════════════════
     function viewLanding() {
+      const signedIn = !!currentUser;
       render(`
         <div class="min-h-screen relative overflow-hidden">
           <nav class="relative z-20 max-w-6xl mx-auto px-6 py-6 flex justify-between items-center">
-            <div class="font-serif text-xl"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></div>
+            <a href="${buildUrl('/')}" class="font-serif text-xl"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></a>
             <div class="flex items-center gap-3 text-sm">
-              <a href="${buildUrl('/login')}" class="px-4 py-2 text-gray-300 hover:text-white transition-all">Sign in</a>
-              <a href="${buildUrl('/signup')}" class="px-4 py-2 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg hover:brightness-110 transition-all">Get started</a>
+              ${signedIn ? `
+                <span class="hidden sm:inline text-xs text-gray-500 truncate max-w-[180px]">${escapeHtml(currentUser.email || '')}</span>
+                <button id="landing-signout" class="px-4 py-2 text-gray-300 hover:text-white transition-all">Sign out</button>
+                <button id="landing-goto" class="px-4 py-2 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg hover:brightness-110 transition-all">Go to my account</button>
+              ` : `
+                <a href="${buildUrl('/login')}" class="px-4 py-2 text-gray-300 hover:text-white transition-all">Sign in</a>
+                <a href="${buildUrl('/signup')}" class="px-4 py-2 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg hover:brightness-110 transition-all">Get started</a>
+              `}
             </div>
           </nav>
+
           <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[900px] h-[700px] rounded-full bg-[#F59E0B]/10 blur-[160px] pointer-events-none"></div>
           <div class="absolute top-40 right-0 w-[500px] h-[500px] rounded-full bg-[#8B5CF6]/10 blur-[140px] pointer-events-none"></div>
+
           <section class="relative z-10 max-w-5xl mx-auto px-6 pt-16 pb-24 text-center">
             <p class="text-xs text-[#F59E0B] uppercase tracking-[0.3em] mb-6">Built for teachers</p>
             <h1 class="font-serif text-6xl md:text-7xl text-white leading-[1.05] mb-6">Teaching,<br><span class="italic text-[#F59E0B]">refined.</span></h1>
             <p class="text-lg md:text-xl text-gray-400 max-w-2xl mx-auto mb-10 leading-relaxed">A modern learning platform for schools, districts, and independent teachers.</p>
             <div class="flex flex-wrap items-center justify-center gap-4">
-              <a href="${buildUrl('/signup')}" class="px-6 py-3.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_25px_rgba(245,158,11,0.25)] hover:shadow-[0_0_40px_rgba(245,158,11,0.45)] hover:brightness-110 transition-all">Get started — free</a>
-              <a href="${buildUrl('/login')}" class="px-6 py-3.5 bg-white/[0.04] border border-white/10 text-white font-medium rounded-lg hover:bg-white/[0.08] transition-all">Sign in</a>
+              ${signedIn ? `
+                <button id="landing-goto-2" class="px-6 py-3.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_25px_rgba(245,158,11,0.25)] hover:shadow-[0_0_40px_rgba(245,158,11,0.45)] hover:brightness-110 transition-all">Go to my account</button>
+                <a href="${buildUrl('/signup')}" class="px-6 py-3.5 bg-white/[0.04] border border-white/10 text-white font-medium rounded-lg hover:bg-white/[0.08] transition-all">Create another account</a>
+              ` : `
+                <a href="${buildUrl('/signup')}" class="px-6 py-3.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg shadow-[0_0_25px_rgba(245,158,11,0.25)] hover:shadow-[0_0_40px_rgba(245,158,11,0.45)] hover:brightness-110 transition-all">Get started — free</a>
+                <a href="${buildUrl('/login')}" class="px-6 py-3.5 bg-white/[0.04] border border-white/10 text-white font-medium rounded-lg hover:bg-white/[0.08] transition-all">Sign in</a>
+              `}
+            </div>
+            <p class="text-xs text-gray-600 mt-6">No credit card. No setup fees.</p>
+          </section>
+
+          <section class="relative z-10 max-w-6xl mx-auto px-6 pb-24">
+            <div class="grid md:grid-cols-3 gap-6">
+              ${[
+                { icon:'layers', title:'Modules & Items', desc:'Pages, assignments, links, and quizzes — organized into clean modules.' },
+                { icon:'users', title:'Student Accounts', desc:'Create usernames and passwords. No emails required.' },
+                { icon:'building-2', title:'Schools & Districts', desc:'District admins oversee multiple schools. School admins oversee their teachers.' },
+                { icon:'clipboard-check', title:'Planning Reviews', desc:'Teachers submit lesson plans. Admins review and comment.' },
+                { icon:'calendar-check', title:'Attendance', desc:'Take attendance per course, per day. Admins see aggregated rates.' },
+                { icon:'lock', title:'Yours, isolated', desc:'Each school gets its own URL. Data never crosses tenants.' }
+              ].map(f => `
+                <div class="bg-[#141414] border border-white/[0.08] rounded-xl p-6 hover:border-white/20 hover:-translate-y-0.5 transition-all">
+                  <div class="w-10 h-10 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center mb-4"><i data-lucide="${f.icon}" class="w-5 h-5 text-[#F59E0B]"></i></div>
+                  <h3 class="font-serif text-xl text-white mb-2">${f.title}</h3>
+                  <p class="text-sm text-gray-500 leading-relaxed">${f.desc}</p>
+                </div>`).join('')}
             </div>
           </section>
+
           <footer class="relative z-10 border-t border-white/[0.06] py-8">
             <div class="max-w-6xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-4 text-xs text-gray-600">
               <div class="font-serif"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></div>
@@ -294,15 +341,28 @@
             </div>
           </footer>
         </div>`);
+
+      const goto = async () => {
+        if (!currentUser) return navigate('/login');
+        const dest = await resolveDestinationForUser(currentUser);
+        if (dest && dest !== '/signup' && dest !== '/login') navigate(dest);
+        else navigate('/signup');
+      };
+      ['landing-goto','landing-goto-2'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.addEventListener('click', goto);
+      });
+      const so = document.getElementById('landing-signout');
+      if (so) so.addEventListener('click', () => signOut(auth));
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // 🖼️ VIEW: LOGIN (staff: Google + email/password; student: school+username+password)
+    // VIEW: LOGIN
     // ═══════════════════════════════════════════════════════════════════
     function viewLogin() {
       const params = new URLSearchParams(window.location.search);
       let mode = params.get('as') === 'student' ? 'student' : 'staff';
-      let preselected = null;
+      const preselectFromUrl = params.get('school');
 
       const renderLogin = () => {
         render(`
@@ -328,6 +388,18 @@
                 <h2 class="font-serif text-3xl text-white mb-1">Sign in</h2>
                 <p class="text-gray-500 text-sm mb-6">Choose how you'd like to sign in.</p>
 
+                ${currentUser ? `
+                  <div class="mb-6 p-4 bg-[#F59E0B]/10 border border-[#F59E0B]/20 rounded-lg">
+                    <p class="text-[10px] text-[#F59E0B] uppercase tracking-wider mb-1">Already signed in</p>
+                    <p class="text-sm text-white mb-1 truncate">${escapeHtml(currentUser.email || currentUser.displayName || '')}</p>
+                    <p class="text-xs text-gray-500 mb-3">You're signed in on this device.</p>
+                    <div class="flex gap-2">
+                      <button id="lg-goto" class="flex-1 py-2 bg-[#F59E0B] text-white text-xs font-medium rounded-lg hover:brightness-110 transition-all">Go to my account</button>
+                      <button id="lg-signout" class="flex-1 py-2 bg-white/[0.05] border border-white/10 text-white text-xs rounded-lg hover:bg-white/[0.08] transition-all">Sign out</button>
+                    </div>
+                  </div>
+                ` : ''}
+
                 <div class="grid grid-cols-2 gap-2 p-1 bg-white/[0.03] border border-white/[0.08] rounded-lg mb-6">
                   <button data-mode="staff" class="py-2 text-sm rounded-md transition-all ${mode==='staff' ? 'bg-white/[0.08] text-white font-medium' : 'text-gray-400 hover:text-white'}">Staff</button>
                   <button data-mode="student" class="py-2 text-sm rounded-md transition-all ${mode==='student' ? 'bg-white/[0.08] text-white font-medium' : 'text-gray-400 hover:text-white'}">Student</button>
@@ -350,9 +422,18 @@
           renderLogin();
         }));
 
+        const gotoBtn = document.getElementById('lg-goto');
+        if (gotoBtn) gotoBtn.addEventListener('click', async () => {
+          const dest = await resolveDestinationForUser(currentUser);
+          if (dest && dest !== '/signup' && dest !== '/login') navigate(dest);
+          else navigate('/signup');
+        });
+        const soBtn = document.getElementById('lg-signout');
+        if (soBtn) soBtn.addEventListener('click', () => signOut(auth));
+
         const body = document.getElementById('login-body');
 
-        // ── STAFF (Google + email/password) ──
+        // ── STAFF ──
         if (mode === 'staff') {
           body.innerHTML = `
             <button id="google-signin-btn" class="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-medium py-3 px-4 rounded-lg hover:bg-gray-100 transition-all">
@@ -397,7 +478,8 @@
               const cred = await signInWithEmailAndPassword(auth, email, password);
               const dest = await resolveDestinationForUser(cred.user);
               suppressAuthRouting = false;
-              navigate(dest);
+              if (dest) navigate(dest);
+              else navigate('/signup');
             } catch (e) {
               suppressAuthRouting = false;
               console.error(e); btn.disabled = false; btn.textContent = 'Sign In';
@@ -417,7 +499,18 @@
           return;
         }
 
-        // ── STUDENT (school + username + password) ──
+        // ── STUDENT ──
+        let preselected = null;
+        if (preselectFromUrl) {
+          preselected = { slug: preselectFromUrl, name: preselectFromUrl };
+          (async () => {
+            try {
+              const t = await getTenant(preselectFromUrl);
+              if (t) { preselected = { slug: preselectFromUrl, name: t.name }; renderLogin(); }
+            } catch(e) {}
+          })();
+        }
+
         body.innerHTML = `
           <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Your School</label>
           <div class="relative mb-4">
@@ -481,6 +574,9 @@
           btn.disabled = true; btn.textContent = 'Signing in…';
           try {
             await signInWithEmailAndPassword(auth, `${u}@${preselected.slug}.emberlms.local`, p);
+            const dest = await resolveDestinationForUser(auth.currentUser);
+            if (dest) navigate(dest);
+            else navigate(`/${preselected.slug}/pending`);
           } catch (e) {
             console.error(e); btn.disabled = false; btn.textContent = 'Sign In';
             if (['auth/invalid-credential','auth/wrong-password','auth/user-not-found','auth/invalid-email'].includes(e.code)) showErr('Invalid username or password.');
@@ -500,7 +596,8 @@
         const cred = await signInWithPopup(auth, new GoogleAuthProvider());
         const dest = await resolveDestinationForUser(cred.user);
         suppressAuthRouting = false;
-        navigate(dest);
+        if (dest) navigate(dest);
+        else navigate('/signup');
       } catch (e) {
         suppressAuthRouting = false;
         console.error(e);
@@ -510,14 +607,40 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // 🖼️ VIEW: SIGNUP
+    // VIEW: SIGNUP
     // ═══════════════════════════════════════════════════════════════════
     function viewSignup() {
+      if (currentUser) {
+        render(`
+          <div class="min-h-screen flex items-center justify-center px-6 relative overflow-hidden">
+            <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[600px] rounded-full bg-[#F59E0B]/10 blur-[140px] pointer-events-none"></div>
+            <div class="max-w-md w-full text-center z-10">
+              <a href="${buildUrl('/')}" class="font-serif text-3xl block mb-8"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></a>
+              <div class="p-6 bg-[#141414] border border-white/[0.08] rounded-xl">
+                <p class="text-[10px] text-[#F59E0B] uppercase tracking-wider mb-2">Already signed in</p>
+                <p class="text-sm text-white mb-6 truncate">${escapeHtml(currentUser.email || currentUser.displayName || '')}</p>
+                <div class="space-y-2">
+                  <button id="su-goto" class="w-full py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">Go to my account</button>
+                  <button id="su-signout" class="w-full py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Sign out & switch account</button>
+                </div>
+              </div>
+              <p class="text-xs text-gray-600 mt-6">
+                <a href="${buildUrl('/login')}" class="hover:text-gray-400">← Back to sign in</a>
+              </p>
+            </div>
+          </div>`);
+        document.getElementById('su-goto').addEventListener('click', async () => {
+          const dest = await resolveDestinationForUser(currentUser);
+          if (dest && dest !== '/signup' && dest !== '/login') navigate(dest);
+          else navigate('/signup');
+        });
+        document.getElementById('su-signout').addEventListener('click', () => signOut(auth));
+        return;
+      }
       if (!signupWizard) signupWizard = { role: null, mode: null, step: 'role', data: {} };
       renderWizard();
     }
 
-    // Renders a Google + email/password auth block. onAuthed(user) fires after successful auth.
     function renderAuthBlock(container, { submitLabel = 'Continue', onAuthed }) {
       container.innerHTML = `
         <button data-google-btn class="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-medium py-3 px-4 rounded-lg hover:bg-gray-100 transition-all">
@@ -617,7 +740,7 @@
 
       const backBtn = (label = 'Back') => `<button data-back class="text-xs text-gray-500 hover:text-white transition-all inline-flex items-center gap-1 mb-6"><i data-lucide="arrow-left" class="w-3 h-3"></i> ${label}</button>`;
 
-      // ── ROLE ──
+      // ROLE
       if (w.step === 'role') {
         render(shell(`
           <h2 class="font-serif text-3xl text-white mb-1">Create your account</h2>
@@ -643,11 +766,10 @@
           w.step = w.role === 'teacher' ? 'teacher-mode' : 'student-school';
           renderWizard();
         }));
-        refreshIcons();
-        return;
+        refreshIcons(); return;
       }
 
-      // ── TEACHER MODE ──
+      // TEACHER MODE
       if (w.step === 'teacher-mode') {
         render(shell(`
           ${backBtn()}
@@ -672,11 +794,10 @@
           w.step = w.mode === 'join' ? 'teacher-join' : 'teacher-personal-name';
           renderWizard();
         }));
-        refreshIcons();
-        return;
+        refreshIcons(); return;
       }
 
-      // ── TEACHER JOIN: enter code, validate ──
+      // TEACHER JOIN
       if (w.step === 'teacher-join') {
         render(shell(`
           ${backBtn()}
@@ -711,11 +832,10 @@
             errEl.textContent = 'Failed: ' + (e.message || e.code); errEl.classList.remove('hidden');
           }
         });
-        refreshIcons();
-        return;
+        refreshIcons(); return;
       }
 
-      // ── TEACHER PERSONAL NAME: name + slug ──
+      // TEACHER PERSONAL NAME
       if (w.step === 'teacher-personal-name') {
         render(shell(`
           ${backBtn()}
@@ -759,16 +879,15 @@
             err.textContent = 'Failed: ' + e.message; err.classList.remove('hidden');
           }
         });
-        refreshIcons();
-        return;
+        refreshIcons(); return;
       }
 
-      // ── TEACHER AUTH (shared step for both join + personal) ──
+      // TEACHER AUTH
       if (w.step === 'teacher-auth') {
         const isJoin = w.mode === 'join';
         render(shell(`
           ${backBtn()}
-          <h2 class="font-serif text-3xl text-white mb-1">${authReady && currentUser ? 'Confirm your account' : 'Sign in to continue'}</h2>
+          <h2 class="font-serif text-3xl text-white mb-1">${currentUser ? 'Confirm your account' : 'Create your account'}</h2>
           <p class="text-gray-500 text-sm mb-6">
             ${isJoin
               ? `Joining <span class="text-white">${escapeHtml(w.data.schoolName || '')}</span>`
@@ -781,7 +900,6 @@
           renderWizard();
         });
 
-        // If already signed in (e.g., came back), skip the auth UI
         if (currentUser) {
           const block = document.getElementById('wz-auth');
           block.innerHTML = `
@@ -793,8 +911,7 @@
             <button id="wz-finish" class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60">Finish</button>
           `;
           document.getElementById('wz-finish').addEventListener('click', () => finalizeTeacherSignup(w));
-          refreshIcons();
-          return;
+          refreshIcons(); return;
         }
 
         const block = document.getElementById('wz-auth');
@@ -802,11 +919,10 @@
           submitLabel: 'Create Account',
           onAuthed: (user) => finalizeTeacherSignup(w, user)
         });
-        refreshIcons();
-        return;
+        refreshIcons(); return;
       }
 
-      // ── STUDENT SCHOOL ──
+      // STUDENT SCHOOL
       if (w.step === 'student-school') {
         render(shell(`
           ${backBtn()}
@@ -858,11 +974,10 @@
           w.step = 'student-form';
           renderWizard();
         });
-        refreshIcons();
-        return;
+        refreshIcons(); return;
       }
 
-      // ── STUDENT FORM ──
+      // STUDENT FORM
       if (w.step === 'student-form') {
         const school = w.data.school;
         render(shell(`
@@ -935,19 +1050,16 @@
             err.classList.remove('hidden');
           }
         });
-        refreshIcons();
-        return;
+        refreshIcons(); return;
       }
 
       signupWizard = { role: null, mode: null, step: 'role', data: {} };
       renderWizard();
     }
 
-    // Executes the final writes for teacher signup once auth is confirmed
     async function finalizeTeacherSignup(w, user = null) {
       const u = user || currentUser;
       if (!u) { alert('Not signed in. Please retry.'); signupWizard = null; renderWizard(); return; }
-
       const btn = document.getElementById('wz-finish');
       if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
@@ -957,8 +1069,7 @@
           const existing = await getDoc(doc(db, 'tenants', slug, 'users', u.uid));
           if (!existing.exists()) {
             await setDoc(doc(db, 'tenants', slug, 'users', u.uid), {
-              userId: u.uid,
-              role: 'teacher',
+              userId: u.uid, role: 'teacher',
               email: u.email || '',
               displayName: u.displayName || (u.email ? u.email.split('@')[0] : 'Teacher'),
               photoURL: u.photoURL || null,
@@ -975,15 +1086,13 @@
             alert('That URL was taken by someone else while you were signing up. Try a different one.');
             signupWizard.data.tenantSlug = null;
             signupWizard.step = 'teacher-personal-name';
-            renderWizard();
-            return;
+            renderWizard(); return;
           }
           await setDoc(doc(db, 'tenants', slug), {
             type: 'personal', name, slug, ownerUid: u.uid, createdAt: serverTimestamp()
           });
           await setDoc(doc(db, 'tenants', slug, 'users', u.uid), {
-            userId: u.uid,
-            role: 'admin',
+            userId: u.uid, role: 'admin',
             email: u.email || '',
             displayName: u.displayName || (u.email ? u.email.split('@')[0] : 'Teacher'),
             photoURL: u.photoURL || null,
@@ -1001,7 +1110,7 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // 🖼️ PENDING / REJECTED
+    // PENDING / REJECTED
     // ═══════════════════════════════════════════════════════════════════
     function viewPending(slug, tenant) {
       render(`
@@ -1040,6 +1149,8 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // DISTRICT
+    // ═══════════════════════════════════════════════════════════════════
     async function viewDistrict(districtId) {
       const dSnap = await getDoc(doc(db, 'districts', districtId));
       if (!dSnap.exists()) return viewNotFound();
@@ -1063,6 +1174,8 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // TENANT ROUTING
+    // ═══════════════════════════════════════════════════════════════════
     async function viewTenant(slug, segs) {
       render(`<div class="min-h-screen flex items-center justify-center text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i></div>`);
       const tenant = await getTenant(slug);
@@ -1079,6 +1192,7 @@
 
       const sub = segs[0] || 'dashboard';
       if (sub === 'pending') return viewPending(slug, tenant);
+      if (sub === 'rejected') return viewRejected(slug, tenant);
       if (sub === 'admin') return viewAdminStub(slug, tenant, roleInfo);
       if (sub === 'students') return viewStudents(slug, tenant, roleInfo);
       if (sub === 'course' && segs[1]) {
@@ -1154,6 +1268,8 @@
       });
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // DASHBOARD
     // ═══════════════════════════════════════════════════════════════════
     function viewDashboard(slug, tenant, roleInfo) {
       const isRealTeacher = roleInfo.role === 'teacher' || roleInfo.role === 'admin';
@@ -1323,6 +1439,8 @@
       setTimeout(() => ov.querySelector('#course-title').focus(), 50);
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // STUDENTS
     // ═══════════════════════════════════════════════════════════════════
     function viewStudents(slug, tenant, roleInfo) {
       if (roleInfo.role !== 'teacher' && roleInfo.role !== 'admin') return viewNotFound();
@@ -1495,6 +1613,8 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // COURSE ROSTER
+    // ═══════════════════════════════════════════════════════════════════
     async function viewCourseRoster(slug, tenant, roleInfo, courseId) {
       if (roleInfo.role !== 'teacher' && roleInfo.role !== 'admin') return viewNotFound();
       const cSnap = await getDoc(doc(db, 'tenants', slug, 'courses', courseId));
@@ -1589,6 +1709,8 @@
       });
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // COURSE
     // ═══════════════════════════════════════════════════════════════════
     async function viewCourse(slug, tenant, roleInfo, courseId) {
       const cSnap = await getDoc(doc(db, 'tenants', slug, 'courses', courseId));
@@ -1789,6 +1911,8 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // ITEM
+    // ═══════════════════════════════════════════════════════════════════
     async function viewItem(slug, tenant, roleInfo, courseId, moduleId, itemId) {
       render(`<div class="min-h-screen flex items-center justify-center text-gray-500"><i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i></div>`);
       const [cSnap, iSnap] = await Promise.all([
@@ -1858,6 +1982,8 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // SIDEBAR
+    // ═══════════════════════════════════════════════════════════════════
     function renderSidebar(slug, tenant, roleInfo, active, course = null) {
       const isRealTeacher = roleInfo.role === 'teacher' || roleInfo.role === 'admin';
       const isAdmin = roleInfo.role === 'admin';
@@ -1870,7 +1996,7 @@
         return `<a href="${buildUrl(href)}" class="flex items-center gap-3 px-3 py-2 text-sm ${isActive ? 'text-white bg-white/[0.05] border-l-2 border-[#F59E0B] rounded-r' : 'text-gray-400 hover:text-white hover:bg-white/[0.03] border-l-2 border-transparent rounded-r'} transition-all"><i data-lucide="${icon}" class="w-4 h-4 ${isActive ? 'text-[#F59E0B]' : ''}"></i> ${label}</a>`;
       };
       return `<aside class="w-64 bg-[#050505] border-r border-white/[0.08] p-6 flex flex-col h-screen shrink-0">
-        <h1 class="font-serif text-xl mb-8"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></h1>
+        <a href="${buildUrl('/')}" class="font-serif text-xl mb-8 block"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></a>
         <div class="text-[10px] text-gray-500 uppercase tracking-widest mb-2">${course ? 'Course' : (isPersonal ? 'Classroom' : 'School')}</div>
         <p class="text-white text-sm mb-8 truncate">${escapeHtml(course ? course.title : tenant.name)}</p>
         <nav class="space-y-1">
@@ -1901,6 +2027,8 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // RENDER
+    // ═══════════════════════════════════════════════════════════════════
     async function renderRoute() {
       if (!authReady) return;
       clearSubs();
@@ -1928,10 +2056,18 @@
       authReady = true;
       if (suppressAuthRouting) return;
       const route = parseRoute();
-      if (user && ['landing','login'].includes(route.type)) {
-        const dest = await resolveDestinationForUser(user);
-        if (dest !== '/' + route.type) { navigate(dest); return; }
+
+      // Only auto-redirect from the landing page — never from /login or /signup.
+      if (user && route.type === 'landing') {
+        try {
+          const dest = await resolveDestinationForUser(user);
+          if (dest && dest !== '/signup' && dest !== '/login' && dest !== '/') {
+            navigate(dest);
+            return;
+          }
+        } catch (e) { console.warn('Redirect check failed', e); }
       }
+
       renderRoute();
     });
   </script>
