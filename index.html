@@ -582,30 +582,46 @@
     // ═══════════════════════════════════════════════════════════════
     // SIGNUP
     // ═══════════════════════════════════════════════════════════════
-    function viewSignup() {
+    async function viewSignup() {
       if (currentUser) {
-        render(`
-          <div class="min-h-screen flex items-center justify-center px-6 relative overflow-hidden">
-            <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[600px] rounded-full bg-[#F59E0B]/10 blur-[140px] pointer-events-none"></div>
-            <div class="max-w-md w-full text-center z-10">
-              <a href="${buildUrl('/')}" class="font-serif text-3xl block mb-8"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></a>
-              <div class="p-6 bg-[#141414] border border-white/[0.08] rounded-xl">
-                <p class="text-[10px] text-[#F59E0B] uppercase tracking-wider mb-2">Already signed in</p>
-                <p class="text-sm text-white mb-6 truncate">${escapeHtml(currentUser.email || currentUser.displayName || '')}</p>
-                <div class="space-y-2">
-                  <button id="su-goto" class="w-full py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">Go to my account</button>
-                  <button id="su-signout" class="w-full py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Sign out & switch account</button>
+        let dest = null;
+        try { dest = await resolveDestinationForUser(currentUser); } catch(e) { console.warn('dest check failed', e); }
+        const hasHome = dest && dest !== '/signup' && dest !== '/login';
+
+        if (hasHome) {
+          render(`
+            <div class="min-h-screen flex items-center justify-center px-6 relative overflow-hidden">
+              <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[600px] rounded-full bg-[#F59E0B]/10 blur-[140px] pointer-events-none"></div>
+              <div class="max-w-md w-full text-center z-10">
+                <a href="${buildUrl('/')}" class="font-serif text-3xl block mb-8"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></a>
+                <div class="p-6 bg-[#141414] border border-white/[0.08] rounded-xl">
+                  <p class="text-[10px] text-[#F59E0B] uppercase tracking-wider mb-2">Already signed in</p>
+                  <p class="text-sm text-white mb-6 truncate">${escapeHtml(currentUser.email || currentUser.displayName || '')}</p>
+                  <div class="space-y-2">
+                    <button id="su-goto" class="w-full py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">Go to my account</button>
+                    <button id="su-signout" class="w-full py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Sign out & switch account</button>
+                  </div>
                 </div>
+                <p class="text-xs text-gray-600 mt-6"><a href="${buildUrl('/login')}" class="hover:text-gray-400">← Back to sign in</a></p>
               </div>
-              <p class="text-xs text-gray-600 mt-6"><a href="${buildUrl('/login')}" class="hover:text-gray-400">← Back to sign in</a></p>
-            </div>
-          </div>`);
-        document.getElementById('su-goto').addEventListener('click', async () => {
-          const dest = await resolveDestinationForUser(currentUser);
-          if (dest && dest !== '/signup' && dest !== '/login') navigate(dest);
-          else navigate('/signup');
-        });
-        document.getElementById('su-signout').addEventListener('click', () => signOut(auth));
+            </div>`);
+          document.getElementById('su-goto').addEventListener('click', () => navigate(dest));
+          document.getElementById('su-signout').addEventListener('click', () => signOut(auth));
+          return;
+        }
+
+        if (!signupWizard) signupWizard = { role: null, mode: null, step: 'role', data: {} };
+        renderWizard();
+        setTimeout(() => {
+          const shell = document.querySelector('.max-w-md');
+          if (shell && !document.getElementById('signed-in-note')) {
+            const note = document.createElement('div');
+            note.id = 'signed-in-note';
+            note.className = 'mb-4 p-3 bg-[#F59E0B]/10 border border-[#F59E0B]/20 rounded-lg text-xs text-gray-300';
+            note.innerHTML = `Signed in as <span class="text-white">${escapeHtml(currentUser.email || currentUser.displayName || '')}</span>. Continue below to finish setting up your account.`;
+            shell.prepend(note);
+          }
+        }, 30);
         return;
       }
       if (!signupWizard) signupWizard = { role: null, mode: null, step: 'role', data: {} };
@@ -1583,7 +1599,7 @@
 
     function openPlanEditor(slug, existingPlan = null) {
       const isEdit = !!existingPlan;
-      const plan = existingPlan || { title: '', week: currentISOWeek(), subject: '', courseId: '', content: '', status: 'draft' };
+      const plan = existingPlan || { title: '', week: currentISOWeek(), subject: '', content: '', status: 'draft' };
       const ov = document.createElement('div');
       ov.className = 'fixed inset-0 z-50 flex items-start justify-center bg-black/60 modal-overlay px-6 py-10 overflow-y-auto';
       ov.innerHTML = `
@@ -1798,7 +1814,7 @@
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // ANNOUNCEMENTS (simple per-tenant feed)
+    // ANNOUNCEMENTS
     // ═══════════════════════════════════════════════════════════════
     async function viewAnnouncements(slug, tenant, roleInfo) {
       const isTeacher = roleInfo.role === 'teacher' || roleInfo.role === 'admin';
@@ -1904,7 +1920,7 @@
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // ADMIN OVERVIEW / STUB / TEACHERS / COURSES
+    // ADMIN OVERVIEW / STUBS
     // ═══════════════════════════════════════════════════════════════
     async function viewAdminOverview(slug, tenant, roleInfo) {
       if (roleInfo.role !== 'admin') return viewNotFound();
@@ -2309,7 +2325,7 @@
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // DASHBOARD / COURSE / MODULE / ITEM (condensed)
+    // DASHBOARD / COURSE / MODULE / ITEM
     // ═══════════════════════════════════════════════════════════════
     function viewDashboard(slug, tenant, roleInfo) {
       const isRealTeacher = roleInfo.role === 'teacher' || roleInfo.role === 'admin';
@@ -2851,7 +2867,7 @@
         switch (route.type) {
           case 'landing': viewLanding(); break;
           case 'login':   viewLogin(); break;
-          case 'signup':  viewSignup(); break;
+          case 'signup':  await viewSignup(); break;
           case 'district': await viewDistrict(route.segments[0], route.segments.slice(1)); break;
           case 'tenant':  await viewTenant(route.tenant, route.segments); break;
           default:        viewNotFound();
