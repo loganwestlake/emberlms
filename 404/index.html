@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Redirecting…</title>
+  <script>
+    // Save the full URL the user was trying to reach
+    const fullPath = window.location.pathname + window.location.search + window.location.hash;
+    sessionStorage.setItem('ember_redirect_path', fullPath);
+
+    // Redirect to the app shell.
+    // ─────────────────────────────────────────────────────────
+    // If you deploy to github.io/emberlms/, change to: '/emberlms/index.html'
+    // If you use a custom domain (emberlms.com), keep as: '/index.html'
+    // ─────────────────────────────────────────────────────────
+    window.location.replace('/index.html');
+  </script>
+</head>
+<body style="background:#0A0A0A;"></body>
+</html>
