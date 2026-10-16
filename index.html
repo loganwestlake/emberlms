@@ -327,12 +327,11 @@
     // ═══════════════════════════════════════════════════════════════
     // LOGIN
     // ═══════════════════════════════════════════════════════════════
-        function viewLogin() {
+    function viewLogin() {
       const params = new URLSearchParams(window.location.search);
       let mode = params.get('as') === 'student' ? 'student' : 'staff';
       const preselectFromUrl = params.get('school');
 
-      // These live OUTSIDE renderLogin so they survive re-renders.
       let preselected = null;
       let preselectedLoaded = false;
 
@@ -385,7 +384,6 @@
           const url = new URL(window.location.href);
           url.searchParams.set('as', mode);
           window.history.replaceState(null, '', url.toString());
-          // Clear selection when switching modes to avoid stale state
           if (mode !== 'student') { preselected = null; preselectedLoaded = false; }
           renderLogin();
         }));
@@ -459,7 +457,6 @@
         }
 
         // ── STUDENT ──
-        // Load preselect from URL once (not on every render)
         if (preselectFromUrl && !preselectedLoaded) {
           preselectedLoaded = true;
           preselected = { slug: preselectFromUrl, name: preselectFromUrl };
@@ -498,7 +495,6 @@
         searchEl.addEventListener('input', () => {
           clearTimeout(st);
           const q = searchEl.value.trim();
-          // Only clear the selection if the user is actually typing something different
           if (preselected && q !== preselected.name) preselected = null;
           if (q.length < 2) { resultsEl.classList.add('hidden'); return; }
           st = setTimeout(async () => {
@@ -515,18 +511,14 @@
                   </button>`).join('');
               }
               resultsEl.classList.remove('hidden');
-              // Use mousedown to beat the input's blur
               resultsEl.querySelectorAll('[data-slug]').forEach(b => {
-                b.addEventListener('mousedown', (ev) => {
+                const pick = (ev) => {
                   ev.preventDefault();
                   preselected = { slug: b.dataset.slug, name: b.dataset.name };
                   renderLogin();
-                });
-                b.addEventListener('click', (ev) => {
-                  ev.preventDefault();
-                  preselected = { slug: b.dataset.slug, name: b.dataset.name };
-                  renderLogin();
-                });
+                };
+                b.addEventListener('mousedown', pick);
+                b.addEventListener('click', pick);
               });
             } catch(e) { console.error(e); }
           }, 200);
@@ -535,7 +527,7 @@
         const clearBtn = document.getElementById('clear-school');
         if (clearBtn) clearBtn.addEventListener('click', () => {
           preselected = null;
-          preselectedLoaded = true; // prevent async re-load
+          preselectedLoaded = true;
           renderLogin();
         });
 
@@ -544,7 +536,7 @@
           const btn = document.getElementById('student-login-btn');
           const showErr = m => { err.textContent = m; err.classList.remove('hidden'); };
           err.classList.add('hidden');
-             if (!preselected) return showErr('Please select your school.');
+          if (!preselected) return showErr('Please select your school.');
           const rawU = document.getElementById('student-username').value.trim();
           const u = rawU.toLowerCase().replace(/\s+/g, '_');
           const p = document.getElementById('student-password').value;
@@ -573,6 +565,481 @@
 
       renderLogin();
     }
+
+    async function handleStaffGoogleSignIn() {
+      try {
+        suppressAuthRouting = true;
+        const cred = await signInWithPopup(auth, new GoogleAuthProvider());
+        const dest = await resolveDestinationForUser(cred.user);
+        suppressAuthRouting = false;
+        if (dest) navigate(dest);
+        else navigate('/signup');
+      } catch (e) {
+        suppressAuthRouting = false;
+        console.error(e);
+        if (['auth/popup-closed-by-user','auth/cancelled-popup-request'].includes(e.code)) return;
+        alert('Sign-in failed: ' + e.message);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // SIGNUP
+    // ═══════════════════════════════════════════════════════════════
+    function viewSignup() {
+      if (currentUser) {
+        render(`
+          <div class="min-h-screen flex items-center justify-center px-6 relative overflow-hidden">
+            <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[600px] rounded-full bg-[#F59E0B]/10 blur-[140px] pointer-events-none"></div>
+            <div class="max-w-md w-full text-center z-10">
+              <a href="${buildUrl('/')}" class="font-serif text-3xl block mb-8"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></a>
+              <div class="p-6 bg-[#141414] border border-white/[0.08] rounded-xl">
+                <p class="text-[10px] text-[#F59E0B] uppercase tracking-wider mb-2">Already signed in</p>
+                <p class="text-sm text-white mb-6 truncate">${escapeHtml(currentUser.email || currentUser.displayName || '')}</p>
+                <div class="space-y-2">
+                  <button id="su-goto" class="w-full py-2.5 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white text-sm font-medium rounded-lg hover:brightness-110 transition-all">Go to my account</button>
+                  <button id="su-signout" class="w-full py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all">Sign out & switch account</button>
+                </div>
+              </div>
+              <p class="text-xs text-gray-600 mt-6"><a href="${buildUrl('/login')}" class="hover:text-gray-400">← Back to sign in</a></p>
+            </div>
+          </div>`);
+        document.getElementById('su-goto').addEventListener('click', async () => {
+          const dest = await resolveDestinationForUser(currentUser);
+          if (dest && dest !== '/signup' && dest !== '/login') navigate(dest);
+          else navigate('/signup');
+        });
+        document.getElementById('su-signout').addEventListener('click', () => signOut(auth));
+        return;
+      }
+      if (!signupWizard) signupWizard = { role: null, mode: null, step: 'role', data: {} };
+      renderWizard();
+    }
+
+    function renderAuthBlock(container, { submitLabel = 'Continue', onAuthed }) {
+      container.innerHTML = `
+        <button data-google-btn class="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-medium py-3 px-4 rounded-lg hover:bg-gray-100 transition-all">
+          <svg class="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+          Continue with Google
+        </button>
+        <div class="flex items-center gap-4 my-6">
+          <div class="flex-1 h-px bg-white/[0.08]"></div>
+          <span class="text-xs text-gray-500 uppercase tracking-wider">or</span>
+          <div class="flex-1 h-px bg-white/[0.08]"></div>
+        </div>
+        <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Email</label>
+        <input data-email type="email" autocomplete="email" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
+        <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Password</label>
+        <input data-pass type="password" autocomplete="new-password" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
+        <p data-err class="text-red-400 text-sm mb-4 hidden"></p>
+        <button data-submit class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60">${escapeHtml(submitLabel)}</button>`;
+      const errEl = container.querySelector('[data-err]');
+      const btn = container.querySelector('[data-submit]');
+      const emailEl = container.querySelector('[data-email]');
+      const passEl = container.querySelector('[data-pass]');
+      const showErr = m => { errEl.textContent = m; errEl.classList.remove('hidden'); };
+      container.querySelector('[data-google-btn]').addEventListener('click', async () => {
+        try {
+          suppressAuthRouting = true;
+          const cred = await signInWithPopup(auth, new GoogleAuthProvider());
+          suppressAuthRouting = false;
+          onAuthed(cred.user);
+        } catch (e) {
+          suppressAuthRouting = false;
+          if (['auth/popup-closed-by-user','auth/cancelled-popup-request'].includes(e.code)) return;
+          showErr('Google sign-in failed: ' + e.message);
+        }
+      });
+      const submit = async () => {
+        errEl.classList.add('hidden');
+        const email = emailEl.value.trim();
+        const password = passEl.value;
+        if (!isValidEmail(email)) return showErr('Enter a valid email address.');
+        if (password.length < 6) return showErr('Password must be at least 6 characters.');
+        btn.disabled = true; btn.textContent = 'Creating account…';
+        try {
+          if (auth.currentUser) { try { await signOut(auth); } catch(e) {} }
+          suppressAuthRouting = true;
+          const cred = await createUserWithEmailAndPassword(auth, email, password);
+          suppressAuthRouting = false;
+          onAuthed(cred.user);
+        } catch (e) {
+          suppressAuthRouting = false;
+          console.error(e); btn.disabled = false; btn.textContent = submitLabel;
+          if (e.code === 'auth/email-already-in-use') showErr('That email is already in use. Try signing in instead.');
+          else if (e.code === 'auth/weak-password') showErr('Password is too weak.');
+          else showErr('Failed: ' + (e.message || e.code));
+        }
+      };
+      btn.addEventListener('click', submit);
+      passEl.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+    }
+
+    function renderWizard() {
+      const w = signupWizard;
+      const shell = (content) => `
+        <div class="min-h-screen flex">
+          <div class="hidden lg:flex w-1/2 bg-[#050505] relative overflow-hidden border-r border-white/[0.08]">
+            <div class="absolute bottom-0 left-0 w-[600px] h-[600px] rounded-full bg-[#F59E0B]/10 blur-[120px] pointer-events-none"></div>
+            <div class="relative z-10 flex flex-col justify-between p-16 w-full">
+              <a href="${buildUrl('/')}" class="font-serif text-2xl"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></a>
+              <div>
+                <p class="text-xs text-[#F59E0B] uppercase tracking-widest mb-4">Get started</p>
+                <h1 class="font-serif text-5xl text-white leading-tight mb-4">Begin your<br><span class="italic text-[#F59E0B]">journey.</span></h1>
+                <p class="text-gray-500 text-base max-w-md">A free account. Yours in seconds.</p>
+              </div>
+              <div class="text-xs text-gray-700">© ${new Date().getFullYear()} Ember LMS</div>
+            </div>
+          </div>
+          <div class="w-full lg:w-1/2 flex items-center justify-center px-6 py-12 bg-[#0A0A0A] overflow-y-auto">
+            <div class="max-w-md w-full py-8">
+              <div class="lg:hidden mb-8 text-center"><a href="${buildUrl('/')}" class="font-serif text-2xl"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></a></div>
+              ${content}
+              <p class="text-xs text-gray-600 mt-8 text-center">Already have an account? <a href="${buildUrl('/login')}" class="text-[#F59E0B] hover:underline">Sign in</a></p>
+            </div>
+          </div>
+        </div>`;
+      const backBtn = (label = 'Back') => `<button data-back class="text-xs text-gray-500 hover:text-white transition-all inline-flex items-center gap-1 mb-6"><i data-lucide="arrow-left" class="w-3 h-3"></i> ${label}</button>`;
+
+      if (w.step === 'role') {
+        render(shell(`
+          <h2 class="font-serif text-3xl text-white mb-1">Create your account</h2>
+          <p class="text-gray-500 text-sm mb-8">Tell us who you are to get started.</p>
+          <div class="space-y-3">
+            <button data-role="teacher" class="w-full flex items-center gap-4 p-5 bg-[#141414] border border-white/[0.08] rounded-xl hover:border-[#F59E0B]/40 transition-all text-left group">
+              <div class="w-12 h-12 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0"><i data-lucide="graduation-cap" class="w-6 h-6 text-[#F59E0B]"></i></div>
+              <div class="flex-1 min-w-0"><div class="font-serif text-lg text-white">I'm a Teacher</div><div class="text-xs text-gray-500">Join your school or teach independently</div></div>
+              <i data-lucide="arrow-right" class="w-4 h-4 text-gray-600 group-hover:text-[#F59E0B] transition-colors"></i>
+            </button>
+            <button data-role="student" class="w-full flex items-center gap-4 p-5 bg-[#141414] border border-white/[0.08] rounded-xl hover:border-[#F59E0B]/40 transition-all text-left group">
+              <div class="w-12 h-12 rounded-lg bg-[#8B5CF6]/10 border border-[#8B5CF6]/20 flex items-center justify-center shrink-0"><i data-lucide="user" class="w-6 h-6 text-[#8B5CF6]"></i></div>
+              <div class="flex-1 min-w-0"><div class="font-serif text-lg text-white">I'm a Student</div><div class="text-xs text-gray-500">Join your school with approval</div></div>
+              <i data-lucide="arrow-right" class="w-4 h-4 text-gray-600 group-hover:text-[#F59E0B] transition-colors"></i>
+            </button>
+          </div>
+          <div class="mt-6 p-4 bg-white/[0.02] border border-white/[0.06] rounded-lg"><p class="text-xs text-gray-500 leading-relaxed">Students and teachers cannot create schools. Only school administrators can.</p></div>
+        `));
+        document.querySelectorAll('[data-role]').forEach(b => b.addEventListener('click', () => {
+          w.role = b.dataset.role;
+          w.step = w.role === 'teacher' ? 'teacher-mode' : 'student-school';
+          renderWizard();
+        }));
+        refreshIcons(); return;
+      }
+
+      if (w.step === 'teacher-mode') {
+        render(shell(`
+          ${backBtn()}
+          <h2 class="font-serif text-3xl text-white mb-1">How do you teach?</h2>
+          <p class="text-gray-500 text-sm mb-8">Pick the path that fits you best.</p>
+          <div class="space-y-3">
+            <button data-mode="join" class="w-full flex items-center gap-4 p-5 bg-[#141414] border border-white/[0.08] rounded-xl hover:border-[#F59E0B]/40 transition-all text-left group">
+              <div class="w-12 h-12 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0"><i data-lucide="building-2" class="w-6 h-6 text-[#F59E0B]"></i></div>
+              <div class="flex-1 min-w-0"><div class="font-serif text-lg text-white">Join my school</div><div class="text-xs text-gray-500">Enter the join code from your admin</div></div>
+              <i data-lucide="arrow-right" class="w-4 h-4 text-gray-600 group-hover:text-[#F59E0B] transition-colors"></i>
+            </button>
+            <button data-mode="personal" class="w-full flex items-center gap-4 p-5 bg-[#141414] border border-white/[0.08] rounded-xl hover:border-[#F59E0B]/40 transition-all text-left group">
+              <div class="w-12 h-12 rounded-lg bg-[#8B5CF6]/10 border border-[#8B5CF6]/20 flex items-center justify-center shrink-0"><i data-lucide="sparkles" class="w-6 h-6 text-[#8B5CF6]"></i></div>
+              <div class="flex-1 min-w-0"><div class="font-serif text-lg text-white">Teach independently</div><div class="text-xs text-gray-500">Personal classroom with your own URL</div></div>
+              <i data-lucide="arrow-right" class="w-4 h-4 text-gray-600 group-hover:text-[#F59E0B] transition-colors"></i>
+            </button>
+          </div>
+        `));
+        document.querySelector('[data-back]').addEventListener('click', () => { w.step = 'role'; renderWizard(); });
+        document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => {
+          w.mode = b.dataset.mode;
+          w.step = w.mode === 'join' ? 'teacher-join' : 'teacher-personal-name';
+          renderWizard();
+        }));
+        refreshIcons(); return;
+      }
+
+      if (w.step === 'teacher-join') {
+        render(shell(`
+          ${backBtn()}
+          <h2 class="font-serif text-3xl text-white mb-1">Join your school</h2>
+          <p class="text-gray-500 text-sm mb-8">Enter the join code your admin shared with you.</p>
+          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Join Code</label>
+          <input id="wz-joincode" type="text" placeholder="X7B9Q2" autocomplete="off" maxlength="6" style="text-transform:uppercase;letter-spacing:0.2em;font-family:monospace"
+            class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all text-center text-lg" />
+          <p id="wz-error" class="text-red-400 text-sm mb-4 hidden"></p>
+          <button id="wz-join-continue" class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60">Continue</button>
+        `));
+        document.querySelector('[data-back]').addEventListener('click', () => { w.step = 'teacher-mode'; renderWizard(); });
+        const input = document.getElementById('wz-joincode');
+        input.addEventListener('input', () => { input.value = input.value.toUpperCase().slice(0, 6); });
+        setTimeout(() => input.focus(), 50);
+        document.getElementById('wz-join-continue').addEventListener('click', async () => {
+          const code = input.value.trim().toUpperCase();
+          const errEl = document.getElementById('wz-error');
+          const btn = document.getElementById('wz-join-continue');
+          errEl.classList.add('hidden');
+          if (code.length !== 6) { errEl.textContent = 'Join code must be 6 characters.'; errEl.classList.remove('hidden'); return; }
+          btn.disabled = true; btn.textContent = 'Looking up…';
+          try {
+            const snap = await getDocs(query(collection(db, 'tenants'), where('joinCode', '==', code), limit(1)));
+            if (snap.empty) { btn.disabled = false; btn.textContent = 'Continue'; errEl.textContent = 'No school found with that code.'; errEl.classList.remove('hidden'); return; }
+            w.data.schoolSlug = snap.docs[0].id;
+            w.data.schoolName = snap.docs[0].data().name;
+            w.step = 'teacher-auth';
+            renderWizard();
+          } catch (e) {
+            console.error(e); btn.disabled = false; btn.textContent = 'Continue';
+            errEl.textContent = 'Failed: ' + (e.message || e.code); errEl.classList.remove('hidden');
+          }
+        });
+        refreshIcons(); return;
+      }
+
+      if (w.step === 'teacher-personal-name') {
+        render(shell(`
+          ${backBtn()}
+          <h2 class="font-serif text-3xl text-white mb-1">Name your space</h2>
+          <p class="text-gray-500 text-sm mb-8">Give your classroom a name and a URL.</p>
+          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Classroom Name</label>
+          <input id="wz-name" type="text" placeholder="Mr. Smith's Classroom" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
+          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Personal URL</label>
+          <div class="flex items-center bg-white/[0.03] border border-white/10 rounded-lg mb-4 focus-within:border-[#8B5CF6] transition-all">
+            <span class="text-gray-500 text-xs pl-4 select-none">/${escapeHtml(BASE_PATH.replace(/^\//, ''))}/</span>
+            <input id="wz-slug" type="text" placeholder="mr-smith" autocomplete="off" class="flex-1 bg-transparent px-2 py-3 text-white focus:outline-none" />
+          </div>
+          <p id="wz-error" class="text-red-400 text-sm mb-4 hidden"></p>
+          <button id="wz-next" class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg hover:brightness-110 transition-all">Continue</button>
+        `));
+        document.querySelector('[data-back]').addEventListener('click', () => { w.step = 'teacher-mode'; renderWizard(); });
+        const nameEl = document.getElementById('wz-name');
+        const slugEl = document.getElementById('wz-slug');
+        nameEl.addEventListener('input', () => { if (!slugEl.dataset.touched) slugEl.value = slugify(nameEl.value); });
+        slugEl.addEventListener('input', () => { slugEl.dataset.touched = '1'; });
+        setTimeout(() => nameEl.focus(), 50);
+        document.getElementById('wz-next').addEventListener('click', async () => {
+          const name = nameEl.value.trim();
+          const slug = slugEl.value.trim().toLowerCase();
+          const err = document.getElementById('wz-error');
+          const btn = document.getElementById('wz-next');
+          err.classList.add('hidden');
+          if (!name) { err.textContent = 'Enter a name.'; err.classList.remove('hidden'); return; }
+          if (!/^[a-z0-9-]{3,30}$/.test(slug)) { err.textContent = 'URL must be 3–30 chars: lowercase, numbers, hyphens.'; err.classList.remove('hidden'); return; }
+          if (RESERVED.includes(slug)) { err.textContent = 'That URL is reserved.'; err.classList.remove('hidden'); return; }
+          btn.disabled = true; btn.textContent = 'Checking…';
+          try {
+            const ex = await getDoc(doc(db, 'tenants', slug));
+            if (ex.exists()) { btn.disabled = false; btn.textContent = 'Continue'; err.textContent = 'That URL is taken.'; err.classList.remove('hidden'); return; }
+            w.data.tenantName = name;
+            w.data.tenantSlug = slug;
+            w.step = 'teacher-auth';
+            renderWizard();
+          } catch (e) {
+            console.error(e); btn.disabled = false; btn.textContent = 'Continue';
+            err.textContent = 'Failed: ' + e.message; err.classList.remove('hidden');
+          }
+        });
+        refreshIcons(); return;
+      }
+
+      if (w.step === 'teacher-auth') {
+        const isJoin = w.mode === 'join';
+        render(shell(`
+          ${backBtn()}
+          <h2 class="font-serif text-3xl text-white mb-1">${currentUser ? 'Confirm your account' : 'Create your account'}</h2>
+          <p class="text-gray-500 text-sm mb-6">
+            ${isJoin ? `Joining <span class="text-white">${escapeHtml(w.data.schoolName || '')}</span>` : `Creating <span class="text-white">${escapeHtml(w.data.tenantName || '')}</span>`}
+          </p>
+          <div id="wz-auth"></div>
+        `));
+        document.querySelector('[data-back]').addEventListener('click', () => {
+          w.step = isJoin ? 'teacher-join' : 'teacher-personal-name';
+          renderWizard();
+        });
+        if (currentUser) {
+          const block = document.getElementById('wz-auth');
+          block.innerHTML = `
+            <div class="p-4 bg-white/[0.03] border border-white/[0.08] rounded-lg mb-4">
+              <p class="text-xs text-gray-500 mb-1">Signed in as</p>
+              <p class="text-sm text-white">${escapeHtml(currentUser.email || currentUser.displayName || '')}</p>
+            </div>
+            <p id="wz-error" class="text-red-400 text-sm mb-4 hidden"></p>
+            <button id="wz-finish" class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60">Finish</button>
+          `;
+          document.getElementById('wz-finish').addEventListener('click', () => finalizeTeacherSignup(w));
+          refreshIcons(); return;
+        }
+        const block = document.getElementById('wz-auth');
+        renderAuthBlock(block, { submitLabel: 'Create Account', onAuthed: (user) => finalizeTeacherSignup(w, user) });
+        refreshIcons(); return;
+      }
+
+      if (w.step === 'student-school') {
+        render(shell(`
+          ${backBtn()}
+          <h2 class="font-serif text-3xl text-white mb-1">Find your school</h2>
+          <p class="text-gray-500 text-sm mb-8">Search by name or URL.</p>
+          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Your School</label>
+          <div class="relative mb-4">
+            <input id="wz-school-search" type="text" placeholder="Start typing…" autocomplete="off" value="${w.data.school ? escapeHtml(w.data.school.name) : ''}"
+              class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" />
+            <div id="wz-school-results" class="absolute z-30 left-0 right-0 mt-1 bg-[#141414] border border-white/[0.08] rounded-lg overflow-hidden hidden max-h-64 overflow-y-auto shadow-2xl"></div>
+          </div>
+          ${w.data.school ? `<div class="mb-4 p-3 bg-[#F59E0B]/10 border border-[#F59E0B]/20 rounded-lg flex items-center gap-2"><i data-lucide="check-circle-2" class="w-4 h-4 text-[#F59E0B] shrink-0"></i><span class="text-sm text-white">${escapeHtml(w.data.school.name)}</span></div>` : ''}
+          <button id="wz-school-next" class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60" ${w.data.school ? '' : 'disabled'}>Continue</button>
+        `));
+        document.querySelector('[data-back]').addEventListener('click', () => { w.step = 'role'; renderWizard(); });
+        const searchEl = document.getElementById('wz-school-search');
+        const resultsEl = document.getElementById('wz-school-results');
+        let t;
+        searchEl.addEventListener('input', () => {
+          clearTimeout(t);
+          const q = searchEl.value.trim();
+          w.data.school = null;
+          if (q.length < 2) { resultsEl.classList.add('hidden'); return; }
+          t = setTimeout(async () => {
+            try {
+              const results = await searchSchools(q);
+              if (!results.length) resultsEl.innerHTML = `<div class="p-4 text-sm text-gray-500">No schools found.</div>`;
+              else resultsEl.innerHTML = results.map(s => `
+                <button type="button" data-slug="${escapeHtml(s.slug)}" data-name="${escapeHtml(s.name)}"
+                  class="w-full text-left px-4 py-3 hover:bg-white/[0.05] border-b border-white/[0.04] last:border-0 transition-all">
+                  <div class="text-sm text-white">${escapeHtml(s.name)}</div>
+                  <div class="text-xs text-gray-500 font-mono">/${escapeHtml(s.slug)}</div>
+                </button>`).join('');
+              resultsEl.classList.remove('hidden');
+              resultsEl.querySelectorAll('[data-slug]').forEach(b => {
+                const pick = (ev) => {
+                  ev.preventDefault();
+                  w.data.school = { slug: b.dataset.slug, name: b.dataset.name };
+                  renderWizard();
+                };
+                b.addEventListener('mousedown', pick);
+                b.addEventListener('click', pick);
+              });
+            } catch(e) { console.error(e); }
+          }, 200);
+        });
+        const next = document.getElementById('wz-school-next');
+        if (next) next.addEventListener('click', () => { if (w.data.school) { w.step = 'student-form'; renderWizard(); } });
+        refreshIcons(); return;
+      }
+
+      if (w.step === 'student-form') {
+        const school = w.data.school;
+        render(shell(`
+          ${backBtn()}
+          <h2 class="font-serif text-3xl text-white mb-1">Create your login</h2>
+          <p class="text-gray-500 text-sm mb-6">Joining <span class="text-white">${escapeHtml(school.name)}</span></p>
+          <div class="grid grid-cols-2 gap-3 mb-4">
+            <div><label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">First Name</label><input id="wz-first" type="text" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" /></div>
+            <div><label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Last Name</label><input id="wz-last" type="text" autocomplete="off" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white transition-all" /></div>
+          </div>
+          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Username</label>
+          <input id="wz-user" type="text" autocomplete="off" placeholder="auto-generated" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all font-mono text-sm" />
+          <label class="block text-xs uppercase tracking-wider text-gray-500 mb-2">Password</label>
+          <input id="wz-pass" type="password" autocomplete="new-password" class="input-glow w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-3 text-white mb-4 transition-all" />
+          <p id="wz-error" class="text-red-400 text-sm mb-4 hidden"></p>
+          <button id="wz-submit" class="w-full py-3 bg-gradient-to-r from-[#F59E0B] to-[#EA580C] text-white font-medium rounded-lg hover:brightness-110 transition-all disabled:opacity-60">Create Account</button>
+          <p class="text-xs text-gray-500 mt-4 leading-relaxed text-center">Your teacher will need to approve your account before you can access courses.</p>
+        `));
+        document.querySelector('[data-back]').addEventListener('click', () => { w.step = 'student-school'; renderWizard(); });
+        const firstEl = document.getElementById('wz-first');
+        const lastEl = document.getElementById('wz-last');
+        const userEl = document.getElementById('wz-user');
+        const passEl = document.getElementById('wz-pass');
+        const updateUser = async () => {
+          if (userEl.dataset.touched) return;
+          const f = firstEl.value.trim(); const l = lastEl.value.trim();
+          if (!f) return;
+          let existing = [];
+          try { const snap = await getDocs(collection(db, 'tenants', school.slug, 'students')); existing = snap.docs.map(d => d.data().username); } catch(e) {}
+          userEl.value = genUsername(f, l, existing);
+        };
+        firstEl.addEventListener('input', updateUser);
+        lastEl.addEventListener('input', updateUser);
+        userEl.addEventListener('input', () => { userEl.dataset.touched = '1'; });
+        setTimeout(() => firstEl.focus(), 50);
+        document.getElementById('wz-submit').addEventListener('click', async () => {
+          const first = firstEl.value.trim();
+          const last = lastEl.value.trim();
+          const username = userEl.value.trim().toLowerCase();
+          const password = passEl.value;
+          const err = document.getElementById('wz-error');
+          const btn = document.getElementById('wz-submit');
+          err.classList.add('hidden');
+          if (!first) { err.textContent = 'Enter your first name.'; err.classList.remove('hidden'); return; }
+          if (!/^[a-z0-9_.-]{3,20}$/.test(username)) { err.textContent = 'Username must be 3–20 chars: lowercase letters, numbers, dots, dashes, underscores.'; err.classList.remove('hidden'); return; }
+          if (password.length < 6) { err.textContent = 'Password must be at least 6 characters.'; err.classList.remove('hidden'); return; }
+          btn.disabled = true; btn.textContent = 'Creating account…';
+          try {
+            if (auth.currentUser) { await signOut(auth); }
+            suppressAuthRouting = true;
+            const fakeEmail = `${username}@${school.slug}.emberlms.local`;
+            const cred = await createUserWithEmailAndPassword(auth, fakeEmail, password);
+            const uid = cred.user.uid;
+            await setDoc(doc(db, 'tenants', school.slug, 'students', uid), {
+              username, firstName: first, lastName: last,
+              displayName: `${first} ${last}`.trim(),
+              email: fakeEmail, role: 'student', status: 'pending',
+              enrolledCourseIds: [], createdAt: serverTimestamp()
+            });
+            suppressAuthRouting = false;
+            navigate(`/${school.slug}/pending`);
+          } catch (e) {
+            suppressAuthRouting = false;
+            console.error(e); btn.disabled = false; btn.textContent = 'Create Account';
+            if (e.code === 'auth/email-already-in-use') err.textContent = 'That username is already taken at this school.';
+            else err.textContent = 'Failed: ' + (e.message || e.code);
+            err.classList.remove('hidden');
+          }
+        });
+        refreshIcons(); return;
+      }
+
+      signupWizard = { role: null, mode: null, step: 'role', data: {} };
+      renderWizard();
+    }
+
+    async function finalizeTeacherSignup(w, user = null) {
+      const u = user || currentUser;
+      if (!u) { alert('Not signed in.'); signupWizard = null; renderWizard(); return; }
+      const btn = document.getElementById('wz-finish');
+      if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+      try {
+        if (w.mode === 'join') {
+          const slug = w.data.schoolSlug;
+          const existing = await getDoc(doc(db, 'tenants', slug, 'users', u.uid));
+          if (!existing.exists()) {
+            await setDoc(doc(db, 'tenants', slug, 'users', u.uid), {
+              userId: u.uid, role: 'teacher', email: u.email || '',
+              displayName: u.displayName || (u.email ? u.email.split('@')[0] : 'Teacher'),
+              photoURL: u.photoURL || null, createdAt: serverTimestamp()
+            });
+          }
+          signupWizard = null;
+          navigate('/' + slug);
+        } else {
+          const slug = w.data.tenantSlug;
+          const name = w.data.tenantName;
+          const ex = await getDoc(doc(db, 'tenants', slug));
+          if (ex.exists()) {
+            alert('That URL was taken. Try a different one.');
+            signupWizard.data.tenantSlug = null;
+            signupWizard.step = 'teacher-personal-name';
+            renderWizard(); return;
+          }
+          await setDoc(doc(db, 'tenants', slug), { type: 'personal', name, slug, ownerUid: u.uid, createdAt: serverTimestamp() });
+          await setDoc(doc(db, 'tenants', slug, 'users', u.uid), {
+            userId: u.uid, role: 'admin', email: u.email || '',
+            displayName: u.displayName || (u.email ? u.email.split('@')[0] : 'Teacher'),
+            photoURL: u.photoURL || null, createdAt: serverTimestamp()
+          });
+          signupWizard = null;
+          navigate('/' + slug);
+        }
+      } catch (e) {
+        console.error(e);
+        const errEl = document.getElementById('wz-error');
+        if (errEl) { errEl.textContent = 'Failed: ' + (e.message || e.code); errEl.classList.remove('hidden'); }
+        if (btn) { btn.disabled = false; btn.textContent = 'Finish'; }
+      }
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // PENDING / REJECTED
     // ═══════════════════════════════════════════════════════════════
@@ -668,11 +1135,9 @@
       </aside>`;
     }
 
-    // Fetch all schools in a district + aggregate counts
     async function getDistrictSchools(districtId) {
       const snap = await getDocs(query(collection(db, 'tenants'), where('districtId', '==', districtId)));
       const schools = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      // Fetch counts per school in parallel
       await Promise.all(schools.map(async (s) => {
         try {
           const [teachersSnap, studentsSnap, coursesSnap] = await Promise.all([
@@ -888,8 +1353,7 @@
             const snap = await getDocs(collection(db, 'tenants', s.id, 'users'));
             snap.docs.forEach(d => {
               allTeachers.push({
-                uid: d.id,
-                ...d.data(),
+                uid: d.id, ...d.data(),
                 _schoolId: s.id,
                 _schoolName: s.name || s.id
               });
@@ -1001,17 +1465,14 @@
         </div>`;
       document.body.appendChild(ov);
       refreshIcons();
-
       const nameEl = ov.querySelector('#school-name');
       const slugEl = ov.querySelector('#school-slug');
       nameEl.addEventListener('input', () => { if (!slugEl.dataset.touched) slugEl.value = slugify(nameEl.value); });
       slugEl.addEventListener('input', () => { slugEl.dataset.touched = '1'; });
       setTimeout(() => nameEl.focus(), 50);
-
       const close = () => ov.remove();
       ov.querySelector('#create-cancel').addEventListener('click', close);
       ov.addEventListener('click', e => { if (e.target === ov) close(); });
-
       ov.querySelector('#create-submit').addEventListener('click', async () => {
         const name = nameEl.value.trim();
         const slug = slugEl.value.trim().toLowerCase();
@@ -1026,11 +1487,8 @@
           const ex = await getDoc(doc(db, 'tenants', slug));
           if (ex.exists()) { btn.disabled = false; btn.textContent = 'Create School'; err.textContent = 'That URL is already taken.'; err.classList.remove('hidden'); return; }
           await setDoc(doc(db, 'tenants', slug), {
-            type: 'school', name, slug,
-            districtId,
-            joinCode: genCode(),
-            ownerUid: currentUser.uid,
-            createdAt: serverTimestamp()
+            type: 'school', name, slug, districtId,
+            joinCode: genCode(), ownerUid: currentUser.uid, createdAt: serverTimestamp()
           });
           await setDoc(doc(db, 'tenants', slug, 'users', currentUser.uid), {
             userId: currentUser.uid, role: 'admin',
@@ -1047,6 +1505,7 @@
         }
       });
     }
+
     // ═══════════════════════════════════════════════════════════════
     // TENANT ROUTING
     // ═══════════════════════════════════════════════════════════════
@@ -1155,9 +1614,7 @@
 
           <div class="grid lg:grid-cols-3 gap-4 max-w-5xl">
             <div class="lg:col-span-2 bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
-              <div class="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
-                <h3 class="font-serif text-lg text-white">Quick Actions</h3>
-              </div>
+              <div class="px-5 py-4 border-b border-white/[0.06]"><h3 class="font-serif text-lg text-white">Quick Actions</h3></div>
               <div class="p-5 grid grid-cols-2 gap-3">
                 <a href="${buildUrl('/' + slug + '/admin/teachers')}" class="flex items-center gap-3 p-3 bg-white/[0.02] border border-white/[0.06] rounded-lg hover:bg-white/[0.05] hover:border-[#F59E0B]/30 transition-all group">
                   <div class="w-9 h-9 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center shrink-0"><i data-lucide="user-plus" class="w-4 h-4 text-[#F59E0B]"></i></div>
@@ -1364,16 +1821,13 @@
         <div class="bg-[#141414] border border-white/[0.08] rounded-2xl max-w-md w-full p-8 shadow-2xl">
           <h3 class="font-serif text-2xl text-white mb-1">Invite Teachers</h3>
           <p class="text-gray-500 text-sm mb-6">Share this code with teachers so they can join <span class="text-white">${escapeHtml(tenant.name)}</span>.</p>
-
           <div class="bg-[#0A0A0A] border border-white/[0.08] rounded-xl p-5 mb-6 text-center">
             <p class="text-[10px] uppercase tracking-wider text-gray-500 mb-3">Join Code</p>
             <code id="invite-code" class="text-3xl font-mono text-[#F59E0B] tracking-[0.3em] block">${escapeHtml(tenant.joinCode || '——')}</code>
           </div>
-
           <div class="space-y-2 mb-6">
             <p class="text-xs text-gray-500 leading-relaxed">Teachers visit <span class="text-[#F59E0B]">${escapeHtml(window.location.origin + buildUrl('/signup'))}</span>, choose <span class="text-white">Teacher</span> → <span class="text-white">Join my school</span>, and enter the code above.</p>
           </div>
-
           <div class="flex gap-3">
             <button id="invite-copy" class="flex-1 py-2.5 bg-white/[0.05] border border-white/10 text-white text-sm rounded-lg hover:bg-white/[0.08] transition-all flex items-center justify-center gap-2">
               <i data-lucide="copy" class="w-4 h-4"></i> Copy code
@@ -1440,7 +1894,6 @@
           refreshIcons(); return;
         }
 
-        // Compute enrollment counts per course
         const enrollCounts = {};
         await Promise.all(coursesSnap.docs.map(async d => {
           try {
@@ -1635,7 +2088,7 @@
         const btn = ov.querySelector('#student-create');
         err.classList.add('hidden');
         if (!firstName) { err.textContent = 'Enter a first name.'; err.classList.remove('hidden'); return; }
-        if (!/^[a-z0-9_.-]{3,20}$/.test(username)) { err.textContent = 'Username must be 3–20 chars: lowercase letters, numbers, dots, dashes, underscores.'; err.classList.remove('hidden'); return; }
+        if (!/^[a-z0-9_.-]{3,20}$/.test(username)) { err.textContent = 'Username: 3–20 chars, lowercase letters, numbers, dots, dashes, underscores.'; err.classList.remove('hidden'); return; }
         if (password.length < 6) { err.textContent = 'Password must be at least 6 characters.'; err.classList.remove('hidden'); return; }
         btn.disabled = true; btn.textContent = 'Creating…';
         try {
@@ -2208,13 +2661,11 @@
       const isPersonal = tenant.type === 'personal';
       const name = currentUser.displayName || roleInfo.data.displayName || currentUser.email || 'User';
       const roleLabel = isRealTeacher && viewAsStudent ? 'Student (preview)' : (isAdmin ? 'Admin' : (isRealTeacher ? 'Teacher' : 'Student'));
-
       const item = (href, icon, label, key, soon = false) => {
         const isActive = active === key;
         if (soon) return `<span class="flex items-center gap-3 px-3 py-2 text-sm text-gray-600"><i data-lucide="${icon}" class="w-4 h-4"></i> ${label} <span class="ml-auto text-[10px]">Soon</span></span>`;
         return `<a href="${buildUrl(href)}" class="flex items-center gap-3 px-3 py-2 text-sm ${isActive ? 'text-white bg-white/[0.05] border-l-2 border-[#F59E0B] rounded-r' : 'text-gray-400 hover:text-white hover:bg-white/[0.03] border-l-2 border-transparent rounded-r'} transition-all"><i data-lucide="${icon}" class="w-4 h-4 ${isActive ? 'text-[#F59E0B]' : ''}"></i> ${label}</a>`;
       };
-
       let navContent = '';
       if (course) {
         navContent = `
@@ -2238,7 +2689,6 @@
           ${item('/' + slug, 'layout-dashboard', 'Dashboard', 'dashboard')}
           ${isRealTeacher ? item('/' + slug + '/students', 'users', 'Students', 'students') : ''}`;
       }
-
       return `<aside class="w-64 bg-[#050505] border-r border-white/[0.08] p-6 flex flex-col h-screen shrink-0">
         <a href="${buildUrl('/')}" class="font-serif text-xl mb-8 block"><span class="text-[#F59E0B]">Ember</span> <span class="text-white">LMS</span></a>
         <div class="text-[10px] text-gray-500 uppercase tracking-widest mb-2">${course ? 'Course' : (isPersonal ? 'Classroom' : 'School')}</div>
