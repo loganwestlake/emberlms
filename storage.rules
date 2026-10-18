@@ -1,0 +1,22 @@
+rules_version = '2';
+
+// Firebase Storage rules for course Files. Deploy with:  firebase deploy --only storage
+// Uses cross-service rules (firestore.exists) to check school/course membership.
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isStaff(t) {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/tenants/$(t)/users/$(request.auth.uid));
+    }
+    function isEnrolled(t, c) {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/tenants/$(t)/courses/$(c)/enrollments/$(request.auth.uid));
+    }
+
+    match /tenants/{t}/courses/{c}/files/{name} {
+      allow read: if isStaff(t) || isEnrolled(t, c);
+      allow create, update: if isStaff(t) && request.resource.size < 50 * 1024 * 1024;
+      allow delete: if isStaff(t);
+    }
+  }
+}

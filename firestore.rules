@@ -1,0 +1,322 @@
+rules_version = '2';
+
+// Security rules for Ember LMS. Deploy with:  firebase deploy --only firestore:rules
+// (or paste into Firebase console → Firestore Database → Rules → Publish)
+//
+// The role checks in index.html only shape the UI — these rules are what actually protect data.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ─────────────────────────────────────────────────────────
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+
+    function tenant(t) { return get(/databases/$(database)/documents/tenants/$(t)).data; }
+    function isStaff(t) { return signedIn() && exists(/databases/$(database)/documents/tenants/$(t)/users/$(me())); }
+    function isAdmin(t) {
+      return isStaff(t) && get(/databases/$(database)/documents/tenants/$(t)/users/$(me())).data.role == 'admin';
+    }
+    function isDistrictAdmin(t) {
+      let d = tenant(t).get('districtId', null);
+      return signedIn() && d != null
+        && me() in get(/databases/$(database)/documents/districts/$(d)).data.get('adminUids', []);
+    }
+    function studentDoc(t) { return get(/databases/$(database)/documents/tenants/$(t)/students/$(me())); }
+    function isStudent(t) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/tenants/$(t)/students/$(me()))
+        && studentDoc(t).data.status == 'approved';
+    }
+    function isEnrolled(t, c) { return isStudent(t) && c in studentDoc(t).data.get('enrolledCourseIds', []); }
+    function canManage(t) { return isStaff(t) || isDistrictAdmin(t); }
+    function canReadCourse(t, c) { return canManage(t) || isEnrolled(t, c); }
+    // SIS: staff capabilities, parents/guardians
+    function hasCap(t, cap) {
+      return isAdmin(t) || (isStaff(t) && cap in get(/databases/$(database)/documents/tenants/$(t)/users/$(me())).data.get('caps', []));
+    }
+    function isGuardian(t) { return signedIn() && exists(/databases/$(database)/documents/tenants/$(t)/guardians/$(me())); }
+    function isGuardianOf(t, sid) { return signedIn() && exists(/databases/$(database)/documents/tenants/$(t)/guardianLinks/$(me() + '_' + sid)); }
+    function isMember(t) { return canManage(t) || isStudent(t) || isGuardian(t); }
+    function canSeeStudent(t, sid) { return canManage(t) || (signedIn() && me() == sid) || isGuardianOf(t, sid); }
+    // Families can read course structure (titles, items, dates) for the calendar and grade views.
+    function canReadCourseContent(t, c) { return canReadCourse(t, c) || isGuardian(t); }
+    function unchanged(fields) { return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields); }
+
+    // ── Districts ───────────────────────────────────────────────────────
+    match /districts/{d} {
+      allow read: if signedIn() && me() in resource.data.get('adminUids', []);
+      allow write: if false; // managed from the Firebase console
+    }
+
+    // ── Per-user routing index (lets the app find your school without collection-group queries)
+    match /userIndex/{uid} {
+      allow read, write: if signedIn() && me() == uid;
+    }
+
+    // ── Family Access codes: get-only (a parent must already know the code), admins create them.
+    match /familyCodes/{code} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if isAdmin(request.resource.data.tenantId);
+      allow delete: if isAdmin(resource.data.tenantId);
+    }
+
+    // ── Teacher join codes: anyone can look up a code they already know, nobody can list them.
+    match /joinCodes/{code} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if isAdmin(request.resource.data.tenantId) || isDistrictAdmin(request.resource.data.tenantId);
+      allow delete: if isAdmin(resource.data.tenantId) || isDistrictAdmin(resource.data.tenantId);
+    }
+
+    // ── Tenants (schools & personal classrooms) ─────────────────────────
+    match /tenants/{t} {
+      // Public: name/type are needed by the student login school picker. Keep secrets out of this doc.
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.ownerUid == me() && (
+        request.resource.data.type == 'personal' ||
+        (request.resource.data.type == 'school'
+          && me() in get(/databases/$(database)/documents/districts/$(request.resource.data.districtId)).data.get('adminUids', []))
+      );
+      allow update: if (isAdmin(t) || isDistrictAdmin(t)) && unchanged(['ownerUid', 'districtId']);
+      allow delete: if false;
+
+      match /private/{docId} {
+        allow read: if isStaff(t) || isDistrictAdmin(t);
+        allow write: if isAdmin(t) || isDistrictAdmin(t);
+      }
+
+      // Staff (teachers & admins)
+      match /users/{uid} {
+        allow read: if canManage(t) || (signedIn() && me() == uid);
+        allow create: if signedIn() && me() == uid && request.resource.data.userId == me() && (
+          // owner of a new classroom/school becomes its admin
+          (request.resource.data.role == 'admin' && tenant(t).ownerUid == me()) ||
+          // teachers must present a valid join code
+          (request.resource.data.role == 'teacher' && (
+            (exists(/databases/$(database)/documents/joinCodes/$(request.resource.data.joinCode))
+              && get(/databases/$(database)/documents/joinCodes/$(request.resource.data.joinCode)).data.tenantId == t) ||
+            tenant(t).get('joinCode', '') == request.resource.data.joinCode   // legacy codes
+          ))
+        );
+        allow update: if isAdmin(t) || isDistrictAdmin(t)
+          || (signedIn() && me() == uid && (unchanged(['role']) || tenant(t).ownerUid == me()));
+        allow delete: if (isAdmin(t) || isDistrictAdmin(t)) && uid != tenant(t).ownerUid;
+      }
+
+      // Students
+      match /students/{sid} {
+        allow get: if canManage(t) || (signedIn() && me() == sid) || isGuardianOf(t, sid);
+        allow list: if canManage(t);
+        // staff create logins; students may self-register as "pending"
+        allow create: if isStaff(t) || (
+          signedIn() && me() == sid
+          && request.resource.data.status == 'pending'
+          && request.resource.data.get('enrolledCourseIds', []).size() == 0
+          && request.resource.data.email == request.auth.token.email
+          && request.auth.token.email.matches('^[^@]+@' + t + '[.]emberlms[.]local$')
+        );
+        allow update: if canManage(t)
+          // students may change their own display name (Account → Profile)
+          || (signedIn() && me() == sid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName']));
+        allow delete: if canManage(t);
+      }
+
+      match /announcements/{a} {
+        allow read: if isMember(t);
+        allow create: if isStaff(t) && request.resource.data.authorUid == me();
+        allow update, delete: if isStaff(t);
+      }
+
+      match /plans/{p} {
+        allow read: if isAdmin(t) || isDistrictAdmin(t) || (isStaff(t) && resource.data.teacherUid == me());
+        allow create: if isStaff(t) && request.resource.data.teacherUid == me();
+        // teachers edit their own plans (but can't approve them); admins review
+        allow update: if isAdmin(t) || isDistrictAdmin(t)
+          || (isStaff(t) && resource.data.teacherUid == me() && request.resource.data.teacherUid == me()
+              && request.resource.data.status in ['draft', 'submitted', 'reviewed', 'changes_requested']
+              && (request.resource.data.status != 'reviewed' || resource.data.status == 'reviewed')
+              && unchanged(['reviewComment', 'reviewedBy', 'reviewedAt']));
+        allow delete: if isAdmin(t) || (isStaff(t) && resource.data.teacherUid == me());
+      }
+
+      match /courses/{c} {
+        allow read: if canReadCourseContent(t, c);
+        allow create: if isStaff(t) && request.resource.data.ownerUid == me();
+        allow update, delete: if isAdmin(t) || (isStaff(t) && resource.data.ownerUid == me());
+
+        match /modules/{m} {
+          allow read: if canReadCourseContent(t, c);
+          allow write: if isStaff(t);
+          match /items/{i} {
+            allow read: if canReadCourseContent(t, c);
+            allow write: if isStaff(t);
+          }
+        }
+
+        // Classmates can see each other (People page, Inbox recipients), as in Canvas.
+        match /enrollments/{sid} {
+          allow read: if canReadCourse(t, c);
+          allow write: if isStaff(t);
+        }
+
+        // Teacher-managed course tools
+        match /announcements/{a} { allow read: if canReadCourse(t, c); allow write: if isStaff(t); }
+        match /files/{f}         { allow read: if canReadCourse(t, c); allow write: if isStaff(t); }
+        match /conferences/{x}   { allow read: if canReadCourseContent(t, c); allow write: if isStaff(t); }
+        match /outcomes/{o}      { allow read: if canReadCourse(t, c); allow write: if isStaff(t); }
+        match /events/{e}        { allow read: if canReadCourseContent(t, c); allow write: if isStaff(t); }
+
+        // Report card grades: families and students see them only once the term is published.
+        match /termGrades/{g} {
+          allow read: if canManage(t) || (
+            (resource.data.studentUid == me() || isGuardianOf(t, resource.data.studentUid))
+            && resource.data.termId in get(/databases/$(database)/documents/tenants/$(t)/sis/settings).data.get('publishedTerms', []));
+          allow write: if isStaff(t);
+        }
+
+        // Collaborations: anyone in the course may add one; creators and staff manage them.
+        match /collaborations/{x} {
+          allow read: if canReadCourse(t, c);
+          allow create: if canReadCourse(t, c) && request.resource.data.createdBy == me();
+          allow update, delete: if isStaff(t) || (canReadCourse(t, c) && resource.data.createdBy == me());
+        }
+
+        // Discussions: staff start topics (students too if the course allows it); everyone enrolled can reply.
+        match /discussions/{d} {
+          allow read: if canReadCourse(t, c);
+          allow create: if isStaff(t) || (
+            isEnrolled(t, c) && get(/databases/$(database)/documents/tenants/$(t)/courses/$(c)).data.get('allowStudentTopics', false) == true
+            && request.resource.data.authorUid == me() && request.resource.data.get('pinned', false) == false && request.resource.data.get('locked', false) == false);
+          allow update: if isStaff(t)
+            || (isEnrolled(t, c) && resource.data.authorUid == me() && unchanged(['pinned', 'locked', 'authorUid']))
+            || (isEnrolled(t, c) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['replyCount', 'lastReplyAt']));
+          allow delete: if isStaff(t) || (isEnrolled(t, c) && resource.data.authorUid == me());
+
+          match /replies/{r} {
+            allow read: if canReadCourse(t, c);
+            allow create: if canReadCourse(t, c) && request.resource.data.authorUid == me()
+              && (isStaff(t) || get(/databases/$(database)/documents/tenants/$(t)/courses/$(c)/discussions/$(d)).data.get('locked', false) != true);
+            allow update, delete: if isStaff(t) || (canReadCourse(t, c) && resource.data.authorUid == me());
+          }
+        }
+
+        match /submissions/{s} {
+          allow read: if canManage(t) || (signedIn() && resource.data.studentId == me()) || isGuardianOf(t, resource.data.studentId);
+          // Students write only their own work and can't grade assignments.
+          // NOTE: quiz scores are computed in the browser, so a determined student could forge one.
+          // Move quiz grading into a Cloud Function if that matters for your school.
+          allow create: if isEnrolled(t, c)
+            && request.resource.data.studentId == me()
+            && (request.resource.data.kind == 'quiz' || request.resource.data.get('grade', null) == null);
+          allow update: if isStaff(t) || (
+            isEnrolled(t, c)
+            && resource.data.studentId == me() && request.resource.data.studentId == me()
+            && (
+              // quiz retakes (the app only offers them when the teacher allows)
+              (resource.data.get('kind', '') == 'quiz' && request.resource.data.kind == 'quiz') ||
+              // assignment edits, only until a teacher grades it, and never self-graded
+              (resource.data.get('gradedBy', null) == null && request.resource.data.get('grade', null) == null)
+            )
+          );
+          allow delete: if isStaff(t);
+        }
+      }
+    }
+
+    // ── SIS ─────────────────────────────────────────────────────────────
+    match /tenants/{t}/sis/{docId} {
+      allow read: if isMember(t);
+      allow write: if isAdmin(t);
+    }
+    // One record per student per class session; families only ever see their own student's rows.
+    match /tenants/{t}/attendance/{r} {
+      allow read: if canManage(t) || (signedIn() && resource.data.studentUid == me()) || isGuardianOf(t, resource.data.studentUid);
+      allow write: if isStaff(t);
+    }
+    match /tenants/{t}/attendanceSessions/{x} { allow read, write: if isStaff(t); }
+    // Special education / 504 / ELL: confidential.
+    match /tenants/{t}/services/{sid} { allow read, write: if hasCap(t, 'services'); }
+    // Accommodations are shared with every teacher so they can be honoured in class.
+    match /tenants/{t}/accommodations/{sid} {
+      allow read: if isStaff(t);
+      allow write: if hasCap(t, 'services');
+    }
+    // Incidents: any staff member can report; only admins / Safety staff can read the log.
+    match /tenants/{t}/incidents/{x} {
+      allow read: if hasCap(t, 'safety') || (isStaff(t) && resource.data.reportedBy == me());
+      allow create: if isStaff(t) && request.resource.data.reportedBy == me();
+      allow update, delete: if hasCap(t, 'safety');
+    }
+    match /tenants/{t}/activities/{a} {
+      allow read: if isMember(t);
+      allow create, delete: if isAdmin(t);
+      allow update: if isAdmin(t) || (isStaff(t) && resource.data.advisorUid == me())
+        // students may only add themselves to the request list
+        || (isStudent(t)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['requests', 'requestNames'])
+            && request.resource.data.requests.toSet().difference(resource.data.get('requests', []).toSet()) == [me()].toSet());
+    }
+    match /tenants/{t}/careerPlans/{sid} {
+      allow read: if canSeeStudent(t, sid);
+      allow write: if isStaff(t) || (signedIn() && me() == sid);
+    }
+    // Family Access
+    match /tenants/{t}/guardians/{uid} {
+      allow read: if canManage(t) || (signedIn() && me() == uid);
+      allow create, update: if signedIn() && me() == uid && request.resource.data.userId == me();
+      allow delete: if isAdmin(t);
+    }
+    match /tenants/{t}/guardianLinks/{id} {
+      allow read: if canManage(t) || (signedIn() && resource.data.guardianUid == me());
+      // A parent links themselves to a student by presenting that student's current Family Access code.
+      allow create: if signedIn() && request.resource.data.guardianUid == me()
+        && id == me() + '_' + request.resource.data.studentUid
+        && get(/databases/$(database)/documents/familyCodes/$(request.resource.data.code)).data.studentUid == request.resource.data.studentUid
+        && get(/databases/$(database)/documents/familyCodes/$(request.resource.data.code)).data.tenantId == t;
+      allow delete: if isAdmin(t) || (signedIn() && resource.data.guardianUid == me());
+    }
+
+    // ── Inbox, Commons, problem reports (per tenant) ────────────────────
+    match /tenants/{t}/conversations/{conv} {
+      allow read: if signedIn() && me() in resource.data.participants;
+      allow create: if (isStaff(t) || isStudent(t) || isGuardian(t))
+        && me() in request.resource.data.participants && request.resource.data.lastSenderUid == me()
+        && request.resource.data.participants.size() <= 200;
+      // participants can post (lastMessage/readBy) but never change who is in the conversation
+      allow update: if signedIn() && me() in resource.data.participants
+        && request.resource.data.participants == resource.data.participants;
+      allow delete: if false;
+
+      match /messages/{m} {
+        allow read: if signedIn() && me() in get(/databases/$(database)/documents/tenants/$(t)/conversations/$(conv)).data.participants;
+        allow create: if signedIn() && request.resource.data.senderUid == me()
+          && me() in get(/databases/$(database)/documents/tenants/$(t)/conversations/$(conv)).data.participants;
+        allow update, delete: if false;
+      }
+    }
+    match /tenants/{t}/commons/{x} {
+      allow read: if isStaff(t);
+      allow create: if isStaff(t) && request.resource.data.authorUid == me();
+      allow update: if isStaff(t) && (resource.data.authorUid == me() || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['imports']));
+      allow delete: if isAdmin(t) || (isStaff(t) && resource.data.authorUid == me());
+    }
+    match /tenants/{t}/feedback/{x} {
+      allow create: if (isStaff(t) || isStudent(t)) && request.resource.data.userUid == me();
+      allow read, delete: if isAdmin(t) || isDistrictAdmin(t);
+    }
+
+    // ── Collection-group lookups (legacy routing fallback) ──────────────
+    // Only needed for accounts created before userIndex existed; safe to keep.
+    match /{path=**}/users/{uid} {
+      allow read: if signedIn() && (resource.data.userId == me() || resource.data.email == request.auth.token.email);
+    }
+    match /{path=**}/students/{sid} {
+      allow read: if signedIn() && resource.data.email == request.auth.token.email;
+    }
+    match /{path=**}/guardians/{uid} {
+      allow read: if signedIn() && resource.data.userId == me();
+    }
+  }
+}
