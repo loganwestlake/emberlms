@@ -286,3 +286,17 @@ body.sidebar-open .drawer-backdrop { opacity: 1; pointer-events: auto; }
 .nav-group-toggle svg { transition: transform .15s; }
 .subnav-group.collapsed .nav-group-toggle svg { transform: rotate(-90deg); }
 .subnav-group.collapsed [data-group-body] { display: none; }
+
+/* Family visibility toggle (Discipline tab) */
+.vis-toggle { display: inline-flex; align-items: center; gap: .35rem; padding: .3rem .6rem; border-radius: 999px; border: 1px solid rgba(255,255,255,0.1); font-size: .7rem; color: #9a9a9a; white-space: nowrap; transition: all .15s; }
+.vis-toggle:hover { border-color: rgba(255,255,255,0.25); color: #fff; }
+.vis-toggle.is-on { border-color: rgba(167,139,250,0.45); background: rgba(139,92,246,0.12); color: #C4B5FD; }
+
+/* Bulk updates */
+.bk-group { transition: border-color .15s, background-color .15s; }
+.bk-group:hover { border-color: rgba(255,255,255,0.18); }
+.bk-group.is-active { border-color: rgba(245,158,11,0.6); background: rgba(245,158,11,0.06); }
+.bk-table th { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #777; font-weight: 500; padding: .6rem .5rem; border-bottom: 1px solid rgba(255,255,255,0.06); white-space: nowrap; }
+.bk-table td { padding: .4rem .5rem; border-bottom: 1px solid rgba(255,255,255,0.04); min-width: 110px; }
+.bk-table td:first-child { padding-left: 1.25rem; } .bk-table th:first-child { padding-left: 1.25rem; }
+.bk-table [data-cell].is-changed { border-color: rgba(245,158,11,0.6); background: rgba(245,158,11,0.06); }

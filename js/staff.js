@@ -43,7 +43,7 @@ function shown(field, data) {
 }
 const allFields = form => form.sections.flatMap(s => s.fields);
 
-function fieldHTML(f, data, env) {
+export function fieldHTML(f, data, env) {
   const id = `ff-${sid(f.id)}`, v = data[f.id], req = f.required ? '<span class="text-[#F59E0B]" aria-hidden="true"> *</span>' : '';
   const label = f.label ? `<label class="label" ${['radio', 'chips', 'checks', 'yesno', 'students', 'courses', 'periods', 'dates'].includes(f.type) ? '' : `for="${id}"`}>${escapeHtml(f.label)}${req}</label>` : '';
   const hint = f.hint ? `<p class="hint mt-1.5">${escapeHtml(f.hint)}</p>` : '';
@@ -101,7 +101,7 @@ function fieldHTML(f, data, env) {
 const dateChip = d => `<span class="badge badge-muted inline-flex items-center gap-1" data-date="${escapeHtml(d)}">${escapeHtml(fmtISO(d))}<button type="button" class="hover:text-white" aria-label="Remove ${escapeHtml(fmtISO(d))}" data-date-del>×</button></span>`;
 const stuChip = p => `<span class="badge badge-amber inline-flex items-center gap-1" data-uid="${escapeHtml(p.uid)}">${escapeHtml(p.name)}${p.grade ? ` <span class="opacity-70">· ${escapeHtml(p.grade === 'K' || p.grade === 'PK' ? p.grade : 'Gr ' + p.grade)}</span>` : ''}<button type="button" class="hover:text-white" aria-label="Remove ${escapeHtml(p.name)}" data-stu-del>×</button></span>`;
 
-function formHTML(form, data, env) {
+export function formHTML(form, data, env) {
   return form.sections.map((s, i) => `<section class="card p-5 sm:p-6" data-section="${i}" ${s.locked ? 'aria-disabled="true"' : ''}>
     <div class="flex items-start gap-3 mb-5"><span class="w-7 h-7 rounded-full bg-[#F59E0B]/15 text-[#F59E0B] text-xs font-semibold flex items-center justify-center shrink-0">${i + 1}</span><div><h2 class="font-serif text-xl text-white leading-tight">${escapeHtml(s.title)}</h2>${s.hint ? `<p class="text-xs text-gray-500 mt-1">${escapeHtml(s.hint)}</p>` : ''}</div></div>
     ${s.locked ? `<p class="text-sm text-gray-500">${escapeHtml(s.locked)}</p>` : `<div class="grid sm:grid-cols-2 gap-x-5 gap-y-5">${s.fields.map(f => fieldHTML(f, data, env)).join('')}</div>`}
@@ -124,7 +124,7 @@ function readValue(root, f) {
     default: return el.value.trim();
   }
 }
-function collect(root, form) {
+export function collect(root, form) {
   const data = {};
   const visit = f => {
     if (f.type === 'note') return;
@@ -136,7 +136,7 @@ function collect(root, form) {
   return data;
 }
 // Returns [{ id, msg }]. Hidden fields and extras of unpicked options are skipped.
-function validate(form, data) {
+export function validate(form, data) {
   const errs = [];
   const empty = v => v === undefined || v === '' || (Array.isArray(v) && !v.length);
   const check = (f, active) => {
@@ -155,7 +155,7 @@ function validate(form, data) {
   return errs;
 }
 // Interactive bits: conditional fields, option extras, date lists, student search.
-function bindForm(root, form, env) {
+export function bindForm(root, form, env) {
   const refresh = () => {
     const data = collect(root, form);
     allFields(form).forEach(f => { const el = root.querySelector(`[data-field="${CSS.escape(f.id)}"]`); if (el) el.classList.toggle('hidden', !shown(f, data)); });
@@ -205,7 +205,7 @@ function bindForm(root, form, env) {
   refresh();
   return refresh;
 }
-function showErrors(root, errs) {
+export function showErrors(root, errs) {
   root.querySelectorAll('[data-err-for]').forEach(p => { p.textContent = ''; p.classList.add('hidden'); });
   root.querySelectorAll('.ff.has-error').forEach(x => x.classList.remove('has-error'));
   errs.forEach(e => {
@@ -521,8 +521,8 @@ function referralForm({ settings, courses, canOffice, isNew }) {
         { id: 'adminDate', type: 'date', label: 'Date', required: true },
         { id: 'adminPhone', type: 'phone', label: 'Phone number' },
         { id: 'status', type: 'chips', label: 'Referral status', required: true, options: ['Open', 'Under review', 'Resolved'] },
-        { id: 'shareWithFamily', type: 'yesno', label: "Share with the student's family in Ember?", hint: 'Parents and the student see the behavior, date, location and actions on the Discipline tab and get a notification. Teacher descriptions and internal notes are never shared.' },
-        { id: 'familyNote', type: 'textarea', label: 'Note for the family', rows: 2, showIf: { id: 'shareWithFamily', eq: 'Yes' }, placeholder: 'Optional: what happens next, expectations, how to reach you.' },
+        { id: 'shareWithFamily', type: 'yesno', label: "Show on the family's Discipline tab?", hint: 'Yes by default. Parents and the student see the behavior, date, location and actions, and get a notification. Teacher descriptions and internal notes are never shared. Choose No for sensitive cases.' },
+        { id: 'familyNote', type: 'textarea', label: 'Note for the family', rows: 2, showIf: { id: 'shareWithFamily', not: 'No' }, placeholder: 'Optional: what happens next, expectations, how to reach you.' },
         { id: 'adminNotes', type: 'textarea', label: 'Internal notes', rows: 3, hint: 'Only administrators and safety staff can see these.' },
       ] } : { title: 'Office managed — administration only', locked: isNew ? 'An administrator completes this part after you submit. You’ll get a notification when they do.' : 'Waiting for an administrator to review this referral.', fields: [] },
     ],
@@ -701,7 +701,7 @@ async function viewReferralForm(ctx) {
   const canOffice = ctx.can('safety');
   const form = referralForm({ settings: env.settings, courses: env.courses, canOffice, isNew: true });
   const root = $('#ref-form');
-  const defaults = { referrer: ctx.me.name, referrerRole: ctx.isAdmin ? 'Administrator' : 'Teacher', date: todayISO(), time: nowHM(), adminName: canOffice ? ctx.me.name : '', adminDate: todayISO(), status: 'Open' };
+  const defaults = { referrer: ctx.me.name, referrerRole: ctx.isAdmin ? 'Administrator' : 'Teacher', date: todayISO(), time: nowHM(), adminName: canOffice ? ctx.me.name : '', adminDate: todayISO(), status: 'Open', shareWithFamily: 'Yes' };
   const pre = new URLSearchParams(location.search).get('student');
   if (pre) { const s = env.students.find(x => x.uid === pre); if (s) { defaults.students = [{ uid: s.uid, name: displayNameOf(s), grade: s.gradeLevel ?? '' }]; if (s.gradeLevel) defaults.grade = String(s.gradeLevel); } }
   root.querySelector('[data-sections]').innerHTML = formHTML(form, defaults, env);
@@ -727,12 +727,12 @@ async function viewReferralForm(ctx) {
         const teacher = {}, office = {};
         Object.entries(data).forEach(([k, v]) => (officeIds.includes(k.split('|')[0]) ? office : teacher)[k] = v);
         const doc0 = buildIncident(teacher, canOffice ? office : null);
-        const ref = await addDoc(collection(db, 'tenants', ctx.slug, 'incidents'), { ...doc0, form: 'referral', referral: teacher, office: canOffice ? office : null, isConcern: false, reportedBy: ctx.me.uid, reportedByName: ctx.me.name, createdAt: serverTimestamp() });
+        const ref = await addDoc(collection(db, 'tenants', ctx.slug, 'incidents'), { ...doc0, form: 'referral', referral: teacher, office: canOffice ? office : null, isConcern: false, familyNotified: canOffice && office.shareWithFamily !== 'No', reportedBy: ctx.me.uid, reportedByName: ctx.me.name, createdAt: serverTimestamp() });
         const who = (teacher.students || []).map(s => s.name).join(', ');
         officeStaffUids(ctx, 'safety').then(to => notify(ctx, { to, kind: 'referral', title: `New referral: ${who}`, body: `${doc0.type} · ${doc0.location} · ${fmtISO(doc0.date)} · from ${ctx.me.name}`, link: `/${ctx.slug}/referrals/${ref.id}` })).catch(e2 => console.warn(e2));
         if (ctx.tenant.districtId && (doc0.severity === 'high' || doc0.severity === 'critical')) notify(ctx, { toDistrict: ctx.tenant.districtId, kind: 'referral', title: `${SEV[doc0.severity][1]} referral at ${ctx.tenant.name}`, body: `${doc0.type} · ${fmtISO(doc0.date)}`, link: `/${ctx.slug}/referrals/${ref.id}` }).catch(e2 => console.warn(e2));
         if (canOffice) await syncFamilyRecords(ctx, ref.id, teacher, office);
-        if (canOffice && office.shareWithFamily === 'Yes') notifyFamily(ctx, teacher, office, ref.id);
+        if (canOffice && office.shareWithFamily !== 'No') notifyFamily(ctx, teacher, office, ref.id);
         toast('Referral submitted'); navigate(`/${ctx.slug}/referrals/${ref.id}`);
       } catch (ex) { console.error(ex); showError(fe, ex.message); }
     });
@@ -759,7 +759,7 @@ function officeSummary(office) {
 // Family-safe copy of a referral (behavior, date, location, actions, contact) — never the teacher's
 // description or the office's internal notes. Removed again if the office stops sharing it.
 async function syncFamilyRecords(ctx, id, teacher, office) {
-  const share = office.shareWithFamily === 'Yes';
+  const share = office.shareWithFamily !== 'No'; // reviewed referrals are visible to the family unless the office hides them
   const behaviors = referralBehaviors(teacher);
   await Promise.allSettled((teacher.students || []).map(st => {
     const ref = doc(db, 'tenants', ctx.slug, 'disciplineRecords', `${id}_${st.uid}`);
@@ -810,7 +810,7 @@ export async function viewReferral(ctx, id) {
       actions: `<div class="flex flex-wrap items-center gap-3">${refStatusChip(x.status)}${chip(sev[0], sev[1] + ' severity')}<button class="btn btn-secondary btn-sm" data-print>${ico('printer', 'w-3.5 h-3.5')} Print</button></div>` })
     + `<div class="max-w-4xl space-y-5">
         ${readonlyHTML(teacherForm, x.referral || {})}
-        ${officeView ? `<form id="office-form" class="space-y-5" novalidate><div data-sections>${formHTML(officeForm, { adminName: ctx.me.name, adminDate: todayISO(), status: 'Under review', ...officeData }, env)}</div>
+        ${officeView ? `<form id="office-form" class="space-y-5" novalidate><div data-sections>${formHTML(officeForm, { adminName: ctx.me.name, adminDate: todayISO(), status: 'Under review', shareWithFamily: 'Yes', ...officeData }, env)}</div>
             <div class="sticky bottom-0 z-10 -mx-4 sm:mx-0 px-4 sm:px-0 py-3 bg-[#0A0A0A]/90 backdrop-blur flex flex-wrap items-center gap-3 border-t border-white/[0.06]"><button type="submit" class="btn btn-primary">${ico('save', 'w-4 h-4')} Save office action</button><span class="text-xs text-gray-500">${officeDone ? `Last updated ${escapeHtml(timeAgo(x.updatedAt))}` : 'Not reviewed yet'}</span><p class="form-error w-full hidden" data-form-error role="alert"></p></div></form>`
           : officeDone ? readonlyHTML({ sections: officeForm.sections.map(s => ({ ...s, fields: s.fields.filter(f => f.id !== 'adminNotes') })) }, officeData)
           : `<section class="card p-5 sm:p-6"><h2 class="font-serif text-lg text-white mb-2">Office managed — administration only</h2><p class="text-sm text-gray-500">Waiting for an administrator to review this referral. You’ll get a notification when they do.</p></section>`}
@@ -838,7 +838,7 @@ export async function viewReferral(ctx, id) {
         await syncFamilyRecords(ctx, id, x.referral || {}, data);
         const actions = officeSummary(data);
         notify(ctx, { to: [x.reportedBy], kind: 'referral', title: `Your referral for ${who} was ${data.status === 'Resolved' ? 'resolved' : 'reviewed'}`, body: `${ctx.me.name}${actions ? ' · ' + actions : ''}`, link: `/${ctx.slug}/referrals/${id}` }).catch(e2 => console.warn(e2));
-        if (data.shareWithFamily === 'Yes' && x.office?.shareWithFamily !== 'Yes') notifyFamily(ctx, x.referral || {}, data, id);
+        if (data.shareWithFamily !== 'No' && !x.familyNotified) { notifyFamily(ctx, x.referral || {}, data, id); updateDoc(doc(db, 'tenants', ctx.slug, 'incidents', id), { familyNotified: true }).catch(() => {}); }
         if (ctx.tenant.districtId && sevNow === 'critical' && x.severity !== 'critical') notify(ctx, { toDistrict: ctx.tenant.districtId, kind: 'referral', title: `Critical referral at ${ctx.tenant.name}`, body: `${x.type} · ${actions}`, link: `/${ctx.slug}/referrals/${id}` }).catch(e2 => console.warn(e2));
         toast('Office action saved'); renderRoute();
       } catch (ex) { console.error(ex); showError(fe, ex.message); }

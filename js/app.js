@@ -2109,6 +2109,8 @@ async function viewTenant(slug, segs) {
         case 'services': return ctx.can('services') ? (await sis()).viewServices(ctx) : viewNotFound();
         case 'discipline': return ctx.can('safety') ? (await sis()).viewIncidents(ctx) : viewNotFound();
         case 'requests': return ctx.isAdmin ? (await staff()).viewRequestQueue(ctx) : viewNotFound();
+        case 'bulk': return ctx.can('records') || ctx.can('health') ? (await import('./bulk.js' + BUILD)).viewBulk(ctx) : viewNotFound();
+        case 'busing': return ctx.can('records') ? (await import('./bulk.js' + BUILD)).viewBusRoutes(ctx) : viewNotFound();
         case undefined: return navigate(`/${slug}${schoolHome(ctx).path}`, { replace: true });
         default: return viewNotFound();
       }
@@ -2167,10 +2169,12 @@ const SCHOOL_MENU = [
     { key: 'admin-parents', label: 'Parents & guardians', path: '/admin/parents', icon: 'users', desc: 'Family accounts and links', show: isAdminC },
     { key: 'admin-teachers', label: 'Teachers & staff', path: '/admin/teachers', icon: 'user-cog', desc: 'Invite and manage staff', show: c => c.isAdmin && notPersonal(c) },
     { key: 'admin-admins', label: 'Administrators', path: '/admin/administrators', icon: 'shield-check', desc: 'Who can run the school', show: c => c.isAdmin && notPersonal(c) },
+    { key: 'sis-bulk', label: 'Bulk student updates', path: '/office/bulk', icon: 'list-checks', desc: 'Change many students at once', show: c => c.can('records') || c.can('health') },
   ] },
   { group: 'Attendance & scheduling', key: 'att', items: [
     { key: 'sis-attendance', label: 'Attendance office', path: '/office/attendance', icon: 'calendar-check', desc: 'Daily view, trends, chronic absence', show: isAdminC },
     { key: 'sis-schedule', label: 'Master schedule', path: '/office/schedule', icon: 'calendar-range', desc: 'Periods, rooms, conflicts', show: isAdminC },
+    { key: 'sis-busing', label: 'Bus routes', path: '/office/busing', icon: 'bus', desc: 'Buses, stops and rider rosters', show: c => c.can('records') && notPersonal(c) },
   ] },
   { group: 'Students', key: 'stu', items: [
     { key: 'sis-safety', label: 'Discipline & safety', path: '/office/discipline', icon: 'shield-alert', desc: 'Referrals, incidents, concerns', show: c => c.can('safety') },
@@ -2207,7 +2211,7 @@ function schoolMenu(ctx) {
 const schoolMenuItems = ctx => schoolMenu(ctx).flatMap(g => g.items);
 const schoolHome = ctx => ctx.isAdmin ? { label: 'Admin', path: '/admin' } : { label: 'Staff Hub', path: '/staff' };
 // Kept for older callers: anyone with office-type access (admin or a services/safety capability).
-const hasOffice = ctx => !!ctx && (ctx.isAdmin || ctx.can('services') || ctx.can('safety'));
+const hasOffice = ctx => !!ctx && (ctx.isAdmin || ['services', 'safety', 'health', 'records'].some(c => ctx.can(c)));
 function schoolSubnav(ctx, active) {
   const base = `/${ctx.slug}`;
   const href = path => path.startsWith('@') ? buildUrl(path.slice(1)) : path.startsWith('#') ? '#' : buildUrl(base + path);
@@ -5317,7 +5321,41 @@ window.addEventListener('popstate', () => renderRoute());
 // ═══════════════════════════════════════════════════════════════
 // BOOT
 // ═══════════════════════════════════════════════════════════════
+// ── Auto-update: GitHub Pages lets browsers keep old files for ~10 minutes, and a tab can stay open for days.
+// We check the live index.html for a newer ?v= and reload on the next page change (or on the banner's button).
+let newBuild = null, lastUpdateCheck = 0;
+async function checkForUpdate(force = false) {
+  if (!BUILD || (!force && Date.now() - lastUpdateCheck < 60000)) return;
+  lastUpdateCheck = Date.now();
+  try {
+    const html = await (await fetch(`${BASE_PATH}/index.html?check=${Date.now()}`, { cache: 'no-store' })).text();
+    const m = html.match(/js\/app\.js(\?v=[\w.-]+)/);
+    if (m && m[1] !== BUILD && newBuild !== m[1]) { newBuild = m[1]; showUpdateBanner(); }
+  } catch (e) { /* offline — try again later */ }
+}
+function reloadForUpdate() {
+  // A one-off query string makes the browser fetch a fresh index.html instead of its cached copy.
+  if (ss('ember_reloaded_for') === newBuild) return false; // already tried for this version: don't loop
+  ss('ember_reloaded_for', newBuild);
+  const u = new URL(location.href); u.searchParams.set('fresh', newBuild.replace('?v=', ''));
+  location.replace(u.toString());
+  return true;
+}
+function showUpdateBanner() {
+  if ($('#update-banner')) return;
+  const el = document.createElement('div');
+  el.id = 'update-banner';
+  el.className = 'fixed z-[95] bottom-4 left-1/2 -translate-x-1/2 card px-4 py-3 flex items-center gap-3 shadow-2xl border-[#F59E0B]/40';
+  el.innerHTML = `${ico('sparkles', 'w-4 h-4 text-[#F59E0B]')}<span class="text-sm text-white">Ember was updated.</span><button class="btn btn-primary btn-sm" data-update-now>Reload</button>`;
+  document.body.appendChild(el); refreshIcons();
+  el.querySelector('[data-update-now]').addEventListener('click', () => { if (!reloadForUpdate()) location.reload(); });
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(true); }); // coming back to the tab: always check
+{ const u = new URL(location.href); if (u.searchParams.has('fresh')) { u.searchParams.delete('fresh'); history.replaceState(history.state, '', u.pathname + u.search + u.hash); } }
+
 async function renderRoute() {
+  if (newBuild && reloadForUpdate()) return; // a new version is live: switch to it as the user navigates
+  checkForUpdate();
   if (!authReady) return;
   currentUser = auth.currentUser; // source of truth, even mid sign-in while routing is suppressed
   const t = ++routeToken;

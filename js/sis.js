@@ -2001,31 +2001,68 @@ async function disciplineTab(ctx, el, student, t) {
   const sharedIds = new Set(shared.map(x => x.incidentId));
   if (staff) {
     const list = [...inc].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    // Keep the family's view in step with the office's decisions (also fixes records saved before sharing became the default).
+    if (full) {
+      const mine = new Map(shared.map(x => [x.incidentId, x]));
+      const jobs = [];
+      list.forEach(x => {
+        const want = familyVisible(x), have = mine.get(x.id), rec = familyRecordOf(x, sid);
+        if (want && (!have || have.status !== rec.status || have.actions !== rec.actions || have.summary !== rec.summary)) jobs.push(setDoc(tdoc(ctx, 'disciplineRecords', `${x.id}_${sid}`), { ...rec, sharedBy: ctx.me.uid, sharedAt: serverTimestamp() }).then(() => sharedIds.add(x.id)));
+        if (!want && have) jobs.push(deleteDoc(tdoc(ctx, 'disciplineRecords', `${x.id}_${sid}`)).then(() => sharedIds.delete(x.id)));
+      });
+      await Promise.allSettled(jobs);
+      if (!live(t)) return;
+    }
     const extra = full ? [] : shared.filter(x => !inc.some(i => i.id === x.incidentId));
     const open = list.filter(x => DISC_STATUS(x.status)[1] !== 'Resolved').length;
     const susp = list.reduce((a, x) => a + Number(x.office?.['officeActions|Out-of-school suspension|days'] || 0), 0);
     const isss = list.reduce((a, x) => a + Number(x.office?.['officeActions|In-school suspension|days'] || 0), 0);
-    el.innerHTML = `<div class="flex flex-wrap items-center justify-between gap-3 mb-5"><p class="text-sm text-gray-400 max-w-2xl">${full ? 'Every referral, incident and concern involving this student.' : 'Referrals you wrote about this student, plus anything the office has shared with the family.'}</p>
-        <div class="flex gap-2"><a href="${buildUrl(`/${ctx.slug}/staff/new/referral?student=${sid}`)}" class="btn btn-primary">${ico('flag', 'w-4 h-4')} Write referral</a>${full ? `<button data-rec="concern" class="btn btn-secondary">${ico('plus', 'w-4 h-4')} Quick incident</button>` : ''}</div></div>
+    const visibleCount = list.filter(x => sharedIds.has(x.id)).length;
+    el.innerHTML = `<div class="flex flex-wrap items-center justify-between gap-3 mb-5"><p class="text-sm text-gray-400 max-w-2xl">${full ? `Every referral, incident and concern involving this student. <span class="text-gray-300">${visibleCount} of ${list.length}</span> ${visibleCount === 1 ? 'is' : 'are'} visible to the family.` : 'Referrals you wrote about this student, plus anything the office has shared with the family.'}</p>
+        ${full ? `<button data-rec="concern" class="btn btn-secondary">${ico('plus', 'w-4 h-4')} Quick incident</button>` : ''}</div>
       ${full ? `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">${statTile('Referrals & incidents', list.length)}${statTile('Open', open, open ? 'Needs follow-up' : 'All resolved', open ? 'warning' : 'good')}${statTile('Out-of-school suspension', `${susp}<span class="text-gray-500 text-lg"> days</span>`)}${statTile('In-school suspension', `${isss}<span class="text-gray-500 text-lg"> days</span>`)}</div>` : ''}
       ${list.length ? `<div class="card overflow-hidden divide-y divide-white/[0.05]">${list.map(x => {
-        const [lvl, lbl] = DISC_STATUS(x.status), sev = SEVERITY[x.severity];
-        return `<button data-incident="${escapeHtml(x.id)}" class="w-full text-left flex flex-wrap sm:flex-nowrap items-center gap-3 px-5 py-3.5 hover:bg-white/[0.03]">
-          <div class="w-24 shrink-0 text-xs text-gray-400 tabular-nums">${escapeHtml(formatDate((x.date || '') + 'T12:00'))}</div>
-          <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(x.type || 'Incident')} ${x.form === 'referral' ? badge('Referral', 'red') : x.isConcern ? badge('Concern', 'blue') : badge('Incident', 'muted')} ${sharedIds.has(x.id) ? badge('Shared with family', 'violet') : ''}</div>
-            <div class="text-[11px] text-gray-500 truncate">${escapeHtml(x.location || '')}${x.reportedByName ? ' · by ' + escapeHtml(x.reportedByName) : ''}${x.office ? ' · ' + escapeHtml(officeActionsText(x.office)) : ''}</div></div>
-          ${sev ? statusChip(sev[1], sev[0]) : ''} ${statusChip(lvl, lbl)}</button>`;
+        const [lvl, lbl] = DISC_STATUS(x.status), sev = SEVERITY[x.severity], vis = sharedIds.has(x.id);
+        const pending = x.form === 'referral' && !x.office && x.familyVisibility !== 'shown';
+        return `<div class="flex flex-wrap sm:flex-nowrap items-center gap-3 px-5 py-3.5 hover:bg-white/[0.02]">
+          <button data-incident="${escapeHtml(x.id)}" class="flex-1 min-w-0 text-left flex items-center gap-3">
+            <div class="w-24 shrink-0 text-xs text-gray-400 tabular-nums">${escapeHtml(formatDate((x.date || '') + 'T12:00'))}</div>
+            <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(x.type || 'Incident')} ${x.form === 'referral' ? badge('Referral', 'red') : x.isConcern ? badge('Concern', 'blue') : badge('Incident', 'muted')}</div>
+              <div class="text-[11px] text-gray-500 truncate">${escapeHtml(x.location || '')}${x.reportedByName ? ' · by ' + escapeHtml(x.reportedByName) : ''}${x.office ? ' · ' + escapeHtml(officeActionsText(x.office)) : ''}</div></div></button>
+          ${sev ? statusChip(sev[1], sev[0]) : ''} ${statusChip(lvl, lbl)}
+          ${full ? `<button type="button" data-vis="${escapeHtml(x.id)}" class="vis-toggle ${vis ? 'is-on' : ''}" title="${vis ? 'The student and family can see this. Click to hide it.' : pending ? 'Shown to the family automatically once the office reviews it. Click to show it now.' : 'Hidden from the family. Click to show it.'}">${ico(vis ? 'eye' : 'eye-off', 'w-3.5 h-3.5')}<span>${vis ? 'Family can see' : pending ? 'After review' : 'Hidden'}</span></button>` : vis ? badge('Shared with family', 'violet') : ''}</div>`;
       }).join('')}</div>` : emptyState({ icon: 'shield-check', tone: 'green', title: 'No discipline records', text: full ? 'Nothing has been reported for this student.' : 'You haven’t written any referrals for this student.' })}
       ${extra.length ? `<h3 class="label mt-8">Shared with the family</h3>${familyDisciplineHTML(extra)}` : ''}`;
-    el.onclick = e => {
+    el.onclick = async e => {
+      const v = e.target.closest('[data-vis]');
+      if (v && full) {
+        const x = list.find(i => i.id === v.dataset.vis), show = !sharedIds.has(x.id);
+        try {
+          const patch = { familyVisibility: show ? 'shown' : 'hidden' };
+          if (x.office) patch['office.shareWithFamily'] = show ? 'Yes' : 'No';
+          await updateDoc(tdoc(ctx, 'incidents', x.id), patch);
+          await Promise.all((x.studentUids || []).map(u => show ? setDoc(tdoc(ctx, 'disciplineRecords', `${x.id}_${u}`), { ...familyRecordOf(x, u), sharedBy: ctx.me.uid, sharedAt: serverTimestamp() }) : deleteDoc(tdoc(ctx, 'disciplineRecords', `${x.id}_${u}`))));
+          toast(show ? 'Now visible to the family' : 'Hidden from the family', show ? 'success' : 'info');
+          renderRoute();
+        } catch (ex) { toast(ex.message, 'error'); }
+        return;
+      }
       const b = e.target.closest('[data-incident]'); if (!b) return;
       const x = list.find(i => i.id === b.dataset.incident);
       if (x?.form === 'referral') navigate(`/${ctx.slug}/referrals/${x.id}`); else if (full) openIncidentModal(ctx, x);
     };
     return;
   }
-  el.innerHTML = `<p class="text-sm text-gray-400 mb-5 max-w-2xl">Discipline records the school has shared with ${ctx.isGuardian ? 'your family' : 'you'}. Questions? Contact the administrator listed on the record.</p>`
+  el.innerHTML = `<p class="text-sm text-gray-400 mb-5 max-w-2xl">Discipline referrals appear here after the school office reviews them. Questions? Contact the administrator listed on the record.</p>`
     + (shared.length ? familyDisciplineHTML(shared) : emptyState({ icon: 'shield-check', tone: 'green', title: 'No discipline records', text: `${ctx.isGuardian ? escapeHtml(displayNameOf(student)) + ' has' : 'You have'} no discipline records on file.` }));
+}
+// Who sees what: referrals reach the family once the office has reviewed them (unless hidden);
+// quick incidents and concerns stay internal unless someone with Safety access shows them.
+const familyVisible = x => x.familyVisibility === 'shown' || (x.familyVisibility !== 'hidden' && x.form === 'referral' && !!x.office && x.office.shareWithFamily !== 'No');
+function familyRecordOf(x, sid) {
+  const o = x.office || {}, i = (x.studentUids || []).indexOf(sid);
+  return { incidentId: x.id, studentUid: sid, studentName: (x.studentNames || [])[i] || '', date: x.date || '', location: x.location || '', behavior: x.type || 'Behavior referral',
+    behaviors: (x.behaviors || [x.type]).filter(Boolean), actions: x.office ? officeActionsText(o) : '', summary: o.familyNote || '', status: (x.status || 'open').toLowerCase(), adminName: o.adminName || '', adminPhone: o.adminPhone || '' };
 }
 function officeActionsText(office) {
   return (office.officeActions || []).map(a => {
