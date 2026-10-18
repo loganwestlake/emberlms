@@ -945,7 +945,7 @@ const isEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v || '');
 const ADMIN_TITLES = ['Principal', 'Assistant principal', 'Dean of students', 'Office manager', 'Registrar', 'Counselor', 'Athletic director', 'Curriculum coordinator', 'District administrator', 'Other'];
 const RELATIONSHIPS = ['Mother', 'Father', 'Guardian', 'Grandparent', 'Foster parent', 'Stepparent', 'Aunt / uncle', 'Other relative', 'Other'];
 // A modal built from the form engine. onSubmit(data, modal) returns true to close.
-function formModal({ title, subtitle = '', icon = 'user-plus', form, data = {}, env = {}, submit = 'Save', onSubmit }) {
+export function formModal({ title, subtitle = '', icon = 'user-plus', form, data = {}, env = {}, submit = 'Save', onSubmit }) {
   const m = openModal({ size: 'lg', align: 'top', html: modalHeader({ title, subtitle, icon }) + `<form novalidate>${modalBody(`<div class="space-y-5" data-sections>${form.sections.map(sec => `<div class="grid sm:grid-cols-2 gap-x-5 gap-y-5">${sec.fields.map(f => fieldHTML(f, data, env)).join('')}</div>`).join('<hr class="border-white/[0.06]">')}</div><p class="form-error mt-4 hidden" data-form-error role="alert"></p>`)}
     ${modalFooter(`<button type="button" data-close class="btn btn-secondary flex-1">Cancel</button><button type="submit" class="btn btn-primary flex-1">${escapeHtml(submit)}</button>`)}</form>` });
   const root = m.$('form');

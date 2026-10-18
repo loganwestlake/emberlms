@@ -12,6 +12,7 @@ const {
   GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, routeTokenNow, randInt, renderRoute, districtShell, getDistrictSchools,
   notify, officeStaffUids, guardianUidsOf, notifItems, notifRow, notifUnread, markNotifRead, markAllNotifsRead, NOTIF_KINDS
 } = globalThis.__ember; // helpers from app.js (see EMBER_API there)
+const BUILD = new URL(import.meta.url).search;
 
 // ═══════════════════════════════════════════════════════════════
 // SETTINGS (bell schedule, terms, grade scale, report card template)
@@ -656,13 +657,16 @@ export async function viewMasterSchedule(ctx) {
       html: modalHeader({ title: escapeHtml(c.title || 'Section'), subtitle: `${escapeHtml(c.ownerName || '')} · ${(rosters[c.id] || []).length} students`, icon: 'calendar-range' }) + `<form novalidate>${modalBody(`
         <label class="label" for="ms-period">Period</label><select id="ms-period" class="input mb-4"><option value="">Unscheduled</option>${settings.periods.map(p => `<option value="${p.id}" ${p.id === c.periodId ? 'selected' : ''}>${escapeHtml(p.name)} (${fmtTime(p.start)}–${fmtTime(p.end)})</option>`).join('')}</select>
         <label class="label" for="ms-room">Room</label><input id="ms-room" class="input mb-4" value="${escapeHtml(c.room || '')}" placeholder="204">
+        <div class="grid grid-cols-[1fr_110px] gap-3 mb-4"><div><label class="label" for="ms-subject">Subject area</label><select id="ms-subject" class="input">${['English / Language Arts', 'Mathematics', 'Science', 'Social Studies', 'World Language', 'Fine & Performing Arts', 'Physical Education', 'Career & Technical (CTE)', 'Elective'].map(x => `<option ${x === (c.subject || 'Elective') ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+          <div><label class="label" for="ms-credits">Credits</label><input id="ms-credits" type="number" min="0" max="3" step="0.5" class="input" value="${escapeHtml(c.credits ?? 1)}"></div></div>
+        <p class="hint -mt-2 mb-4">Used for students’ graduation progress.</p>
         <span class="label">Meets on</span><div class="flex gap-2">${DAYS.map(([k, l]) => `<label class="check"><input type="checkbox" data-day="${k}" ${!c.days?.length || c.days.includes(k) ? 'checked' : ''}> ${l}</label>`).join('')}</div>`)}
         ${modalFooter(`<button type="button" data-close class="btn btn-secondary flex-1">Cancel</button><button class="btn btn-primary flex-1">Save</button>`)}</form>`
     });
     m.$('form').addEventListener('submit', ev => {
       ev.preventDefault();
       const days = m.$$('[data-day]').filter(x => x.checked).map(x => x.dataset.day);
-      const data = { periodId: m.$('#ms-period').value || null, room: m.$('#ms-room').value.trim(), days: days.length === 5 ? [] : days };
+      const data = { periodId: m.$('#ms-period').value || null, room: m.$('#ms-room').value.trim(), days: days.length === 5 ? [] : days, subject: m.$('#ms-subject').value, credits: Math.max(0, Number(m.$('#ms-credits').value) || 0) };
       withBusy(ev.currentTarget.querySelector('button:not([data-close])'), 'Saving…', async () => {
         try { await updateDoc(doc(db, 'tenants', ctx.slug, 'courses', c.id), data); Object.assign(c, data); m.close(); toast('Schedule updated'); draw(); }
         catch (ex) { toast(ex.message, 'error'); }
@@ -932,10 +936,17 @@ export async function viewDirectory(ctx) {
   try { list = await loadStudents(ctx); if (live(t)) draw(); } catch (e) { if (live(t)) { el.innerHTML = errorBox(e); refreshIcons(); } }
 }
 
+// Family Access menu (the same for students, parents and staff); [key, label, icon, permission?].
 const RECORD_TABS = [
-  ['overview', 'Overview'], ['schedule', 'Schedule'], ['attendance', 'Attendance'], ['grades', 'Grades'], ['reportcards', 'Report cards'],
-  ['activities', 'Activities'], ['career', 'Career plan'], ['services', 'Student services', 'services'], ['discipline', 'Discipline'], ['family', 'Family & contacts', 'admin'],
+  ['overview', 'Home', 'house'], ['calendar', 'Calendar', 'calendar-days'], ['grades', 'Gradebook', 'book-open-check'], ['attendance', 'Attendance', 'calendar-check'],
+  ['info', 'Student Info', 'id-card'], ['busing', 'Busing', 'bus'], ['schedule', 'Schedule', 'calendar-range'], ['discipline', 'Discipline', 'shield'],
+  ['tests', 'Test Scores', 'chart-column'], ['graduation', 'Graduation Requirements', 'graduation-cap'], ['history', 'Academic History', 'history'],
+  ['portfolio', 'Portfolio', 'folder-heart'], ['health', 'Health Info', 'heart-pulse'],
+  ['services', 'Student services', 'heart-handshake', 'services'], ['family', 'Family & contacts', 'users', 'admin'],
 ];
+// Reachable by link but folded into other sections in the menu.
+const HIDDEN_TABS = [['reportcards', 'Report cards'], ['activities', 'Activities'], ['career', 'Career plan']];
+const FAMILY_TABS = ['calendar', 'info', 'busing', 'tests', 'graduation', 'history', 'portfolio', 'health'];
 export async function viewRecord(ctx, sidParam, tab = 'overview') {
   const t = routeTokenNow();
   const sid = sidParam === 'me' ? ctx.me.uid : sidParam;
@@ -945,14 +956,20 @@ export async function viewRecord(ctx, sidParam, tab = 'overview') {
   if (!student) { render(tenantPage(ctx, 'record', emptyState({ icon: 'user-x', title: 'Student not found' }))); refreshIcons(); return; }
   const name = displayNameOf(student);
   const staff = ctx.isRealTeacher;
-  const tabs = RECORD_TABS.filter(([, , need]) => !need || (need === 'admin' ? ctx.isAdmin : ctx.can(need)));
+  const tabs = RECORD_TABS.filter(([, , , need]) => !need || (need === 'admin' ? ctx.isAdmin : ctx.can(need)));
   if (tab === 'incidents') tab = 'discipline'; // old links
-  if (!tabs.some(x => x[0] === tab)) tab = 'overview';
+  if (!tabs.some(x => x[0] === tab) && !HIDDEN_TABS.some(x => x[0] === tab)) tab = 'overview';
   setTitle(name, ctx.tenant.name);
   const self = sid === ctx.me.uid;
   const base = `/${ctx.slug}/record/${self && !staff ? 'me' : sid}`;
-  const subnav = { eyebrow: escapeHtml(gradeLabel(student.gradeLevel)), title: name, items: tabs.map(([k, l]) => ({ href: buildUrl(k === 'overview' ? base : `${base}/${k}`), label: l, active: k === tab })) };
-  const label = tabs.find(x => x[0] === tab)?.[1];
+  const kids = ctx.isGuardian ? (ctx.children || []).filter(k => k.uid !== sid) : [];
+  const linkFor = k => buildUrl(k === 'overview' ? base : `${base}/${k}`);
+  const subnav = { eyebrow: escapeHtml(gradeLabel(student.gradeLevel)), title: name, items: [
+    ...tabs.filter(x => !x[3]).map(([k, l, icon]) => ({ href: linkFor(k), label: l, icon, active: k === tab || (k === 'grades' && tab === 'reportcards') || (k === 'portfolio' && ['activities', 'career'].includes(tab)) })),
+    ...(tabs.some(x => x[3]) ? [{ section: 'Staff only' }, ...tabs.filter(x => x[3]).map(([k, l, icon]) => ({ href: linkFor(k), label: l, icon, active: k === tab }))] : []),
+    ...(kids.length ? [{ section: 'Your other students' }, ...kids.map(k => ({ href: buildUrl(`/${ctx.slug}/record/${k.uid}${tab === 'overview' ? '' : '/' + tab}`), label: displayNameOf(k), icon: 'user' }))] : []),
+  ] };
+  const label = [...tabs, ...HIDDEN_TABS].find(x => x[0] === tab)?.[1];
   const header = `<header class="mb-6 sm:mb-8 max-w-6xl flex flex-col sm:flex-row sm:items-center gap-4">
       ${avatar(name, null, 'w-16 h-16', 'text-xl')}
       <div class="flex-1 min-w-0"><p class="text-[11px] text-[#F59E0B] uppercase tracking-[0.18em] mb-1">${escapeHtml(label)}</p><h1 class="font-serif text-3xl sm:text-4xl text-white leading-tight">${escapeHtml(name)}</h1>
@@ -960,7 +977,7 @@ export async function viewRecord(ctx, sidParam, tab = 'overview') {
       ${staff ? `<div class="flex flex-wrap gap-2">${ctx.isAdmin ? `<button data-rec="edit" class="btn btn-secondary">${ico('pencil', 'w-3.5 h-3.5')} Edit record</button>` : ''}<a href="${buildUrl(`/${ctx.slug}/staff/new/referral?student=${sid}`)}" class="btn btn-secondary">${ico('flag', 'w-3.5 h-3.5')} Write referral</a><button data-rec="concern" class="btn btn-ghost">${ico('message-square-warning', 'w-3.5 h-3.5')} Quick concern</button></div>` : ''}
     </header>
     ${staff && (student.alerts || []).length ? `<div class="max-w-6xl mb-6 space-y-2">${student.alerts.map(a => `<div class="card px-4 py-3 flex items-start gap-3 border-[#fab219]/30">${ico('triangle-alert', 'w-4 h-4 st-warning shrink-0 mt-0.5')}<div><span class="text-xs uppercase tracking-wider text-gray-400">${escapeHtml(a.type || 'Alert')}</span><p class="text-sm text-white">${escapeHtml(a.text)}</p></div></div>`).join('')}</div>` : ''}`;
-  render(tenantPage(ctx, 'record', header + `<div id="rec" class="max-w-6xl">${skeletonRows(4, 'h-24')}</div>`, null, { subnav, gActive: staff ? 'school' : (ctx.isGuardian ? 'dashboard' : 'account'), crumbs: [...(staff ? [{ label: 'Students', href: buildUrl(`/${ctx.slug}/sis`) }] : []), { label: name, href: buildUrl(base) }, ...(tab !== 'overview' ? [{ label }] : [])] }));
+  render(tenantPage(ctx, 'record', header + `<div id="rec" class="max-w-6xl">${skeletonRows(4, 'h-24')}</div>`, null, { subnav, gActive: staff ? 'school' : 'access', crumbs: [...(staff ? [{ label: 'Students', href: buildUrl(`/${ctx.slug}/sis`) }] : []), { label: name, href: buildUrl(base) }, ...(tab !== 'overview' ? [{ label }] : [])] }));
   const el = $('#rec');
   $('#main').addEventListener('click', e => {
     const r = e.target.closest('[data-rec]'); if (!r) return;
@@ -1005,10 +1022,12 @@ export async function viewRecord(ctx, sidParam, tab = 'overview') {
     } else if (tab === 'grades') {
       const grades = await studentGrades(ctx, student, settings);
       if (!live(t)) return;
-      el.innerHTML = grades.length ? grades.map(g => `<section class="card mb-4 overflow-hidden"><div class="flex items-center gap-3 px-5 py-4 border-b border-white/[0.06]"><span class="w-2.5 h-2.5 rounded-full" style="background:${courseHex(g.course)}"></span><h2 class="text-white font-medium flex-1 truncate">${escapeHtml(g.course.title || '')}</h2><span class="text-sm text-white tabular-nums">${g.percent === null ? '—' : `${g.percent}% ${g.letter}`}</span></div>
+      const pubTerms = staff ? settings.terms : settings.terms.filter(x => (settings.publishedTerms || []).includes(x.id));
+      const rcBar = `<div class="flex flex-wrap items-center justify-between gap-3 mb-4"><p class="text-sm text-gray-400">Every assignment and score, class by class.</p>${pubTerms.length ? `<a href="${buildUrl(`${base}/reportcards`)}" class="btn btn-secondary btn-sm">${ico('file-text', 'w-3.5 h-3.5')} Report cards (${pubTerms.length})</a>` : ''}</div>`;
+      el.innerHTML = rcBar + (grades.length ? grades.map(g => `<section class="card mb-4 overflow-hidden"><div class="flex items-center gap-3 px-5 py-4 border-b border-white/[0.06]"><span class="w-2.5 h-2.5 rounded-full" style="background:${courseHex(g.course)}"></span><h2 class="text-white font-medium flex-1 truncate">${escapeHtml(g.course.title || '')}</h2><span class="text-sm text-white tabular-nums">${g.percent === null ? '—' : `${g.percent}% ${g.letter}`}</span></div>
         <div class="divide-y divide-white/[0.04]">${g.items.filter(it => GRADED_TYPES.includes(it.type)).map(it => { const s = g.subs.get(it.id); const due = toDate(it.data?.dueDate); const missing = !s && due && due < new Date();
           return `<div class="flex items-center gap-3 px-5 py-2.5">${ico(typeMeta(it.type).icon, 'w-4 h-4 text-gray-500 shrink-0')}<div class="flex-1 min-w-0"><div class="text-sm text-gray-200 truncate">${escapeHtml(it.title || '')}</div><div class="text-[11px] text-gray-500">${due ? 'Due ' + escapeHtml(formatDate(due)) : 'No due date'}</div></div>
-            <div class="text-right shrink-0">${hasGrade(s) ? `<span class="text-sm text-white tabular-nums">${escapeHtml(s.grade)}<span class="text-gray-500">/${itemPoints(it)}</span></span>` : s ? badge('Submitted', 'blue') : missing ? badge('Missing', 'red') : `<span class="text-xs text-gray-600">—/${itemPoints(it)}</span>`}</div></div>`; }).join('') || '<p class="px-5 py-3 text-sm text-gray-500">No graded work yet.</p>'}</div></section>`).join('') : emptyState({ icon: 'award', title: 'Not enrolled in any courses' });
+            <div class="text-right shrink-0">${hasGrade(s) ? `<span class="text-sm text-white tabular-nums">${escapeHtml(s.grade)}<span class="text-gray-500">/${itemPoints(it)}</span></span>` : s ? badge('Submitted', 'blue') : missing ? badge('Missing', 'red') : `<span class="text-xs text-gray-600">—/${itemPoints(it)}</span>`}</div></div>`; }).join('') || '<p class="px-5 py-3 text-sm text-gray-500">No graded work yet.</p>'}</div></section>`).join('') : emptyState({ icon: 'award', title: 'Not enrolled in any courses' }));
     } else if (tab === 'reportcards') {
       const published = staff ? settings.terms : settings.terms.filter(x => (settings.publishedTerms || []).includes(x.id));
       el.innerHTML = published.length ? `<div class="grid sm:grid-cols-2 gap-4">${published.map(x => `<button data-rc-term="${x.id}" class="card card-hover p-5 text-left flex items-center gap-4">${iconTile('file-text', 'amber')}<span class="flex-1"><span class="block text-white">${escapeHtml(x.name)}</span><span class="block text-xs text-gray-500">${escapeHtml(formatDate(x.start + 'T12:00'))} – ${escapeHtml(formatDate(x.end + 'T12:00'))}</span></span>${staff && !(settings.publishedTerms || []).includes(x.id) ? badge('Not published', 'muted') : ''}</button>`).join('')}</div>` : emptyState({ icon: 'file-text', title: 'No report cards yet', text: 'Report cards appear here once the school publishes them.' });
@@ -1022,6 +1041,10 @@ export async function viewRecord(ctx, sidParam, tab = 'overview') {
       await careerPlanTab(ctx, el, student, { canEdit: staff || self });
     } else if (tab === 'services') {
       await servicesTab(ctx, el, student);
+    } else if (FAMILY_TABS.includes(tab)) {
+      const fam = await import('./family.js' + BUILD);
+      if (!live(t)) return;
+      await fam.renderTab(ctx, tab, el, student, t, { settings, rerender: async (o = {}) => { if (o.freshSettings) await getSettings(ctx, { fresh: true }); renderRoute(); } });
     } else if (tab === 'discipline') {
       await disciplineTab(ctx, el, student, t);
     } else if (tab === 'family') {

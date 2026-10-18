@@ -494,14 +494,15 @@ async function getRoleInTenant(slug, uid) {
 let schoolsCache = null, schoolsCacheAt = 0;
 async function searchSchools(q) {
   if (!schoolsCache || Date.now() - schoolsCacheAt > 300000) {
-    const snap = await getDocs(query(collection(db, 'tenants'), where('type', '==', 'school')));
-    schoolsCache = snap.docs.map(d => ({ slug: d.id, name: d.data().name || d.id, districtId: d.data().districtId || null }));
+    // Schools AND independent teachers' classrooms (older classrooms may have no type field, so read them all).
+    const snap = await getDocs(collection(db, 'tenants'));
+    schoolsCache = snap.docs.map(d => ({ slug: d.id, name: d.data().name || d.id, type: d.data().type === 'school' ? 'school' : 'personal', districtId: d.data().districtId || null }));
     schoolsCacheAt = Date.now();
   }
   const ql = q.toLowerCase().trim();
   const starts = s => s.name.toLowerCase().startsWith(ql) ? 0 : 1;
   return schoolsCache
-    .filter(s => !ql || s.name.toLowerCase().includes(ql) || s.slug.includes(ql))
+    .filter(s => !ql || s.name.toLowerCase().includes(ql) || s.slug.includes(ql.replace(/\s+/g, '-')))
     .sort((a, b) => starts(a) - starts(b) || a.name.localeCompare(b.name))
     .slice(0, 20);
 }
@@ -815,7 +816,7 @@ function mountSchoolPicker(host, { initial = null, onChange = () => {} } = {}) {
     }
     host.innerHTML = `<div class="relative">
       <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none">${ico('search')}</span>
-      <input type="text" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-label="Search for your school" placeholder="Start typing your school's name…" autocomplete="off" class="input pl-10" />
+      <input type="text" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-label="Search for your school" placeholder="School or teacher's classroom name…" autocomplete="off" class="input pl-10" />
       <div data-results role="listbox" class="absolute z-30 left-0 right-0 mt-1 bg-[#171717] border border-white/[0.1] rounded-xl overflow-hidden hidden max-h-64 overflow-y-auto shadow-2xl"></div>
     </div>`;
     refreshIcons();
@@ -823,8 +824,8 @@ function mountSchoolPicker(host, { initial = null, onChange = () => {} } = {}) {
     const show = () => {
       box.classList.remove('hidden'); input.setAttribute('aria-expanded', 'true');
       box.innerHTML = results.length
-        ? results.map((s, i) => `<button type="button" role="option" aria-selected="${i === active}" data-i="${i}" class="w-full text-left px-4 py-3 border-b border-white/[0.04] last:border-0 transition-colors ${i === active ? 'bg-white/[0.07]' : 'hover:bg-white/[0.04]'}"><div class="text-sm text-white">${escapeHtml(s.name)}</div><div class="text-xs text-gray-500 font-mono">/${escapeHtml(s.slug)}</div></button>`).join('')
-        : `<div class="p-4 text-sm text-gray-500">No schools match “${escapeHtml(input.value.trim())}”.</div>`;
+        ? results.map((s, i) => `<button type="button" role="option" aria-selected="${i === active}" data-i="${i}" class="w-full text-left px-4 py-3 border-b border-white/[0.04] last:border-0 transition-colors ${i === active ? 'bg-white/[0.07]' : 'hover:bg-white/[0.04]'}"><div class="text-sm text-white flex items-center gap-2">${escapeHtml(s.name)}${s.type === 'personal' ? '<span class="badge badge-violet">Independent classroom</span>' : ''}</div><div class="text-xs text-gray-500 font-mono">/${escapeHtml(s.slug)}</div></button>`).join('')
+        : `<div class="p-4 text-sm text-gray-500">No schools or classrooms match “${escapeHtml(input.value.trim())}”. Try the web address your teacher gave you (the part after /emberlms/).</div>`;
       box.querySelector('[aria-selected=true]')?.scrollIntoView({ block: 'nearest' });
     };
     const hide = () => { box.classList.add('hidden'); input.setAttribute('aria-expanded', 'false'); };
@@ -862,7 +863,7 @@ function viewLogin() {
   const schoolParam = params.get('school');
   const next = safeNext(params.get('next'));
   let mode = params.get('as') || (schoolParam ? 'student' : 'staff');
-  if (!['staff', 'student'].includes(mode)) mode = 'staff';
+  if (!['staff', 'student', 'parent'].includes(mode)) mode = 'staff';
   let school = schoolParam ? { slug: schoolParam, name: schoolParam } : null;
   let picker = null;
 
@@ -887,11 +888,12 @@ function viewLogin() {
       blurb: 'Sign in to your school, district, or personal classroom.',
       content: `
         <h2 class="font-serif text-3xl text-white mb-1">Sign in</h2>
-        <p class="text-gray-500 text-sm mb-6">${mode === 'student' ? 'Students sign in with the username your teacher gave you.' : 'Teachers and administrators.'}</p>
+        <p class="text-gray-500 text-sm mb-6">${mode === 'student' ? 'Students sign in with the username your teacher gave you.' : mode === 'parent' ? 'Parents and guardians — see grades, attendance and more in Family Access.' : 'Teachers, administrators and independent teachers.'}</p>
         ${currentUser ? signedInCard() : ''}
-        <div class="segmented grid grid-cols-2 w-full mb-6" role="group" aria-label="Account type">
+        <div class="segmented grid grid-cols-3 w-full mb-6" role="group" aria-label="Account type">
           <button type="button" data-login-mode="staff" aria-pressed="${mode === 'staff'}">${ico('briefcase', 'w-3.5 h-3.5')} Staff</button>
           <button type="button" data-login-mode="student" aria-pressed="${mode === 'student'}">${ico('graduation-cap', 'w-3.5 h-3.5')} Student</button>
+          <button type="button" data-login-mode="parent" aria-pressed="${mode === 'parent'}">${ico('users', 'w-3.5 h-3.5')} Parent</button>
         </div>
         <div id="login-body"></div>
         <p class="text-xs text-gray-600 mt-8 text-center">Don't have an account? <a href="${buildUrl('/signup')}" class="text-[#F59E0B] hover:underline">Sign up</a></p>`
@@ -905,51 +907,56 @@ function viewLogin() {
     }));
     const body = $('#login-body');
 
-    if (mode === 'staff') {
+    if (mode === 'staff' || mode === 'parent') {
+      const P = mode; // element ids: staff-email / parent-email …
       body.innerHTML = `
         <button type="button" id="google-btn" class="btn btn-google btn-block py-3">${GOOGLE_SVG} Continue with Google</button>
         ${DIVIDER}
-        <form id="staff-form" novalidate>
-          <label for="staff-email" class="label">Email</label>
-          <input id="staff-email" type="email" autocomplete="email" inputmode="email" class="input mb-4" required />
-          ${passwordField('staff-password')}
-          <div class="flex justify-end mt-2 mb-4"><button type="button" id="staff-forgot" class="text-xs text-gray-500 hover:text-[#F59E0B] transition-colors">Forgot password?</button></div>
+        <form id="${P}-form" novalidate>
+          <label for="${P}-email" class="label">Email</label>
+          <input id="${P}-email" type="email" autocomplete="email" inputmode="email" class="input mb-4" required />
+          ${passwordField(`${P}-password`)}
+          <div class="flex justify-end mt-2 mb-4"><button type="button" id="${P}-forgot" class="text-xs text-gray-500 hover:text-[#F59E0B] transition-colors">Forgot password?</button></div>
           <p id="login-error" class="form-error mb-4 hidden" role="alert"></p>
           <button type="submit" class="btn btn-primary btn-block py-3">Sign in</button>
-        </form>`;
+        </form>
+        ${P === 'parent' ? `<div class="mt-6 p-4 rounded-xl border border-white/[0.08] bg-white/[0.02]">
+          <p class="text-sm text-white mb-1">First time here?</p>
+          <p class="text-xs text-gray-500 mb-3">Create your parent account with the Family Access code from your child's school, or ask the school office to set one up for you.</p>
+          <a href="${buildUrl('/signup?role=guardian')}" class="btn btn-secondary btn-block">${ico('user-plus', 'w-4 h-4')} Create a parent account</a></div>` : ''}`;
       refreshIcons();
       const err = $('#login-error');
       $('#google-btn').addEventListener('click', e => withBusy(e.currentTarget, 'Opening Google…', () => authFlow(async () => {
         showError(err, '');
         try {
           const cred = await signInWithPopup(auth, new GoogleAuthProvider());
-          await afterLogin(cred.user, '/signup');
+          await afterLogin(cred.user, P === 'parent' ? '/signup?role=guardian' : '/signup');
         } catch (e) {
           if (['auth/popup-closed-by-user', 'auth/cancelled-popup-request'].includes(e.code)) return;
           console.error(e); showError(err, friendlyError(e));
         }
       })));
-      $('#staff-form').addEventListener('submit', e => {
+      $(`#${P}-form`).addEventListener('submit', e => {
         e.preventDefault();
         const btn = e.currentTarget.querySelector('[type=submit]');
-        const email = $('#staff-email').value.trim();
-        const password = $('#staff-password').value;
+        const email = $(`#${P}-email`).value.trim();
+        const password = $(`#${P}-password`).value;
         showError(err, '');
         if (!email || !password) return showError(err, 'Enter your email and password.');
         if (!isValidEmail(email)) return showError(err, 'Enter a valid email address.');
         withBusy(btn, 'Signing in…', () => authFlow(async () => {
           try {
             const cred = await signInWithEmailAndPassword(auth, email, password);
-            await afterLogin(cred.user, '/signup');
+            await afterLogin(cred.user, P === 'parent' ? '/signup?role=guardian' : '/signup');
           } catch (e) {
             if (!['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found'].includes(e.code)) console.error(e);
             showError(err, friendlyError(e));
           }
         }));
       });
-      $('#staff-forgot').addEventListener('click', async e => {
-        const email = $('#staff-email').value.trim();
-        if (!isValidEmail(email)) { showError(err, 'Enter your email above, then click “Forgot password?” again.'); $('#staff-email').focus(); return; }
+      $(`#${P}-forgot`).addEventListener('click', async e => {
+        const email = $(`#${P}-email`).value.trim();
+        if (!isValidEmail(email)) { showError(err, 'Enter your email above, then click “Forgot password?” again.'); $(`#${P}-email`).focus(); return; }
         await withBusy(e.currentTarget, 'Sending…', async () => {
           try { await sendPasswordResetEmail(auth, email); showError(err, ''); toast(`If an account exists for ${email}, a reset link is on its way.`, 'info'); }
           catch (ex) { showError(err, friendlyError(ex)); }
@@ -1629,6 +1636,8 @@ function globalNavHTML(active) {
     ${district ? tray('admin', ico('shield-check'), 'Admin') : ''}
     ${ctx?.isRealTeacher ? link('school', ctx.isAdmin ? 'shield-check' : 'clipboard-list', schoolHome(ctx).label, home + schoolHome(ctx).path) : ''}
     ${link('dashboard', 'layout-dashboard', 'Dashboard', home)}
+    ${ctx?.isStudent ? link('access', 'id-card', 'My Info', `${home}/record/me`) : ''}
+    ${ctx?.isGuardian && (ctx.children || []).length ? link('access', 'id-card', 'Family Access', `${home}/record/${ctx.children[0].uid}`) : ''}
     ${ctx && !ctx.isGuardian ? tray('courses', ico('book-open'), 'Courses') : ''}
     ${ctx ? link('calendar', 'calendar-days', 'Calendar', `${home}/calendar`) : ''}
     ${ctx ? link('inbox', 'inbox', 'Inbox', `${home}/inbox`, `<span class="gnav-badge ${inbox.count ? '' : 'hidden'}" data-inbox-badge aria-label="unread conversations">${inbox.count > 99 ? '99+' : inbox.count}</span>`) : ''}
@@ -1643,7 +1652,7 @@ function subnavHTML({ eyebrow = '', title, items, accent = 'amber' }) {
     <div class="text-white text-sm font-medium px-3 mb-4 line-clamp-2" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
     <div class="space-y-0.5">${items.map(i => i.section ? navSection(i.section) : `
       <a href="${i.href}" class="subnav-link ${i.hidden ? 'is-hidden' : ''}" ${i.active ? 'aria-current="page"' : ''}>
-        <span class="truncate">${escapeHtml(i.label)}</span>
+        ${i.icon ? ico(i.icon, 'w-4 h-4 shrink-0 opacity-70') : ''}<span class="min-w-0 leading-snug">${escapeHtml(i.label)}</span>
         ${i.hidden ? `<span class="ml-auto" title="Hidden from students">${ico('eye-off', 'w-3.5 h-3.5')}</span>` : ''}
         ${i.soon ? '<span class="soon">Soon</span>' : ''}
       </a>`).join('')}</div>
@@ -2205,7 +2214,7 @@ function schoolSubnav(ctx, active) {
   const groups = schoolMenu(ctx);
   const district = ctx.tenant.districtId && (ctx.roleInfo.data?.districtAdmin || ls(`ember_district:${currentUser.uid}`) === ctx.tenant.districtId);
   const open = navGroupState();
-  const link = i => `<a href="${href(i.path)}" ${i.path === '#concern' ? 'data-concern' : ''} class="subnav-link" ${i.key === active ? 'aria-current="page"' : ''}>${ico(i.icon, 'w-4 h-4 shrink-0 opacity-70')}<span class="truncate">${escapeHtml(i.label)}</span></a>`;
+  const link = i => `<a href="${href(i.path)}" ${i.path === '#concern' ? 'data-concern' : ''} class="subnav-link" ${i.key === active ? 'aria-current="page"' : ''}>${ico(i.icon, 'w-4 h-4 shrink-0 opacity-70')}<span class="min-w-0 leading-snug">${escapeHtml(i.label)}</span></a>`;
   return `<nav class="subnav accent-amber" aria-label="${escapeHtml(schoolHome(ctx).label)} navigation">
     <div class="text-[10px] text-gray-500 uppercase tracking-widest px-3 mb-1 truncate">${escapeHtml(schoolHome(ctx).label)}</div>
     <div class="text-white text-sm font-medium px-3 mb-4 line-clamp-2" title="${escapeHtml(ctx.tenant.name)}">${escapeHtml(ctx.tenant.name)}</div>
@@ -3706,8 +3715,9 @@ async function viewAdminTeachers(ctx) {
     });
   } catch (e) { console.error(e); if (live(t)) { $('#teachers-list').innerHTML = errorBox(e); refreshIcons(); } }
 }
-const STAFF_CAPS = { services: 'Special ed · 504 · ELL', safety: 'Discipline & safety' };
-const STAFF_CAP_HELP = { services: 'IEP / 504 / ELL caseloads, accommodations, confidential notes.', safety: 'View and manage the incident log; see every reported concern.' };
+const STAFF_CAPS = { services: 'Special ed · 504 · ELL', safety: 'Discipline & safety', health: 'Health / nurse', records: 'Records / registrar' };
+const STAFF_CAP_HELP = { services: 'IEP / 504 / ELL caseloads, accommodations, confidential notes.', safety: 'View and manage the incident log; see every reported concern.',
+  health: 'Edit allergies, medications, immunizations, screenings and nurse visits.', records: 'Edit test scores, academic history, graduation checks and busing.' };
 function openInviteTeacherModal(tenant, joinCode) {
   const signupUrl = location.origin + buildUrl('/signup');
   const msg = `You're invited to join ${tenant.name} on ${APP_NAME}.\n\n1. Go to ${signupUrl}\n2. Choose "I'm a teacher" → "Join my school"\n3. Enter the join code: ${joinCode || ''}`;

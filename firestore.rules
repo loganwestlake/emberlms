@@ -301,6 +301,27 @@ service cloud.firestore {
       allow create: if isStaff(t) && request.resource.data.reportedBy == me();
       allow update, delete: if hasCap(t, 'safety');
     }
+    // ── Family Access records: the student, their parents and staff can read; only the right staff edit.
+    match /tenants/{t}/testScores/{id} {
+      allow read: if canSeeStudent(t, resource.data.studentUid);
+      allow write: if hasCap(t, 'records');
+    }
+    match /tenants/{t}/academicHistory/{id} {
+      allow read: if canSeeStudent(t, resource.data.studentUid);
+      allow write: if hasCap(t, 'records');
+    }
+    match /tenants/{t}/health/{sid} {
+      allow read: if canSeeStudent(t, sid);
+      allow write: if hasCap(t, 'health');
+    }
+    // Portfolio: students add their own work; staff can add for any student; creators and staff can remove.
+    match /tenants/{t}/portfolio/{id} {
+      allow read: if canSeeStudent(t, resource.data.studentUid);
+      allow create: if request.resource.data.addedBy == me()
+        && (isStaff(t) || (isStudent(t) && request.resource.data.studentUid == me()));
+      allow update: if isStaff(t) || (signedIn() && resource.data.addedBy == me() && request.resource.data.studentUid == resource.data.studentUid);
+      allow delete: if isStaff(t) || (signedIn() && resource.data.addedBy == me());
+    }
     // Family-safe copies of discipline referrals the office chose to share (no internal notes).
     match /tenants/{t}/disciplineRecords/{id} {
       allow read: if canSeeStudent(t, resource.data.studentUid);
