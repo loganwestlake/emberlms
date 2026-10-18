@@ -9,7 +9,7 @@ import {
   timeAgo, toDateInput, render, setTitle, showError, iconTile, badge, avatar, skeletonRows, emptyState, errorBox, dataTable,
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
-  GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, routeTokenNow, randInt, renderRoute
+  GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, routeTokenNow, randInt, renderRoute, districtShell, getDistrictSchools
 } from './app.js';
 
 // ═══════════════════════════════════════════════════════════════
@@ -170,7 +170,9 @@ export function vizLine(points, { label, format = v => `${v}%`, domain = null, x
   if (!points.length) return { html: `<p class="text-sm text-gray-500 py-10 text-center">No attendance taken in this range yet.</p>`, mount() {} };
   const H = 240, ml = 44, mr = 60, mt = 16, mb = 30, iw = W - ml - mr, ih = H - mt - mb;
   const ys = points.map(p => p.y);
-  let [lo, hi] = domain || [Math.max(0, Math.floor((Math.min(...ys) - 4) / 5) * 5), 100];
+  // Round the axis to a clean step (1, 2, 5, 10, 25…) so ticks read 80/85/90/95/100, never 81.3.
+  const autoLo = () => { const span = 100 - Math.max(0, Math.min(...ys) - 2); const step = [1, 2, 5, 10, 25].find(x => x * 4 >= span) || 25; return Math.max(0, 100 - step * 4); };
+  let [lo, hi] = domain || [autoLo(), 100];
   if (hi <= lo) lo = hi - 10;
   const X = i => ml + (points.length === 1 ? iw / 2 : i * iw / (points.length - 1));
   const Y = v => mt + ih - (v - lo) / (hi - lo) * ih;
@@ -257,16 +259,18 @@ export async function viewRollCall(ctx, course) {
   const t = routeTokenNow();
   setTitle('Attendance', course.title);
   const settings = await getSettings(ctx);
-  let date = new URLSearchParams(location.search).get('date') || todayISO();
+  const qd = new URLSearchParams(location.search).get('date') || '';
+  let date = /^\d{4}-\d{2}-\d{2}$/.test(qd) && qd <= todayISO() ? qd : todayISO();
   render(tenantPage(ctx, 'attendance', pageHeader({
     eyebrow: escapeHtml(course.title || ''), title: 'Attendance',
     subtitle: `${escapeHtml(periodName(settings, course.periodId))}${course.room ? ' · Room ' + escapeHtml(course.room) : ''}`,
-    actions: `<label class="sr-only" for="rc-date">Date</label><input id="rc-date" type="date" class="input !py-2 !w-auto" value="${date}" max="${todayISO()}">`
+    actions: `<label class="sr-only" for="rc-date">Date</label><input id="rc-date" type="date" class="input !py-2 !w-auto" value="${escapeHtml(date)}" max="${todayISO()}">`
   }) + `<div class="grid xl:grid-cols-[minmax(0,1fr)_300px] gap-8 max-w-6xl"><div id="rc-main" class="min-w-0">${skeletonRows(6)}</div><aside id="rc-side" class="space-y-6"></aside></div>`, course));
   let roster = [], marks = {}, notes = {}, savedAt = null, flags = {};
   const main = $('#rc-main');
   const load = async () => {
     main.innerHTML = skeletonRows(6);
+    const want = date; // a slower load for a previous date must not overwrite this one
     try {
       const [r, recs, studs, sess] = await Promise.all([
         rosterOf(ctx, course.id),
@@ -274,7 +278,7 @@ export async function viewRollCall(ctx, course) {
         loadStudents(ctx).catch(() => []),
         getDoc(tdoc(ctx, 'attendanceSessions', `${date}_${course.id}`)),
       ]);
-      if (!live(t)) return;
+      if (!live(t) || want !== date) return;
       roster = r; marks = {}; notes = {};
       recs.docs.forEach(d => { const x = d.data(); marks[x.studentUid] = x.code; if (x.note) notes[x.studentUid] = x.note; });
       savedAt = sess.exists() ? sess.data().takenAt : null;
@@ -424,19 +428,21 @@ export async function viewAttendanceOffice(ctx) {
   };
   const toISO = () => range.startsWith('term:') ? (settings.terms.find(x => x.id === range.slice(5))?.end || todayISO()) : todayISO();
   const rangeSelect = () => `<label class="sr-only" for="att-range">Range</label><select id="att-range" class="input !py-2 !w-auto">${[['30', 'Last 30 days'], ['90', 'Last 90 days'], ...settings.terms.map(x => [`term:${x.id}`, x.name])].map(([v, l]) => `<option value="${v}" ${v === range ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}</select>`;
+  let drawSeq = 0; // only the latest tab/range request may render
   const draw = async () => {
+    const my = ++drawSeq;
     $$('[data-tab]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.tab === tab)));
     body.innerHTML = skeletonRows(4, 'h-24');
     try {
       await ensureBase();
-      if (!live(t)) return;
+      if (!live(t) || my !== drawSeq) return;
       if (tab === 'today') {
         controls.innerHTML = `<label class="sr-only" for="att-date">Date</label><input id="att-date" type="date" class="input !py-2 !w-auto" value="${date}" max="${todayISO()}">`;
         const [sessSnap, recSnap] = await Promise.all([
           getDocs(query(tcol(ctx, 'attendanceSessions'), where('date', '==', date))),
           getDocs(query(tcol(ctx, 'attendance'), where('date', '==', date))),
         ]);
-        if (!live(t)) return;
+        if (!live(t) || my !== drawSeq) return;
         const taken = new Set(sessSnap.docs.map(d => d.data().courseId));
         const scheduled = cache.courses.filter(c => c.periodId);
         const pool = scheduled.length ? scheduled : cache.courses;
@@ -474,7 +480,7 @@ export async function viewAttendanceOffice(ctx) {
           getDocs(query(tcol(ctx, 'attendanceSessions'), where('date', '>=', from))),
           getDocs(query(tcol(ctx, 'attendance'), where('date', '>=', from))),
         ]);
-        if (!live(t)) return;
+        if (!live(t) || my !== drawSeq) return;
         const sessions = sessSnap.docs.map(d => d.data()).filter(x => x.date <= to);
         const recs = recSnap.docs.map(d => d.data()).filter(x => x.date <= to);
         const days = {};
@@ -494,7 +500,7 @@ export async function viewAttendanceOffice(ctx) {
             ${statTile('Average daily attendance', fmtPct(all.rate), `${Object.keys(days).length} school days`)}
             ${statTile('Absences', all.absent.toLocaleString(), `${all.E} excused`)}
             ${statTile('Tardies', all.T.toLocaleString())}
-            ${statTile('Chronically absent', perStudent.filter(x => x.level !== 'warning').length, `missing ≥ ${settings.chronicThreshold}% of class time`, perStudent.some(x => x.level === 'critical') ? 'critical' : perStudent.length ? 'serious' : 'good')}
+            ${statTile('Chronically absent', perStudent.filter(x => x.level !== 'warning').length, `missing ≥ ${settings.chronicThreshold}% of class time`, perStudent.some(x => x.level === 'critical') ? 'critical' : perStudent.some(x => x.level === 'serious') ? 'serious' : 'good')}
           </div>
           <section class="card p-5 sm:p-6 mb-6"><h2 class="text-sm text-white font-medium">Daily attendance rate</h2><p class="text-xs text-gray-500 mb-4">Present + tardy as a share of all student-periods recorded each day.</p>${line.html}${tableView(['Date', 'Rate', 'Absent / tardy'], points.map(p => [escapeHtml(p.x.toLocaleDateString()), fmtPct(p.y), escapeHtml(p.detail)]))}</section>
           <div class="grid lg:grid-cols-2 gap-6">
@@ -507,10 +513,10 @@ export async function viewAttendanceOffice(ctx) {
       }
       // chronic
       const recSnap = await getDocs(query(tcol(ctx, 'attendance'), where('date', '>=', from)));
-      if (!live(t)) return;
+      if (!live(t) || my !== drawSeq) return;
       const list = chronicList(recSnap.docs.map(d => d.data()).filter(x => x.date <= to), settings.chronicThreshold);
       const labels = { critical: 'Severe', serious: 'Chronic', warning: 'At risk' };
-      body.innerHTML = `<p class="text-sm text-gray-400 mb-4 max-w-3xl">Students missing ${settings.chronicThreshold}% or more of their class time (excused and unexcused) are <strong class="text-white">chronically absent</strong>; 20%+ is severe. Students at 5–${settings.chronicThreshold}% are flagged as at risk so you can intervene early.</p>
+      body.innerHTML = `<p class="text-sm text-gray-400 mb-4 max-w-3xl">Students missing ${settings.chronicThreshold}% or more of their class time (excused and unexcused) are <strong class="text-white">chronically absent</strong>; ${Math.max(20, settings.chronicThreshold)}%+ is severe. Students at ${Math.min(5, settings.chronicThreshold / 2)}–${settings.chronicThreshold}% are flagged as at risk so you can intervene early.</p>
         <div class="flex justify-end mb-3"><button id="chronic-csv" class="btn btn-secondary btn-sm" ${list.length ? '' : 'disabled'}>${ico('download', 'w-3.5 h-3.5')} Export CSV</button></div>
         ${list.length ? dataTable(
           [{ label: 'Student', cls: 'col-span-12 sm:col-span-4' }, { label: 'Status', cls: 'col-span-6 sm:col-span-2' }, { label: 'Missed', cls: 'col-span-6 sm:col-span-2 text-right' }, { label: 'Absences', cls: 'col-span-4 sm:col-span-2 text-right' }, { label: '', cls: 'col-span-8 sm:col-span-2 text-right' }],
@@ -520,7 +526,7 @@ export async function viewAttendanceOffice(ctx) {
             `<span class="text-sm text-white tabular-nums block text-right">${x.rate}%</span>`,
             `<span class="text-xs text-gray-400 tabular-nums block text-right">${x.abs} of ${x.n}</span>`,
             `<div class="flex justify-end"><button class="btn btn-ghost btn-sm" data-contact="${x.uid}" data-name="${escapeHtml(x.name)}">${ico('mail', 'w-3.5 h-3.5')} Family</button></div>`
-          ] }))) : emptyState({ icon: 'circle-check', tone: 'green', title: 'No students at risk', text: 'Nobody has missed 5% or more of their classes in this range.' })}`;
+          ] }))) : emptyState({ icon: 'circle-check', tone: 'green', title: 'No students at risk', text: `Nobody has missed ${Math.min(5, settings.chronicThreshold / 2)}% or more of their classes in this range.` })}`;
       refreshIcons();
       $('#chronic-csv')?.addEventListener('click', () => downloadCSV('chronic-absence.csv', [['Student', 'Grade', 'Status', 'Missed %', 'Absences', 'Sessions'], ...list.map(x => [x.name, x.grade ?? '', labels[x.level], x.rate, x.abs, x.n])]));
     } catch (e) { console.error(e); if (live(t)) { body.innerHTML = errorBox(e); refreshIcons(); } }
@@ -536,8 +542,10 @@ export async function viewAttendanceOffice(ctx) {
 function chronicList(recs, threshold) {
   const per = {};
   recs.forEach(r => { const p = (per[r.studentUid] ||= { uid: r.studentUid, name: r.studentName || 'Student', grade: r.gradeLevel, n: 0, abs: 0 }); p.n++; if (isAbsence(r.code)) p.abs++; });
+  // At risk from min(5%, half the threshold); severe from max(20%, the threshold), so a custom threshold stays consistent.
+  const atRisk = Math.min(5, threshold / 2), severe = Math.max(20, threshold);
   return Object.values(per).map(p => ({ ...p, rate: pct(p.abs, p.n) || 0 }))
-    .filter(p => p.rate >= 5).map(p => ({ ...p, level: p.rate >= 20 ? 'critical' : p.rate >= threshold ? 'serious' : 'warning' }))
+    .filter(p => p.rate >= atRisk).map(p => ({ ...p, level: p.rate >= severe ? 'critical' : p.rate >= threshold ? 'serious' : 'warning' }))
     .sort((a, b) => b.rate - a.rate);
 }
 function downloadCSV(name, rows) {
@@ -597,9 +605,11 @@ export async function viewMasterSchedule(ctx) {
     rosters = Object.fromEntries(await Promise.all(courses.map(async c => [c.id, await rosterOf(ctx, c.id).catch(() => [])])));
   };
   const overlap = (a, b) => { const da = a.days?.length ? a.days : DAYS.map(d => d[0]); const dbb = b.days?.length ? b.days : DAYS.map(d => d[0]); return da.some(d => dbb.includes(d)); };
+  // A course whose period was deleted in Setup counts as unscheduled (so it stays visible and fixable).
+  const pidOf = c => settings.periods.some(p => p.id === c.periodId) ? c.periodId : null;
   const conflicts = () => {
     const out = [], byPeriod = {};
-    courses.filter(c => c.periodId).forEach(c => (byPeriod[c.periodId] ||= []).push(c));
+    courses.filter(c => pidOf(c)).forEach(c => (byPeriod[c.periodId] ||= []).push(c));
     const bad = new Set();
     Object.entries(byPeriod).forEach(([pid, list]) => {
       for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
@@ -615,7 +625,7 @@ export async function viewMasterSchedule(ctx) {
   };
   const chip = (c, bad) => `<button type="button" data-course="${c.id}" class="w-full text-left rounded-lg px-2.5 py-2 mb-1.5 border transition-colors ${bad.has(c.id) ? 'border-[#d03b3b]/60 bg-[#d03b3b]/10' : 'border-white/[0.08] bg-white/[0.03] hover:border-white/20'}">
       <div class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full shrink-0" style="background:${courseHex(c)}"></span><span class="text-xs text-white truncate">${escapeHtml(c.title || 'Untitled')}</span>${bad.has(c.id) ? ico('octagon-alert', 'w-3 h-3 st-critical shrink-0 ml-auto') : ''}</div>
-      <div class="text-[10px] text-gray-500 truncate mt-0.5">${c.room ? 'Rm ' + escapeHtml(c.room) + ' · ' : ''}${(rosters[c.id] || []).length} students${c.days?.length && c.days.length < 5 ? ' · ' + c.days.join('') : ''}</div></button>`;
+      <div class="text-[10px] text-gray-500 truncate mt-0.5">${c.room ? 'Rm ' + escapeHtml(c.room) + ' · ' : ''}${(rosters[c.id] || []).length} students${c.days?.length && c.days.length < 5 ? ' · ' + escapeHtml(c.days.join('')) : ''}</div></button>`;
   const draw = () => {
     const { list, bad } = conflicts();
     $$('[data-by]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.by === by)));
@@ -628,7 +638,7 @@ export async function viewMasterSchedule(ctx) {
       <div class="card overflow-auto"><table class="w-full text-sm border-separate border-spacing-0">
         <thead><tr><th class="sticky left-0 z-10 bg-[#161616] text-left text-[10px] uppercase tracking-wider text-gray-500 font-medium px-4 py-3 min-w-[120px]">Period</th>${cols.map(c => `<th class="bg-[#161616] text-left text-[11px] text-gray-300 font-medium px-3 py-3 min-w-[170px]">${escapeHtml(c.label)}</th>`).join('')}</tr></thead>
         <tbody>${rows.map(r => `<tr class="align-top"><th class="sticky left-0 z-10 bg-[#141414] text-left px-4 py-3 border-t border-white/[0.05] font-normal"><div class="text-xs text-white">${escapeHtml(r.label)}</div><div class="text-[10px] text-gray-500">${escapeHtml(r.sub)}</div></th>
-          ${cols.map(col => `<td class="px-3 py-2.5 border-t border-white/[0.05]">${courses.filter(c => col.match(c) && (c.periodId || null) === r.id).map(c => chip(c, bad)).join('')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+          ${cols.map(col => `<td class="px-3 py-2.5 border-t border-white/[0.05]">${courses.filter(c => col.match(c) && pidOf(c) === r.id).map(c => chip(c, bad)).join('')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
       <p class="hint mt-3">Click a section to change its period, room or days. Edit periods and bell times in School setup.</p>`}`;
     refreshIcons();
   };
@@ -661,7 +671,7 @@ function scheduleHTML(courses, settings) {
   return `<div class="card overflow-hidden divide-y divide-white/[0.05]">${sorted.map(c => { const p = settings.periods.find(x => x.id === c.periodId); return `
     <div class="flex items-center gap-4 px-5 py-3.5"><div class="w-24 shrink-0"><div class="text-xs text-white">${escapeHtml(p?.name || 'Unscheduled')}</div><div class="text-[11px] text-gray-500 tabular-nums">${p ? `${fmtTime(p.start)}–${fmtTime(p.end)}` : ''}</div></div>
       <span class="w-1 self-stretch rounded-full" style="background:${courseHex(c)}"></span>
-      <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(c.title || '')}</div><div class="text-[11px] text-gray-500 truncate">${escapeHtml(c.ownerName || '')}${c.room ? ' · Room ' + escapeHtml(c.room) : ''}${c.days?.length && c.days.length < 5 ? ' · ' + c.days.join('') : ''}</div></div></div>`; }).join('')}</div>`;
+      <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(c.title || '')}</div><div class="text-[11px] text-gray-500 truncate">${escapeHtml(c.ownerName || '')}${c.room ? ' · Room ' + escapeHtml(c.room) : ''}${c.days?.length && c.days.length < 5 ? ' · ' + escapeHtml(c.days.join('')) : ''}</div></div></div>`; }).join('')}</div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -736,7 +746,7 @@ function reportCardHTML(ctx, settings, student, term, { rows, att }) {
     <header class="rc-head"><div><div class="rc-school">${escapeHtml(ctx.tenant.name)}</div><div class="rc-sub">${escapeHtml(rc.title || 'Report Card')} · ${escapeHtml(term.name)} · ${escapeHtml(settings.schoolYear)}</div></div>
       <div class="rc-student"><div class="rc-name">${escapeHtml(displayNameOf(student))}</div><div class="rc-sub">${escapeHtml(gradeLabel(student.gradeLevel))}${student.studentNumber ? ' · ID ' + escapeHtml(student.studentNumber) : ''}</div></div></header>
     <table><thead><tr><th>Course</th><th>Teacher</th><th class="num">Grade</th><th class="num">%</th>${rc.showComments ? '<th>Comments</th>' : ''}</tr></thead>
-      <tbody>${sorted.length ? sorted.map(r => `<tr><td>${escapeHtml(r.course.title || '')}</td><td>${escapeHtml(r.grade?.teacherName || r.course.ownerName || '')}</td><td class="num rc-letter">${escapeHtml(r.grade?.letter || '—')}</td><td class="num">${r.grade?.percent ?? '—'}</td>${rc.showComments ? `<td>${escapeHtml(r.grade?.comment || '')}</td>` : ''}</tr>`).join('') : `<tr><td colspan="5">No courses.</td></tr>`}</tbody></table>
+      <tbody>${sorted.length ? sorted.map(r => `<tr><td>${escapeHtml(r.course.title || '')}</td><td>${escapeHtml(r.grade?.teacherName || r.course.ownerName || '')}</td><td class="num rc-letter">${escapeHtml(r.grade?.letter || '—')}</td><td class="num">${escapeHtml(r.grade?.percent ?? '—')}</td>${rc.showComments ? `<td>${escapeHtml(r.grade?.comment || '')}</td>` : ''}</tr>`).join('') : `<tr><td colspan="5">No courses.</td></tr>`}</tbody></table>
     ${rc.showAttendance && att ? `<div class="rc-row"><strong>Attendance this term:</strong> ${att.total ? `${att.rate}% present · ${att.absent} absences (${att.E} excused) · ${att.T} tardies` : 'No attendance recorded.'}</div>` : ''}
     ${rc.showScale ? `<div class="rc-row rc-small"><strong>Grading scale:</strong> ${[...settings.gradeScale].sort((a, b) => b.min - a.min).map(g => `${escapeHtml(g.letter)} ${g.min}+`).join(' · ')} · I = Incomplete · P = Pass</div>` : ''}
     ${rc.footer ? `<div class="rc-row">${escapeHtml(rc.footer)}</div>` : ''}
@@ -770,20 +780,23 @@ export async function viewReportCards(ctx) {
   let termId = currentTerm(settings)?.id, grade = '', q = '';
   render(tenantPage(ctx, 'sis-reportcards', pageHeader({ eyebrow: 'Student information', title: 'Report cards', subtitle: 'Track which teachers have entered grades, publish to families, and print.', actions: `<label class="sr-only" for="rcs-term">Term</label><select id="rcs-term" class="input !py-2 !w-auto">${settings.terms.map(x => `<option value="${x.id}" ${x.id === termId ? 'selected' : ''}>${escapeHtml(x.name)}</option>`).join('')}</select><a href="${buildUrl(`/${ctx.slug}/admin/setup`)}" class="btn btn-secondary">${ico('settings-2')} Template</a>` }) + `<div id="rcs" class="max-w-6xl">${skeletonRows(5)}</div>`));
   const el = $('#rcs');
-  let students = [], courses = [];
-  const load = async () => {
-    el.innerHTML = skeletonRows(5);
+  let students = [], courses = [], progress = null, progressFor = null;
+  // refetch=false re-renders from cached data (search / grade filter), so typing doesn't hit Firestore or lose focus.
+  const load = async (refetch = true) => {
+    if (refetch || progressFor !== termId) el.innerHTML = skeletonRows(5);
     try {
       if (!students.length) [students, courses] = await Promise.all([loadStudents(ctx), loadAllCourses(ctx)]);
       const term = settings.terms.find(x => x.id === termId);
-      const progress = await Promise.all(courses.map(async c => {
+      if (refetch || progressFor !== termId) progress = await Promise.all(courses.map(async c => {
         const [n, g] = await Promise.all([getDocs(courseCol(ctx, c.id, 'enrollments')).then(s => s.size).catch(() => 0), getDocs(query(courseCol(ctx, c.id, 'termGrades'), where('termId', '==', termId))).then(s => s.size).catch(() => 0)]);
         return { c, n, g };
       }));
+      progressFor = termId;
       if (!live(t)) return;
       const published = (settings.publishedTerms || []).includes(termId);
       const done = progress.filter(p => p.n && p.g >= p.n).length, withKids = progress.filter(p => p.n).length;
-      const shown = students.filter(s => (!grade || String(s.gradeLevel) === grade) && (!q || displayNameOf(s).toLowerCase().includes(q)));
+      const ql = q.trim().toLowerCase();
+      const shown = students.filter(s => (!grade || String(s.gradeLevel) === grade) && (!ql || displayNameOf(s).toLowerCase().includes(ql)));
       el.innerHTML = `
         <div class="grid sm:grid-cols-3 gap-4 mb-8">
           ${statTile('Sections with grades in', `${done}<span class="text-gray-500 text-lg">/${withKids}</span>`, done === withKids ? 'All sections complete' : `${withKids - done} still entering`, done === withKids ? 'good' : 'warning')}
@@ -800,9 +813,9 @@ export async function viewReportCards(ctx) {
           <aside><h2 class="label">Grade entry by section</h2><div class="card divide-y divide-white/[0.05] overflow-hidden">${progress.filter(p => p.n).sort((a, b) => (a.g >= a.n) - (b.g >= b.n)).map(p => `<div class="flex items-center gap-3 px-4 py-2.5"><span class="flex-1 min-w-0"><span class="block text-sm text-white truncate">${escapeHtml(p.c.title || '')}</span><span class="block text-[11px] text-gray-500 truncate">${escapeHtml(p.c.ownerName || '')}</span></span>${p.g >= p.n ? statusChip('good', 'Done') : statusChip('warning', `${p.g}/${p.n}`)}</div>`).join('') || '<p class="p-4 text-sm text-gray-500">No sections with students.</p>'}</div></aside>
         </div>`;
       refreshIcons();
-      $('#rcs-q').value = q;
-      $('#rcs-q').addEventListener('input', e => { q = e.target.value.trim().toLowerCase(); load(); });
-      $('#rcs-grade').addEventListener('change', e => { grade = e.target.value; load(); });
+      const qi = $('#rcs-q'); qi.value = q;
+      qi.addEventListener('input', e => { q = e.target.value; load(false).then(() => { const n = $('#rcs-q'); n?.focus(); n?.setSelectionRange(n.value.length, n.value.length); }); });
+      $('#rcs-grade').addEventListener('change', e => { grade = e.target.value; load(false); });
       $('#rcs-print-all').addEventListener('click', () => openReportCardPreview(ctx, settings, shown, term));
       $('#rcs-publish').addEventListener('click', async ev => {
         const btn = ev.currentTarget; // capture before awaiting — currentTarget is cleared after dispatch
@@ -963,7 +976,7 @@ export async function viewRecord(ctx, sidParam, tab = 'overview') {
           <section><h2 class="label">Current grades</h2>${gradesListHTML(grades)}</section>
           <section class="space-y-6">
             ${accom ? `<div>${`<h2 class="label">Accommodations</h2><div class="card p-5"><ul class="space-y-1.5">${accom.map(a => `<li class="text-sm text-gray-300 flex gap-2">${ico('check', 'w-4 h-4 text-gray-500 shrink-0 mt-0.5')}${escapeHtml(a)}</li>`).join('')}</ul></div>`}</div>` : ''}
-            <div><h2 class="label">Today's schedule</h2>${scheduleHTML(courses.filter(c => !c.days?.length || c.days.includes('UMTWRFS'[new Date().getDay()])), settings)}</div>
+            <div><h2 class="label">Today's schedule</h2>${scheduleHTML(courses.filter(c => { const wd = new Date().getDay(); return wd > 0 && wd < 6 && (!c.days?.length || c.days.includes('UMTWRFS'[wd])); }), settings)}</div>
             ${staff && (student.contacts || []).length ? `<div><h2 class="label">Contacts</h2><div class="card divide-y divide-white/[0.05]">${student.contacts.map(c => `<div class="px-4 py-3"><div class="text-sm text-white">${escapeHtml(c.name || '')} <span class="text-xs text-gray-500">${escapeHtml(c.relation || '')}</span></div><div class="text-xs text-gray-400">${c.phone ? `<a class="hover:text-[#F59E0B]" href="tel:${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</a>` : ''}${c.phone && c.email ? ' · ' : ''}${c.email ? `<a class="hover:text-[#F59E0B]" href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : ''}</div></div>`).join('')}</div></div>` : ''}
           </section>
         </div>`;
@@ -983,7 +996,7 @@ export async function viewRecord(ctx, sidParam, tab = 'overview') {
       el.innerHTML = grades.length ? grades.map(g => `<section class="card mb-4 overflow-hidden"><div class="flex items-center gap-3 px-5 py-4 border-b border-white/[0.06]"><span class="w-2.5 h-2.5 rounded-full" style="background:${courseHex(g.course)}"></span><h2 class="text-white font-medium flex-1 truncate">${escapeHtml(g.course.title || '')}</h2><span class="text-sm text-white tabular-nums">${g.percent === null ? '—' : `${g.percent}% ${g.letter}`}</span></div>
         <div class="divide-y divide-white/[0.04]">${g.items.filter(it => GRADED_TYPES.includes(it.type)).map(it => { const s = g.subs.get(it.id); const due = toDate(it.data?.dueDate); const missing = !s && due && due < new Date();
           return `<div class="flex items-center gap-3 px-5 py-2.5">${ico(typeMeta(it.type).icon, 'w-4 h-4 text-gray-500 shrink-0')}<div class="flex-1 min-w-0"><div class="text-sm text-gray-200 truncate">${escapeHtml(it.title || '')}</div><div class="text-[11px] text-gray-500">${due ? 'Due ' + escapeHtml(formatDate(due)) : 'No due date'}</div></div>
-            <div class="text-right shrink-0">${hasGrade(s) ? `<span class="text-sm text-white tabular-nums">${s.grade}<span class="text-gray-500">/${itemPoints(it)}</span></span>` : s ? badge('Submitted', 'blue') : missing ? badge('Missing', 'red') : `<span class="text-xs text-gray-600">—/${itemPoints(it)}</span>`}</div></div>`; }).join('') || '<p class="px-5 py-3 text-sm text-gray-500">No graded work yet.</p>'}</div></section>`).join('') : emptyState({ icon: 'award', title: 'Not enrolled in any courses' });
+            <div class="text-right shrink-0">${hasGrade(s) ? `<span class="text-sm text-white tabular-nums">${escapeHtml(s.grade)}<span class="text-gray-500">/${itemPoints(it)}</span></span>` : s ? badge('Submitted', 'blue') : missing ? badge('Missing', 'red') : `<span class="text-xs text-gray-600">—/${itemPoints(it)}</span>`}</div></div>`; }).join('') || '<p class="px-5 py-3 text-sm text-gray-500">No graded work yet.</p>'}</div></section>`).join('') : emptyState({ icon: 'award', title: 'Not enrolled in any courses' });
     } else if (tab === 'reportcards') {
       const published = staff ? settings.terms : settings.terms.filter(x => (settings.publishedTerms || []).includes(x.id));
       el.innerHTML = published.length ? `<div class="grid sm:grid-cols-2 gap-4">${published.map(x => `<button data-rc-term="${x.id}" class="card card-hover p-5 text-left flex items-center gap-4">${iconTile('file-text', 'amber')}<span class="flex-1"><span class="block text-white">${escapeHtml(x.name)}</span><span class="block text-xs text-gray-500">${escapeHtml(formatDate(x.start + 'T12:00'))} – ${escapeHtml(formatDate(x.end + 'T12:00'))}</span></span>${staff && !(settings.publishedTerms || []).includes(x.id) ? badge('Not published', 'muted') : ''}</button>`).join('')}</div>` : emptyState({ icon: 'file-text', title: 'No report cards yet', text: 'Report cards appear here once the school publishes them.' });
@@ -1095,8 +1108,15 @@ export async function lookupFamilyCode(code) {
   return s.exists() ? { code: s.id, ...s.data() } : null;
 }
 export async function linkGuardian(ctx, user, info, name) {
-  await setDoc(doc(db, 'tenants', info.tenantId, 'guardians', user.uid), { userId: user.uid, name, displayName: name, email: user.email || '', createdAt: serverTimestamp() }, { merge: true });
-  await setDoc(doc(db, 'tenants', info.tenantId, 'guardianLinks', `${user.uid}_${info.studentUid}`), { guardianUid: user.uid, studentUid: info.studentUid, code: info.code, createdAt: serverTimestamp() });
+  // The guardian profile is created once (with the code that proves they belong to this school), never overwritten.
+  const gRef = doc(db, 'tenants', info.tenantId, 'guardians', user.uid);
+  const g = await getDoc(gRef).catch(() => null);
+  if (!g?.exists()) await setDoc(gRef, { userId: user.uid, name, displayName: name, email: user.email || '', code: info.code, createdAt: serverTimestamp() });
+  else if (user.email && !g.data().email) await updateDoc(gRef, { email: user.email });
+  const lRef = doc(db, 'tenants', info.tenantId, 'guardianLinks', `${user.uid}_${info.studentUid}`);
+  if ((await getDoc(lRef).catch(() => null))?.exists()) return 'exists';
+  await setDoc(lRef, { guardianUid: user.uid, studentUid: info.studentUid, code: info.code, createdAt: serverTimestamp() });
+  return 'linked';
 }
 export function openAddStudentCode(ctx) {
   const m = openModal({
@@ -1112,7 +1132,8 @@ export function openAddStudentCode(ctx) {
         const info = await lookupFamilyCode(code);
         if (!info) return showError(m.$('#fc-err'), "That code didn't match a student.");
         if (info.tenantId !== ctx.slug) return showError(m.$('#fc-err'), 'That code is for a different school. Sign in there instead.');
-        await linkGuardian(ctx, { uid: ctx.me.uid, email: '' }, info, ctx.me.name);
+        const res = await linkGuardian(ctx, { uid: ctx.me.uid, email: '' }, info, ctx.me.name);
+        if (res === 'exists') return showError(m.$('#fc-err'), `${info.studentName} is already linked to your account.`);
         m.close(); toast(`${info.studentName} added`); navigate(`/${ctx.slug}`, { replace: true });
       } catch (ex) { showError(m.$('#fc-err'), ex.message); }
     });
@@ -1180,7 +1201,7 @@ export async function viewServices(ctx) {
     const list = services.filter(s => s[tab]?.active).map(s => ({ ...s, student: by[s.uid] })).filter(s => s.student);
     if (tab === 'iep') {
       const overdue = list.filter(s => s.iep.annualReview && s.iep.annualReview < todayISO()).length;
-      const soon = list.filter(s => { const d = s.iep.annualReview; return d && d >= todayISO() && (new Date(d) - Date.now()) / 864e5 <= 30; }).length;
+      const soon = list.filter(s => { const d = s.iep.annualReview; return d && d >= todayISO() && (new Date(d + 'T12:00') - Date.now()) / 864e5 <= 30; }).length;
       el.innerHTML = `<div class="grid grid-cols-3 gap-3 sm:gap-4 mb-6">${statTile('Active IEPs', list.length)}${statTile('Reviews overdue', overdue, overdue ? 'Needs attention' : 'None', overdue ? 'critical' : 'good')}${statTile('Due in 30 days', soon, '', soon ? 'warning' : null)}</div>`
         + (list.length ? dataTable([{ label: 'Student', cls: 'col-span-12 sm:col-span-3' }, { label: 'Case manager', cls: 'col-span-6 sm:col-span-2' }, { label: 'Annual review', cls: 'col-span-6 sm:col-span-2' }, { label: 'Re-evaluation', cls: 'col-span-6 sm:col-span-2' }, { label: 'Goals', cls: 'col-span-3 sm:col-span-1' }, { label: '', cls: 'col-span-3 sm:col-span-2 text-right' }],
           list.sort((a, b) => (a.iep.annualReview || '').localeCompare(b.iep.annualReview || '')).map(s => ({ cells: [
@@ -1227,6 +1248,7 @@ function pickStudent(ctx, students, onPick, { multi = false, title = 'Choose a s
 }
 async function servicesTab(ctx, el, student) {
   const [svc, acc] = await Promise.all([getDoc(tdoc(ctx, 'services', student.uid)), getDoc(tdoc(ctx, 'accommodations', student.uid)).catch(() => null)]);
+  if (!el.isConnected) return;
   const s = svc.exists() ? svc.data() : {};
   const items = acc?.exists() ? acc.data().items || [] : [];
   el.innerHTML = `<div class="flex justify-end mb-4"><button id="sv-edit" class="btn btn-primary">${ico('pencil', 'w-3.5 h-3.5')} ${svc.exists() ? 'Edit services' : 'Add services'}</button></div>
@@ -1382,7 +1404,7 @@ function activityCard(ctx, a) {
     <div class="flex items-center gap-2 mb-3">${iconTile({ Athletics: 'trophy', Club: 'users-round', Arts: 'palette', Academic: 'brain', Service: 'hand-heart' }[a.category] || 'sparkles', 'amber')}${badge(escapeHtml(a.category || 'Other'), 'muted')}${a.season ? badge(escapeHtml(a.season), 'muted') : ''}</div>
     <h3 class="font-serif text-lg text-white mb-1">${escapeHtml(a.name)}</h3>
     <p class="text-xs text-gray-500 mb-3">${escapeHtml(a.advisorName || 'No advisor')}${a.meets ? ' · ' + escapeHtml(a.meets) : ''}</p>
-    <div class="mt-auto text-xs text-gray-400">${n}${a.capacity ? ` / ${a.capacity}` : ''} ${n === 1 ? 'member' : 'members'}${(a.requests || []).length && (ctx.isAdmin || a.advisorUid === ctx.me.uid) ? ` · <span class="text-[#F59E0B]">${a.requests.length} requests</span>` : ''}</div></a>`;
+    <div class="mt-auto text-xs text-gray-400">${n}${Number(a.capacity) ? ` / ${Number(a.capacity)}` : ''} ${n === 1 ? 'member' : 'members'}${(a.requests || []).length && (ctx.isAdmin || a.advisorUid === ctx.me.uid) ? ` · <span class="text-[#F59E0B]">${a.requests.length} requests</span>` : ''}</div></a>`;
 }
 export async function viewActivities(ctx, id = null) {
   if (id) return viewActivity(ctx, id);
@@ -1448,11 +1470,11 @@ async function viewActivity(ctx, id) {
         ${a.description ? `<div class="card p-6 text-sm text-gray-300 whitespace-pre-wrap">${escapeHtml(a.description)}</div>` : ''}
         ${kidStatus ? `<div class="card p-4 text-sm text-gray-300">${kidStatus}</div>` : ''}
         ${manage && (a.requests || []).length ? `<section><h2 class="label">Requests to join · ${a.requests.length}</h2><div class="card divide-y divide-white/[0.05]">${a.requests.map(uid => `<div class="flex items-center gap-3 px-4 py-3">${avatar(a.requestNames?.[uid] || 'Student')}<span class="flex-1 text-sm text-white">${escapeHtml(a.requestNames?.[uid] || 'Student')}</span><button class="btn btn-primary btn-sm" data-approve="${uid}">Approve</button><button class="btn btn-ghost btn-sm" data-decline="${uid}">Decline</button></div>`).join('')}</div></section>` : ''}
-        ${ctx.isRealTeacher ? `<section><h2 class="label">Roster · ${(a.members || []).length}${a.capacity ? ` of ${a.capacity}` : ''}</h2>${(a.members || []).length ? `<div class="card divide-y divide-white/[0.05]">${a.members.map(uid => `<div class="flex items-center gap-3 px-4 py-3">${avatar(a.memberNames?.[uid] || 'Student')}<a href="${buildUrl(`/${ctx.slug}/record/${uid}`)}" class="flex-1 text-sm text-white hover:text-[#F59E0B]">${escapeHtml(a.memberNames?.[uid] || 'Student')}</a>${manage ? `<button class="btn-icon danger" data-remove="${uid}" aria-label="Remove">${ico('user-minus', 'w-4 h-4')}</button>` : ''}</div>`).join('')}</div>` : '<p class="text-sm text-gray-500">No members yet.</p>'}</section>` : ''}
+        ${ctx.isRealTeacher ? `<section><h2 class="label">Roster · ${(a.members || []).length}${Number(a.capacity) ? ` of ${Number(a.capacity)}` : ''}</h2>${(a.members || []).length ? `<div class="card divide-y divide-white/[0.05]">${a.members.map(uid => `<div class="flex items-center gap-3 px-4 py-3">${avatar(a.memberNames?.[uid] || 'Student')}<a href="${buildUrl(`/${ctx.slug}/record/${uid}`)}" class="flex-1 text-sm text-white hover:text-[#F59E0B]">${escapeHtml(a.memberNames?.[uid] || 'Student')}</a>${manage ? `<button class="btn-icon danger" data-remove="${uid}" aria-label="Remove">${ico('user-minus', 'w-4 h-4')}</button>` : ''}</div>`).join('')}</div>` : '<p class="text-sm text-gray-500">No members yet.</p>'}</section>` : ''}
       </div><aside class="card p-5 space-y-3 h-fit">
         <div><div class="text-xs text-gray-500">Advisor / coach</div><div class="text-sm text-white">${escapeHtml(a.advisorName || '—')}</div></div>
         <div><div class="text-xs text-gray-500">Meets</div><div class="text-sm text-white">${escapeHtml(a.meets || '—')}</div></div>
-        <div><div class="text-xs text-gray-500">Members</div><div class="text-sm text-white">${(a.members || []).length}${a.capacity ? ` of ${a.capacity}` : ''}</div></div>
+        <div><div class="text-xs text-gray-500">Members</div><div class="text-sm text-white">${(a.members || []).length}${Number(a.capacity) ? ` of ${Number(a.capacity)}` : ''}</div></div>
         ${a.advisorUid && a.advisorUid !== me && !ctx.isRealTeacher ? `<button data-act="msg" class="btn btn-secondary btn-block">${ico('mail', 'w-4 h-4')} Message advisor</button>` : ''}
       </aside></div>`;
     refreshIcons();
@@ -1487,6 +1509,7 @@ const MILESTONES = ['Career interest survey', 'Résumé', 'Job shadow or interns
 async function careerPlanTab(ctx, el, student, { canEdit }) {
   const ref = tdoc(ctx, 'careerPlans', student.uid);
   const s = await getDoc(ref);
+  if (!el.isConnected) return; // the user moved on to another student/tab
   const p = s.exists() ? s.data() : {};
   const plan = { clusters: p.clusters || [], path: p.path || '', goals: p.goals || '', interests: p.interests || '', courses: p.courses || { 9: '', 10: '', 11: '', 12: '' }, milestones: p.milestones || {} };
   const dis = canEdit ? '' : 'disabled';
@@ -1510,3 +1533,349 @@ async function careerPlanTab(ctx, el, student, { canEdit }) {
   });
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+// DISTRICT (cross-school dashboards: attendance, students, safety)
+// ═══════════════════════════════════════════════════════════════
+const ADA_LEVEL = r => r === null ? null : r >= 95 ? 'good' : r >= 90 ? 'warning' : r >= 85 ? 'serious' : 'critical';
+const ADA_LABEL = { good: 'On track', warning: 'Watch', serious: 'Concern', critical: 'Urgent' };
+const CHRONIC_LEVEL = r => r === null ? null : r < 10 ? 'good' : r < 20 ? 'warning' : r < 30 ? 'serious' : 'critical';
+const DISTRICT_RANGES = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['year', 'This school year']];
+function rangeFrom(range) {
+  const d = new Date();
+  if (range === 'year') return toDateInput(new Date(d.getMonth() >= 7 ? d.getFullYear() : d.getFullYear() - 1, 7, 1));
+  d.setDate(d.getDate() - Number(range)); return toDateInput(d);
+}
+const shortName = s => (s.name || s.id).replace(/\b(Elementary|Middle|High|Junior|Senior|School|Academy)\b/g, m => ({ Elementary: 'Elem.', Middle: 'Middle', High: 'High', Junior: 'Jr.', Senior: 'Sr.', School: '', Academy: 'Acad.' })[m]).replace(/\s+/g, ' ').trim() || s.id;
+
+// One load per district + date range, shared by every district page for two minutes.
+const districtCache = new Map();
+export async function loadDistrict(dctx, range = '30', { fresh = false } = {}) {
+  const key = `${dctx.districtId}|${range}`, hit = districtCache.get(key);
+  if (!fresh && hit && Date.now() - hit.at < 120000) return hit.data;
+  const from = rangeFrom(range), to = todayISO();
+  const schools = await getDistrictSchools(dctx.districtId);
+  await Promise.all(schools.map(async s => {
+    const col = name => collection(db, 'tenants', s.id, name);
+    const [st, att, inc] = await Promise.allSettled([
+      getDocs(col('students')),
+      getDocs(query(col('attendance'), where('date', '>=', from))),
+      getDocs(query(col('incidents'), where('date', '>=', from))),
+    ]);
+    s.students = st.status === 'fulfilled' ? st.value.docs.map(d => ({ uid: d.id, ...d.data(), _school: s })).filter(x => x.status !== 'pending' && x.status !== 'rejected') : [];
+    s.records = att.status === 'fulfilled' ? att.value.docs.map(d => d.data()).filter(r => r.date <= to) : [];
+    s.incidents = inc.status === 'fulfilled' ? inc.value.docs.map(d => ({ id: d.id, ...d.data() })) : null; // null = not readable
+    s.att = summarize(s.records);
+    s.chronic = chronicList(s.records, 10).filter(x => x.level !== 'warning');
+    s.chronicRate = s.records.length ? pct(s.chronic.length, new Set(s.records.map(r => r.studentUid)).size) : null;
+    s.errors = [st, att].filter(x => x.status === 'rejected').map(x => x.reason);
+  }));
+  const records = schools.flatMap(s => s.records);
+  const tracked = schools.reduce((a, s) => a + new Set(s.records.map(r => r.studentUid)).size, 0);
+  const chronic = schools.flatMap(s => s.chronic.map(c => ({ ...c, school: s })));
+  const data = {
+    schools, from, to, range, records, att: summarize(records), tracked, chronic,
+    chronicRate: tracked ? pct(chronic.length, tracked) : null,
+    students: schools.flatMap(s => s.students),
+    incidents: schools.flatMap(s => (s.incidents || []).map(i => ({ ...i, school: s }))),
+    incidentsReadable: schools.some(s => s.incidents !== null),
+  };
+  districtCache.set(key, { at: Date.now(), data });
+  return data;
+}
+function dailySeries(records) {
+  const days = {};
+  records.forEach(r => { const d = (days[r.date] ||= { ok: 0, abs: 0, T: 0, n: 0 }); d.n++; if (r.code === 'P' || r.code === 'T') d.ok++; if (isAbsence(r.code)) d.abs++; if (r.code === 'T') d.T++; });
+  return Object.keys(days).sort().map(k => { const d = days[k]; return { x: new Date(k + 'T12:00'), y: pct(d.ok, d.n) ?? 0, detail: `${d.abs} absent · ${d.T} tardy of ${d.n.toLocaleString()}` }; });
+}
+// Horizontal bars for comparing named things (schools, types): every bar is direct-labelled, with a hover tooltip.
+function vizRank(rows, { label, format = v => `${v}%`, max = null, empty = 'No data yet.' }) {
+  rows = rows.filter(r => r.value !== null && r.value !== undefined);
+  if (!rows.length) return { html: `<p class="text-sm text-gray-500 py-10 text-center">${empty}</p>`, mount() {} };
+  const top = max || Math.max(...rows.map(r => r.value)) || 1;
+  const html = `<div class="viz rank" data-viz role="list" aria-label="${escapeHtml(label)}">
+    ${rows.map((r, i) => `<div class="rank-row" role="listitem" data-i="${i}">
+      <div class="rank-name" title="${escapeHtml(r.label)}">${r.href ? `<a href="${r.href}">${escapeHtml(r.label)}</a>` : escapeHtml(r.label)}</div>
+      <div class="rank-track"><div class="rank-bar" style="width:${Math.max(r.value ? 1.5 : 0, r.value / top * 100).toFixed(1)}%"></div></div>
+      <div class="rank-val">${escapeHtml(format(r.value))}${r.status ? ` ${ico(STATUS[r.status][0], 'w-3.5 h-3.5 ' + STATUS[r.status][1])}` : ''}</div>
+    </div>`).join('')}<div class="viz-tip" role="status"></div></div>`;
+  return {
+    html,
+    mount(root) {
+      const box = root.querySelector('[data-viz]'); if (!box) return;
+      const tip = box.querySelector('.viz-tip');
+      box.querySelectorAll('.rank-row').forEach(row => {
+        row.addEventListener('pointerenter', () => {
+          const r = rows[+row.dataset.i], bar = row.querySelector('.rank-bar'), b = box.getBoundingClientRect(), br = bar.getBoundingClientRect();
+          tip.innerHTML = `<div class="text-[11px] text-gray-400">${escapeHtml(r.label)}</div><div class="font-semibold">${escapeHtml(format(r.value))}</div>${r.detail ? `<div class="text-[11px] text-gray-400">${escapeHtml(r.detail)}</div>` : ''}`;
+          tip.style.left = `${br.right - b.left}px`; tip.style.top = `${br.top - b.top}px`; tip.classList.add('on');
+        });
+        row.addEventListener('pointerleave', () => tip.classList.remove('on'));
+      });
+    }
+  };
+}
+const mountAll = (root, charts) => root.querySelectorAll('[data-chart]').forEach(el => charts[el.dataset.chart]?.mount(el));
+const chartCard = (key, title, sub, chart, extra = '') => `<section class="card p-5 sm:p-6"><h2 class="text-sm text-white font-medium">${title}</h2>${sub ? `<p class="text-xs text-gray-500 mb-4">${sub}</p>` : '<div class="mb-4"></div>'}<div data-chart="${key}">${chart.html}</div>${extra}</section>`;
+const kpi = (label, value, sub = '', status = null, href = '') => `<${href ? `a href="${href}"` : 'div'} class="card ${href ? 'card-hover' : ''} p-5 block">${statTileInner(label, value, sub, status)}</${href ? 'a' : 'div'}>`;
+const statTileInner = (label, value, sub, status) => `<div class="text-xs text-gray-400 mb-2">${label}</div><div class="stat-value tabular-nums">${value}</div>${sub || status ? `<div class="mt-1 text-xs text-gray-500 flex items-center gap-1.5">${status ? ico(STATUS[status][0], 'w-3.5 h-3.5 ' + STATUS[status][1]) : ''}${sub}</div>` : ''}`;
+const rangeControl = range => `<label class="sr-only" for="d-range">Date range</label><select id="d-range" class="input !py-2 !w-auto">${DISTRICT_RANGES.map(([v, l]) => `<option value="${v}" ${v === range ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+const rangeLabel = range => DISTRICT_RANGES.find(r => r[0] === range)?.[1].toLowerCase() || '';
+function partialNote(data) {
+  const bad = data.schools.filter(s => s.errors.length);
+  return bad.length ? `<div class="mb-6 p-3 rounded-lg border border-[#fab219]/30 bg-[#fab219]/5 text-xs text-gray-300 flex gap-2">${ico('triangle-alert', 'w-4 h-4 st-warning shrink-0')}<span>Some data couldn't be loaded for ${bad.map(s => escapeHtml(s.name || s.id)).join(', ')}. Make sure the latest security rules are published.</span></div>` : '';
+}
+// Shared scaffolding: header with a range picker, skeleton, load, then draw(data).
+function districtPage(dctx, active, header, draw) {
+  const t = routeTokenNow();
+  const url = new URLSearchParams(location.search);
+  let range = DISTRICT_RANGES.some(r => r[0] === url.get('range')) ? url.get('range') : '30';
+  setTitle(header.title, dctx.district.name);
+  render(districtShell(dctx, active, { eyebrow: escapeHtml(dctx.district.name || dctx.districtId), ...header, actions: `<div class="flex items-center gap-2">${header.actions || ''}${header.noRange ? '' : rangeControl(range)}<button id="d-refresh" class="btn-icon" aria-label="Refresh" title="Refresh">${ico('refresh-cw', 'w-4 h-4')}</button></div>` },
+    `<div id="d-body" class="max-w-6xl"><div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">${Array.from({ length: 4 }, () => '<div class="skeleton h-28"></div>').join('')}</div><div class="skeleton h-72 mb-6"></div>${skeletonRows(4)}</div>`));
+  const body = $('#d-body');
+  const load = async fresh => {
+    try {
+      const data = await loadDistrict(dctx, range, { fresh });
+      if (!live(t)) return;
+      body.innerHTML = partialNote(data) + draw(data, range);
+      refreshIcons();
+      body.dispatchEvent(new CustomEvent('district:drawn', { detail: data }));
+    } catch (e) { console.error(e); if (live(t)) { body.innerHTML = errorBox(e); refreshIcons(); } }
+  };
+  $('#d-range')?.addEventListener('change', e => {
+    range = e.target.value;
+    const u = new URL(location.href); u.searchParams.set('range', range); history.replaceState(history.state, '', u);
+    body.innerHTML = skeletonRows(5, 'h-24'); load(false);
+  });
+  $('#d-refresh').addEventListener('click', () => { body.innerHTML = skeletonRows(5, 'h-24'); load(true); });
+  setTimeout(() => load(false)); // after the caller has attached its listeners
+  return body;
+}
+const schoolHref = (s, path = '/admin') => buildUrl(`/${s.id}${path}`);
+
+export async function viewDistrictHome(dctx) {
+  const p = s => buildUrl(`/district/${dctx.districtId}${s}`);
+  let charts = {};
+  const body = districtPage(dctx, 'overview',
+    { title: 'Dashboard', subtitle: 'Every school in your district at a glance.', actions: `<button data-create-school class="btn btn-violet">${ico('plus')} <span class="hidden sm:inline">New school</span></button>` },
+    (data, range) => {
+      const { schools, att } = data;
+      if (!schools.length) return emptyState({ icon: 'building-2', tone: 'violet', title: 'No schools yet', text: "Create the first school in your district. You'll become its admin and get a join code for teachers.", action: `<button data-create-school class="btn btn-violet">${ico('plus')} Create first school</button>` });
+      const teachers = schools.reduce((a, s) => a + (s._teacherCount || 0), 0);
+      const lvl = ADA_LEVEL(att.rate);
+      const watch = schools.map(s => {
+        const flags = [];
+        const l = ADA_LEVEL(s.att.rate);
+        if (l && l !== 'good') flags.push({ level: l, text: `Attendance ${fmtPct(s.att.rate)}` });
+        const c = CHRONIC_LEVEL(s.chronicRate);
+        if (c && c !== 'good') flags.push({ level: c, text: `${s.chronic.length} chronically absent (${fmtPct(s.chronicRate)})` });
+        const hi = (s.incidents || []).filter(i => i.severity === 'high' || i.severity === 'critical').length;
+        if (hi) flags.push({ level: 'serious', text: `${plural(hi, 'high-severity incident')}` });
+        if (!s.records.length && s.students.length) flags.push({ level: 'warning', text: 'No attendance taken in this range' });
+        return { s, flags };
+      }).filter(x => x.flags.length);
+      const sev = { critical: 0, serious: 1, warning: 2, good: 3 };
+      watch.sort((a, b) => Math.min(...a.flags.map(f => sev[f.level])) - Math.min(...b.flags.map(f => sev[f.level])));
+      charts = { trend: vizLine(dailySeries(data.records), { label: 'District daily attendance rate' }) };
+      return `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+          ${kpi('Students enrolled', data.students.length.toLocaleString(), `${plural(schools.length, 'school')} · ${plural(teachers, 'teacher')}`, null, p('/students'))}
+          ${kpi('Attendance rate', fmtPct(att.rate), lvl ? ADA_LABEL[lvl] : 'No attendance yet', lvl, p('/attendance'))}
+          ${kpi('Chronically absent', data.chronic.length.toLocaleString(), data.tracked ? `${fmtPct(data.chronicRate)} of students` : 'No attendance yet', CHRONIC_LEVEL(data.chronicRate), p('/attendance?show=chronic'))}
+          ${kpi('Incidents', data.incidentsReadable ? data.incidents.length.toLocaleString() : '—', data.incidentsReadable ? `${data.incidents.filter(i => i.status !== 'resolved' && i.status !== 'closed').length} open` : 'Publish the latest rules', null, p('/safety'))}
+        </div>
+        <div class="grid lg:grid-cols-3 gap-6 mb-8">
+          <div class="lg:col-span-2">${chartCard('trend', 'District attendance', `Present + tardy as a share of all student-periods, ${rangeLabel(range)}.`, charts.trend)}</div>
+          <section class="card p-5 sm:p-6 flex flex-col"><h2 class="text-sm text-white font-medium mb-1">Needs attention</h2><p class="text-xs text-gray-500 mb-4">Schools below target, ${rangeLabel(range)}.</p>
+            ${watch.length ? `<ul class="space-y-3 overflow-y-auto max-h-72 -mr-2 pr-2">${watch.map(({ s, flags }) => `<li><a href="${schoolHref(s, '/admin/attendance')}" class="text-sm text-white hover:text-[#A78BFA] transition-colors">${escapeHtml(s.name || s.id)}</a><div class="mt-1 space-y-1">${flags.map(f => `<div>${statusChip(f.level, f.text)}</div>`).join('')}</div></li>`).join('')}</ul>`
+              : `<div class="flex-1 flex flex-col items-center justify-center text-center py-6">${ico('circle-check', 'w-8 h-8 st-good mb-2')}<p class="text-sm text-gray-300">Every school is on track.</p></div>`}
+          </section>
+        </div>
+        <div class="flex items-center justify-between mb-3"><h2 class="font-serif text-xl text-white">Schools</h2><a href="${p('/schools')}" class="text-xs text-[#A78BFA] hover:underline">Manage schools →</a></div>
+        ${districtSchoolsTable(schools)}`;
+    });
+  body.addEventListener('district:drawn', () => mountAll(body, charts));
+}
+function districtSchoolsTable(schools) {
+  return dataTable(
+    [{ label: 'School', cls: 'col-span-12 sm:col-span-4' }, { label: 'Students', cls: 'col-span-4 sm:col-span-2 sm:text-right' }, { label: 'Attendance', cls: 'col-span-4 sm:col-span-2 sm:text-right' }, { label: 'Chronic', cls: 'col-span-4 sm:col-span-2 sm:text-right' }, { label: 'Status', cls: 'col-span-12 sm:col-span-2' }],
+    schools.map(s => {
+      const l = ADA_LEVEL(s.att.rate);
+      return {
+        cells: [
+          `<a href="${schoolHref(s)}" class="flex items-center gap-3 group/link"><div class="tile tile-violet text-[10px] font-mono">${escapeHtml(s.id.slice(0, 3).toUpperCase())}</div><div class="min-w-0"><div class="text-sm text-white truncate group-hover/link:text-[#A78BFA] transition-colors">${escapeHtml(s.name || s.id)}</div><div class="text-xs text-gray-500 truncate">${plural(s._teacherCount || 0, 'teacher')} · ${plural(s._courseCount || 0, 'course')}</div></div></a>`,
+          `<span class="text-sm text-gray-200 tabular-nums sm:block sm:text-right"><span class="sm:hidden text-gray-500 text-xs">Students </span>${s.students.length.toLocaleString()}</span>`,
+          `<span class="text-sm text-gray-200 tabular-nums sm:block sm:text-right"><span class="sm:hidden text-gray-500 text-xs">Attendance </span>${fmtPct(s.att.rate)}</span>`,
+          `<span class="text-sm text-gray-200 tabular-nums sm:block sm:text-right"><span class="sm:hidden text-gray-500 text-xs">Chronic </span>${s.records.length ? s.chronic.length : '—'}</span>`,
+          l ? statusChip(l, ADA_LABEL[l]) : `<span class="text-xs text-gray-500">No attendance yet</span>`,
+        ]
+      };
+    }));
+}
+
+export async function viewDistrictAttendance(dctx) {
+  let charts = {}, current = null;
+  const body = districtPage(dctx, 'attendance',
+    { title: 'Attendance', subtitle: 'Attendance and chronic absence across every school.' },
+    (data, range) => {
+      current = data;
+      const { schools, att } = data;
+      if (!data.records.length) return emptyState({ icon: 'calendar-check', tone: 'violet', title: 'No attendance yet', text: `No school has taken attendance in the ${rangeLabel(range)}. Teachers take it from each course's Attendance tab.` });
+      const gAgg = {};
+      data.records.forEach(r => { const g = r.gradeLevel; if (g === undefined || g === null || g === '') return; const x = (gAgg[g] ||= { abs: 0, n: 0 }); x.n++; if (isAbsence(r.code)) x.abs++; });
+      const withData = schools.filter(s => s.records.length);
+      const p = s => buildUrl(`/district/${dctx.districtId}${s}`);
+      charts = {
+        trend: vizLine(dailySeries(data.records), { label: 'District daily attendance rate' }),
+        bySchool: vizRank(withData.map(s => ({ label: s.name || s.id, href: schoolHref(s, '/admin/attendance'), value: s.att.absenceRate ?? 0, detail: `${s.att.absent.toLocaleString()} of ${s.att.total.toLocaleString()} student-periods`, status: ADA_LEVEL(s.att.rate) })).sort((a, b) => b.value - a.value), { label: 'Absence rate by school' }),
+        chronic: vizRank(withData.map(s => ({ label: s.name || s.id, href: schoolHref(s, '/admin/attendance?tab=chronic'), value: s.chronicRate ?? 0, detail: `${s.chronic.length} of ${new Set(s.records.map(r => r.studentUid)).size} students`, status: CHRONIC_LEVEL(s.chronicRate) })).sort((a, b) => b.value - a.value), { label: 'Chronic absence rate by school' }),
+        byGrade: vizBars(GRADE_LEVELS.filter(g => gAgg[g]).map(g => ({ label: g === 'K' ? 'K' : `Gr ${g}`, value: pct(gAgg[g].abs, gAgg[g].n) || 0, detail: `${gAgg[g].abs} of ${gAgg[g].n} student-periods` })), { label: 'Absence rate by grade level' }),
+      };
+      const lvl = ADA_LEVEL(att.rate);
+      const labels = { critical: 'Severe', serious: 'Chronic' };
+      return `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+          ${kpi('Average daily attendance', fmtPct(att.rate), lvl ? ADA_LABEL[lvl] : '', lvl)}
+          ${kpi('Absences', att.absent.toLocaleString(), `${att.E.toLocaleString()} excused`)}
+          ${kpi('Tardies', att.T.toLocaleString(), `${fmtPct(pct(att.T, att.total))} of student-periods`)}
+          ${kpi('Chronically absent', data.chronic.length.toLocaleString(), `${fmtPct(data.chronicRate)} of ${data.tracked.toLocaleString()} students`, CHRONIC_LEVEL(data.chronicRate))}
+        </div>
+        <div class="mb-6">${chartCard('trend', 'Daily attendance rate', `All schools combined, ${rangeLabel(range)}. Hover for daily detail.`, charts.trend, tableView(['Date', 'Rate', 'Absent / tardy'], dailySeries(data.records).map(x => [escapeHtml(x.x.toLocaleDateString()), fmtPct(x.y), escapeHtml(x.detail)])))}</div>
+        <div class="grid lg:grid-cols-2 gap-6 mb-6">
+          ${chartCard('bySchool', 'Absence rate by school', 'Excused + unexcused, as a share of student-periods. Icons show each school’s attendance status.', charts.bySchool)}
+          ${chartCard('chronic', 'Chronic absence by school', 'Share of students missing 10% or more of their class time.', charts.chronic)}
+        </div>
+        <div class="mb-8">${chartCard('byGrade', 'Absence rate by grade level', 'District-wide, from each student’s grade level at the time attendance was taken.', charts.byGrade)}</div>
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-3"><h2 class="font-serif text-xl text-white">By school</h2><button data-csv="schools" class="btn btn-secondary btn-sm">${ico('download', 'w-3.5 h-3.5')} Export CSV</button></div>
+        <div class="mb-10">${dataTable(
+          [{ label: 'School', cls: 'col-span-12 sm:col-span-4' }, { label: 'Attendance', cls: 'col-span-3 sm:col-span-2 sm:text-right' }, { label: 'Absences', cls: 'col-span-3 sm:col-span-2 sm:text-right' }, { label: 'Tardies', cls: 'col-span-3 sm:col-span-1 sm:text-right' }, { label: 'Chronic', cls: 'col-span-3 sm:col-span-1 sm:text-right' }, { label: 'Status', cls: 'col-span-12 sm:col-span-2' }],
+          schools.map(s => { const l = ADA_LEVEL(s.att.rate); const cell = (lab, v) => `<span class="text-sm text-gray-200 tabular-nums sm:block sm:text-right"><span class="sm:hidden text-gray-500 text-xs">${lab} </span>${v}</span>`; return { cells: [
+            `<a href="${schoolHref(s, '/admin/attendance')}" class="text-sm text-white hover:text-[#A78BFA] transition-colors truncate block">${escapeHtml(s.name || s.id)}</a>`,
+            cell('Rate', fmtPct(s.att.rate)), cell('Abs.', s.att.absent.toLocaleString()), cell('Tardy', s.att.T.toLocaleString()), cell('Chronic', s.records.length ? s.chronic.length : '—'),
+            l ? statusChip(l, ADA_LABEL[l]) : `<span class="text-xs text-gray-500">No data</span>`] }; }))}</div>
+        <div id="chronic" class="flex flex-wrap items-center justify-between gap-3 mb-3 scroll-mt-6"><div><h2 class="font-serif text-xl text-white">Chronically absent students</h2><p class="text-xs text-gray-500 mt-1">Missing 10% or more of class time; 20%+ is severe. ${plural(data.chronic.length, 'student')}.</p></div><button data-csv="chronic" class="btn btn-secondary btn-sm" ${data.chronic.length ? '' : 'disabled'}>${ico('download', 'w-3.5 h-3.5')} Export CSV</button></div>
+        ${data.chronic.length ? dataTable(
+          [{ label: 'Student', cls: 'col-span-12 sm:col-span-4' }, { label: 'School', cls: 'col-span-12 sm:col-span-3' }, { label: 'Status', cls: 'col-span-5 sm:col-span-2' }, { label: 'Missed', cls: 'col-span-3 sm:col-span-1 text-right' }, { label: 'Absences', cls: 'col-span-4 sm:col-span-2 text-right' }],
+          [...data.chronic].sort((a, b) => b.rate - a.rate).slice(0, 200).map(x => ({ cells: [
+            `<a href="${schoolHref(x.school, `/record/${x.uid}/attendance`)}" class="flex items-center gap-3">${avatar(x.name)}<span class="min-w-0"><span class="block text-sm text-white truncate">${escapeHtml(x.name)}</span><span class="block text-[11px] text-gray-500">${escapeHtml(gradeLabel(x.grade))}</span></span></a>`,
+            `<span class="text-xs text-gray-400 truncate block">${escapeHtml(x.school.name || x.school.id)}</span>`,
+            statusChip(x.level, labels[x.level]),
+            `<span class="text-sm text-white tabular-nums block text-right">${x.rate}%</span>`,
+            `<span class="text-xs text-gray-400 tabular-nums block text-right">${x.abs} of ${x.n}</span>`] })))
+          + (data.chronic.length > 200 ? `<p class="hint mt-2">Showing the 200 highest. Export CSV for the full list.</p>` : '')
+          : emptyState({ icon: 'circle-check', tone: 'green', title: 'No chronically absent students', text: 'Nobody has missed 10% or more of their classes in this range.' })}`;
+    });
+  body.addEventListener('district:drawn', () => { mountAll(body, charts); if (new URLSearchParams(location.search).get('show') === 'chronic') $('#chronic')?.scrollIntoView(); });
+  body.addEventListener('click', e => {
+    const b = e.target.closest('[data-csv]'); if (!b || !current) return;
+    if (b.dataset.csv === 'schools') downloadCSV(`attendance-by-school-${current.from}-to-${current.to}.csv`, [['School', 'Attendance %', 'Absence %', 'Absences', 'Excused', 'Tardies', 'Student-periods', 'Chronically absent', 'Chronic %'], ...current.schools.map(s => [s.name || s.id, s.att.rate ?? '', s.att.absenceRate ?? '', s.att.absent, s.att.E, s.att.T, s.att.total, s.chronic.length, s.chronicRate ?? ''])]);
+    else downloadCSV(`chronic-absence-${current.from}-to-${current.to}.csv`, [['Student', 'School', 'Grade', 'Missed %', 'Absences', 'Sessions'], ...current.chronic.map(x => [x.name, x.school.name || x.school.id, x.grade ?? '', x.rate, x.abs, x.n])]);
+  });
+}
+
+export async function viewDistrictStudents(dctx) {
+  let charts = {}, state = { q: '', school: '', grade: '', flag: '' };
+  const body = districtPage(dctx, 'students',
+    { title: 'Students', subtitle: 'Enrollment and student programs across the district.', noRange: true },
+    data => {
+      const { students, schools } = data;
+      if (!students.length) return emptyState({ icon: 'graduation-cap', tone: 'violet', title: 'No students yet', text: 'Students appear here once schools add them.' });
+      const byGrade = {}; students.forEach(s => { if (s.gradeLevel !== undefined && s.gradeLevel !== null && s.gradeLevel !== '') byGrade[s.gradeLevel] = (byGrade[s.gradeLevel] || 0) + 1; });
+      const count = f => students.filter(f).length;
+      charts = {
+        grade: vizBars(GRADE_LEVELS.filter(g => byGrade[g]).map(g => ({ label: g === 'K' ? 'K' : `Gr ${g}`, value: byGrade[g], detail: `${gradeLabel(g)}` })), { label: 'Enrollment by grade level', format: v => Math.round(v).toLocaleString() }),
+        school: vizRank(schools.map(s => ({ label: s.name || s.id, href: schoolHref(s, '/sis'), value: s.students.length })).sort((a, b) => b.value - a.value), { label: 'Enrollment by school', format: v => v.toLocaleString() }),
+      };
+      const unassigned = count(s => s.gradeLevel === undefined || s.gradeLevel === null || s.gradeLevel === '');
+      return `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+          ${kpi('Students enrolled', students.length.toLocaleString(), plural(schools.length, 'school'))}
+          ${kpi('IEP', count(s => s.iep).toLocaleString(), `${fmtPct(pct(count(s => s.iep), students.length))} of students`)}
+          ${kpi('504 plans', count(s => s.plan504).toLocaleString(), `${fmtPct(pct(count(s => s.plan504), students.length))} of students`)}
+          ${kpi('English learners', count(s => s.ell).toLocaleString(), `${fmtPct(pct(count(s => s.ell), students.length))} of students`)}
+        </div>
+        <div class="grid lg:grid-cols-2 gap-6 mb-8">
+          ${chartCard('grade', 'Enrollment by grade level', unassigned ? `${plural(unassigned, 'student')} without a grade level ${unassigned === 1 ? "isn't" : "aren't"} shown.` : 'From each student’s record.', charts.grade)}
+          ${chartCard('school', 'Enrollment by school', 'Click a school to open its student directory.', charts.school)}
+        </div>
+        <div class="flex flex-wrap items-end justify-between gap-3 mb-3">
+          <h2 class="font-serif text-xl text-white">Directory</h2>
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="relative"><span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">${ico('search', 'w-3.5 h-3.5')}</span><input id="ds-q" type="search" placeholder="Search name or ID…" class="input !py-2 pl-9 w-52" aria-label="Search students" value="${escapeHtml(state.q)}"></div>
+            <select id="ds-school" class="input !py-2 !w-auto" aria-label="School"><option value="">All schools</option>${schools.map(s => `<option value="${escapeHtml(s.id)}" ${state.school === s.id ? 'selected' : ''}>${escapeHtml(s.name || s.id)}</option>`).join('')}</select>
+            <select id="ds-grade" class="input !py-2 !w-auto" aria-label="Grade level"><option value="">All grades</option>${GRADE_LEVELS.map(g => `<option value="${g}" ${state.grade === g ? 'selected' : ''}>${escapeHtml(gradeLabel(g))}</option>`).join('')}</select>
+            <select id="ds-flag" class="input !py-2 !w-auto" aria-label="Program"><option value="">All programs</option><option value="iep">IEP</option><option value="plan504">504</option><option value="ell">ELL</option><option value="alerts">Has alerts</option></select>
+            <button data-csv class="btn btn-secondary btn-sm">${ico('download', 'w-3.5 h-3.5')} CSV</button>
+          </div>
+        </div>
+        <div id="ds-list"></div>`;
+    });
+  let all = [];
+  const filtered = () => {
+    const q = state.q.toLowerCase();
+    return all.filter(s => (!state.school || s._school.id === state.school) && (!state.grade || String(s.gradeLevel) === state.grade)
+      && (!state.flag || (state.flag === 'alerts' ? (s.alerts || []).length : s[state.flag]))
+      && (!q || `${displayNameOf(s)} ${s.studentNumber || ''} ${s.username || ''}`.toLowerCase().includes(q)));
+  };
+  const drawList = () => {
+    const el = $('#ds-list'); if (!el) return;
+    const list = filtered(), shown = list.slice(0, 150);
+    el.innerHTML = !list.length ? `<p class="text-sm text-gray-500 py-10 text-center">No students match these filters.</p>` : dataTable(
+      [{ label: 'Student', cls: 'col-span-12 sm:col-span-4' }, { label: 'School', cls: 'col-span-7 sm:col-span-3' }, { label: 'Grade', cls: 'col-span-5 sm:col-span-2' }, { label: 'Programs', cls: 'col-span-12 sm:col-span-3' }],
+      shown.map(s => ({ cells: [
+        `<a href="${schoolHref(s._school, `/record/${s.uid}`)}" class="flex items-center gap-3 group/link">${avatar(displayNameOf(s), s.photoURL)}<span class="min-w-0"><span class="block text-sm text-white truncate group-hover/link:text-[#A78BFA] transition-colors">${escapeHtml(displayNameOf(s))}</span><span class="block text-[11px] text-gray-500 truncate">${s.studentNumber ? 'ID ' + escapeHtml(s.studentNumber) : escapeHtml(s.username || '')}</span></span></a>`,
+        `<span class="text-xs text-gray-400 truncate block">${escapeHtml(s._school.name || s._school.id)}</span>`,
+        `<span class="text-xs text-gray-400">${escapeHtml(gradeLabel(s.gradeLevel))}</span>`,
+        `<div class="flex flex-wrap items-center gap-1">${flagBadges(s) || '<span class="text-xs text-gray-600">—</span>'}</div>`] }))) + `<p class="hint mt-2">${list.length > shown.length ? `Showing ${shown.length} of ${list.length.toLocaleString()}. Narrow the filters or export CSV to see everyone.` : plural(list.length, 'student')}</p>`;
+    refreshIcons();
+  };
+  body.addEventListener('district:drawn', e => {
+    mountAll(body, charts);
+    all = [...e.detail.students].sort((a, b) => displayNameOf(a).localeCompare(displayNameOf(b)));
+    const f = $('#ds-flag'); if (f) f.value = state.flag;
+    drawList();
+  });
+  body.addEventListener('input', e => { if (e.target.id === 'ds-q') { state.q = e.target.value.trim(); drawList(); } });
+  body.addEventListener('change', e => { const k = { 'ds-school': 'school', 'ds-grade': 'grade', 'ds-flag': 'flag' }[e.target.id]; if (k) { state[k] = e.target.value; drawList(); } });
+  body.addEventListener('click', e => {
+    if (!e.target.closest('[data-csv]')) return;
+    downloadCSV('district-students.csv', [['Student', 'Student ID', 'School', 'Grade', 'IEP', '504', 'ELL'], ...filtered().map(s => [displayNameOf(s), s.studentNumber || '', s._school.name || s._school.id, s.gradeLevel ?? '', s.iep ? 'Y' : '', s.plan504 ? 'Y' : '', s.ell ? 'Y' : ''])]);
+  });
+}
+
+export async function viewDistrictSafety(dctx) {
+  let charts = {};
+  const body = districtPage(dctx, 'safety',
+    { title: 'Safety', subtitle: 'Incidents and concerns reported across every school.' },
+    (data, range) => {
+      if (!data.incidentsReadable) return emptyState({ icon: 'shield-alert', tone: 'violet', title: "Incidents aren't available yet", text: 'Publish the latest Firestore security rules so district admins can read incident logs.' });
+      const inc = data.incidents;
+      if (!inc.length) return emptyState({ icon: 'shield-check', tone: 'green', title: 'No incidents', text: `Nothing has been reported in the ${rangeLabel(range)}.` });
+      const open = inc.filter(i => i.status !== 'resolved' && i.status !== 'closed');
+      const hi = inc.filter(i => i.severity === 'high' || i.severity === 'critical');
+      const byType = {}; inc.forEach(i => { byType[i.type || 'Other'] = (byType[i.type || 'Other'] || 0) + 1; });
+      const perK = s => s.students.length ? Math.round((s.incidents || []).length / s.students.length * 1000 * 10) / 10 : null;
+      charts = {
+        school: vizRank(data.schools.filter(s => s.incidents).map(s => ({ label: s.name || s.id, href: schoolHref(s, '/admin/safety'), value: (s.incidents || []).length, detail: s.students.length ? `${perK(s)} per 1,000 students` : '' })).sort((a, b) => b.value - a.value), { label: 'Incidents by school', format: v => v.toLocaleString() }),
+        type: vizRank(Object.entries(byType).map(([k, v]) => ({ label: k, value: v })).sort((a, b) => b.value - a.value), { label: 'Incidents by type', format: v => v.toLocaleString() }),
+      };
+      return `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+          ${kpi('Incidents', inc.length.toLocaleString(), rangeLabel(range))}
+          ${kpi('Open', open.length.toLocaleString(), open.length ? 'Awaiting follow-up' : 'All resolved', open.length ? 'warning' : 'good')}
+          ${kpi('High severity', hi.length.toLocaleString(), 'High + critical', hi.length ? 'serious' : 'good')}
+          ${kpi('Concerns from staff', inc.filter(i => i.isConcern).length.toLocaleString(), 'Reported by teachers')}
+        </div>
+        <div class="grid lg:grid-cols-2 gap-6 mb-8">
+          ${chartCard('school', 'Incidents by school', 'Hover for the rate per 1,000 students.', charts.school)}
+          ${chartCard('type', 'Incidents by type', '', charts.type)}
+        </div>
+        <h2 class="font-serif text-xl text-white mb-3">Recent high-severity incidents</h2>
+        ${hi.length ? `<div class="card overflow-hidden divide-y divide-white/[0.05]">${[...hi].sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 25).map(i => `
+          <a href="${schoolHref(i.school, '/admin/safety')}" class="flex items-center gap-4 px-5 py-3 hover:bg-white/[0.02] transition-colors">
+            <div class="w-20 shrink-0 text-xs text-gray-400 tabular-nums">${escapeHtml(formatDate((i.date || '') + 'T12:00'))}</div>
+            <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(i.type || 'Incident')}</div><div class="text-[11px] text-gray-500 truncate">${escapeHtml(i.school.name || i.school.id)}${i.location ? ' · ' + escapeHtml(i.location) : ''}</div></div>
+            ${statusChip(SEVERITY[i.severity]?.[1] || 'serious', SEVERITY[i.severity]?.[0] || 'High')}
+            <span class="hidden sm:inline text-xs text-gray-500 w-20 text-right">${escapeHtml(i.status === 'resolved' || i.status === 'closed' ? 'Resolved' : 'Open')}</span>
+          </a>`).join('')}</div>` : `<p class="text-sm text-gray-500">${statusChip('good', 'No high-severity incidents in this range.')}</p>`}
+        <p class="hint mt-4">Student names and details stay in each school's incident log; open a school to review individual reports.</p>`;
+    });
+  body.addEventListener('district:drawn', () => mountAll(body, charts));
+}

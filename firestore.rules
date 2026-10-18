@@ -41,6 +41,13 @@ service cloud.firestore {
     function canSeeStudent(t, sid) { return canManage(t) || (signedIn() && me() == sid) || isGuardianOf(t, sid); }
     // Families can read course structure (titles, items, dates) for the calendar and grade views.
     function canReadCourseContent(t, c) { return canReadCourse(t, c) || isGuardian(t); }
+    // A self-graded submission must be for a real quiz item, with a numeric score between 0 and its points.
+    function validStudentQuiz(t, c) {
+      let d = request.resource.data;
+      return d.kind == 'quiz' && d.grade is number && d.grade >= 0 && d.grade <= d.get('points', 0)
+        && d.get('moduleId', null) is string
+        && get(/databases/$(database)/documents/tenants/$(t)/courses/$(c)/modules/$(d.moduleId)/items/$(d.itemId)).data.type == 'quiz';
+    }
     function unchanged(fields) { return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields); }
 
     // ── Districts ───────────────────────────────────────────────────────
@@ -92,7 +99,7 @@ service cloud.firestore {
         allow read: if canManage(t) || (signedIn() && me() == uid);
         allow create: if signedIn() && me() == uid && request.resource.data.userId == me() && (
           // owner of a new classroom/school becomes its admin
-          (request.resource.data.role == 'admin' && tenant(t).ownerUid == me()) ||
+          (request.resource.data.role == 'admin' && (tenant(t).ownerUid == me() || isDistrictAdmin(t))) ||
           // teachers must present a valid join code
           (request.resource.data.role == 'teacher' && (
             (exists(/databases/$(database)/documents/joinCodes/$(request.resource.data.joinCode))
@@ -205,17 +212,20 @@ service cloud.firestore {
         match /submissions/{s} {
           allow read: if canManage(t) || (signedIn() && resource.data.studentId == me()) || isGuardianOf(t, resource.data.studentId);
           // Students write only their own work and can't grade assignments.
-          // NOTE: quiz scores are computed in the browser, so a determined student could forge one.
-          // Move quiz grading into a Cloud Function if that matters for your school.
+          // NOTE: quiz scores are computed in the browser, so a determined student could still forge one
+          // (within 0..points, on a real quiz). Move quiz grading into a Cloud Function if that matters.
           allow create: if isEnrolled(t, c)
             && request.resource.data.studentId == me()
-            && (request.resource.data.kind == 'quiz' || request.resource.data.get('grade', null) == null);
+            && s == request.resource.data.itemId + '_' + me()
+            && !request.resource.data.keys().hasAny(['gradedBy', 'gradedAt', 'feedback'])
+            && (request.resource.data.get('grade', null) == null || validStudentQuiz(t, c));
           allow update: if isStaff(t) || (
             isEnrolled(t, c)
             && resource.data.studentId == me() && request.resource.data.studentId == me()
             && (
               // quiz retakes (the app only offers them when the teacher allows)
-              (resource.data.get('kind', '') == 'quiz' && request.resource.data.kind == 'quiz') ||
+              (resource.data.get('kind', '') == 'quiz' && validStudentQuiz(t, c)
+                && unchanged(['feedback', 'gradedBy', 'gradedAt', 'itemId', 'moduleId'])) ||
               // assignment edits, only until a teacher grades it, and never self-graded
               (resource.data.get('gradedBy', null) == null && request.resource.data.get('grade', null) == null)
             )
@@ -235,7 +245,7 @@ service cloud.firestore {
       allow read: if canManage(t) || (signedIn() && resource.data.studentUid == me()) || isGuardianOf(t, resource.data.studentUid);
       allow write: if isStaff(t);
     }
-    match /tenants/{t}/attendanceSessions/{x} { allow read, write: if isStaff(t); }
+    match /tenants/{t}/attendanceSessions/{x} { allow read: if canManage(t); allow write: if isStaff(t); }
     // Special education / 504 / ELL: confidential.
     match /tenants/{t}/services/{sid} { allow read, write: if hasCap(t, 'services'); }
     // Accommodations are shared with every teacher so they can be honoured in class.
@@ -245,7 +255,7 @@ service cloud.firestore {
     }
     // Incidents: any staff member can report; only admins / Safety staff can read the log.
     match /tenants/{t}/incidents/{x} {
-      allow read: if hasCap(t, 'safety') || (isStaff(t) && resource.data.reportedBy == me());
+      allow read: if hasCap(t, 'safety') || isDistrictAdmin(t) || (isStaff(t) && resource.data.reportedBy == me());
       allow create: if isStaff(t) && request.resource.data.reportedBy == me();
       allow update, delete: if hasCap(t, 'safety');
     }
@@ -256,7 +266,10 @@ service cloud.firestore {
         // students may only add themselves to the request list
         || (isStudent(t)
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['requests', 'requestNames'])
-            && request.resource.data.requests.toSet().difference(resource.data.get('requests', []).toSet()) == [me()].toSet());
+            && request.resource.data.requests.toSet().difference(resource.data.get('requests', []).toSet()) == [me()].toSet()
+            // …without removing anyone else's request or touching anyone else's name
+            && resource.data.get('requests', []).toSet().difference(request.resource.data.requests.toSet()).size() == 0
+            && request.resource.data.get('requestNames', {}).diff(resource.data.get('requestNames', {})).affectedKeys().hasOnly([me()]));
     }
     match /tenants/{t}/careerPlans/{sid} {
       allow read: if canSeeStudent(t, sid);
@@ -265,7 +278,10 @@ service cloud.firestore {
     // Family Access
     match /tenants/{t}/guardians/{uid} {
       allow read: if canManage(t) || (signedIn() && me() == uid);
-      allow create, update: if signedIn() && me() == uid && request.resource.data.userId == me();
+      // Becoming a guardian requires a Family Access code issued by this school.
+      allow create: if signedIn() && me() == uid && request.resource.data.userId == me()
+        && get(/databases/$(database)/documents/familyCodes/$(request.resource.data.code)).data.tenantId == t;
+      allow update: if signedIn() && me() == uid && request.resource.data.userId == me() && unchanged(['code']);
       allow delete: if isAdmin(t);
     }
     match /tenants/{t}/guardianLinks/{id} {

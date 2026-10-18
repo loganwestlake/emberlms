@@ -60,6 +60,7 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 function slugify(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, ''); }
+const gradOf = c => GRADIENTS.includes(c?.gradient) ? c.gradient : pickGradient(c?.title);
 function pickGradient(seed) {
   const s = String(seed || ''); let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
@@ -276,12 +277,15 @@ async function copyText(text, msg = 'Copied to clipboard') {
   }
 }
 async function withBusy(btn, label, fn) {
+  // Re-entrancy guard: Ctrl+Enter / requestSubmit() and double clicks can fire while the button is already busy.
+  if (btn.dataset.busy) return;
+  btn.dataset.busy = '1';
   const orig = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = `${ico('loader-circle', 'w-4 h-4 animate-spin')} ${escapeHtml(label)}`;
   refreshIcons();
   try { return await fn(); }
-  finally { if (btn.isConnected) { btn.disabled = false; btn.innerHTML = orig; refreshIcons(); } }
+  finally { delete btn.dataset.busy; if (btn.isConnected) { btn.disabled = false; btn.innerHTML = orig; refreshIcons(); } }
 }
 
 // Modals: Esc to close, focus trap, focus restore, scroll lock.
@@ -1049,6 +1053,11 @@ function renderWizard() {
       ${ico('arrow-right', 'w-4 h-4 text-gray-600 group-hover:text-[#F59E0B] group-hover:translate-x-0.5 transition-all')}
     </button>`;
   const go = step => { w.step = step; renderWizard(); };
+  const resumeSignedIn = msg => {
+    currentUser = auth.currentUser;
+    if (currentUser) { renderWizard(); showError($('#wz-error'), `Your account was created, but setup didn't finish: ${msg} Try again below.`); }
+    else showError($('#wz-error'), msg);
+  };
   const onBack = step => $('[data-back]')?.addEventListener('click', () => go(step));
 
   if (w.step === 'role') {
@@ -1146,7 +1155,7 @@ function renderWizard() {
       if (password.length < 6) return showError(err, 'Password must be at least 6 characters.');
       withBusy(e.currentTarget.querySelector('[type=submit]'), 'Creating account…', () => authFlow(async () => {
         try { const cred = await createUserWithEmailAndPassword(auth, email, password); await finish(cred.user); }
-        catch (ex) { console.error(ex); showError(err, friendlyError(ex)); }
+        catch (ex) { console.error(ex); resumeSignedIn(friendlyError(ex)); }
       }));
     });
     return;
@@ -1282,6 +1291,8 @@ function renderWizard() {
       withBusy(e.currentTarget.querySelector('[type=submit]'), 'Creating account…', () => authFlow(async () => {
         try { const cred = await createUserWithEmailAndPassword(auth, email, password); await finalizeTeacherSignup(w, cred.user, err); }
         catch (ex) { console.error(ex); showError(err, friendlyError(ex)); }
+        // Login created but setup failed: switch to the signed-in "finish" step instead of offering signup again.
+        if ($('#wz-auth-form') && err.textContent) resumeSignedIn(err.textContent);
       }));
     });
     return;
@@ -1345,10 +1356,14 @@ function renderWizard() {
       if (password.length < 6) return showError(err, 'Password must be at least 6 characters.');
       withBusy(e.currentTarget.querySelector('[type=submit]'), 'Creating account…', () => authFlow(async () => {
         try {
-          if (auth.currentUser) await signOut(auth);
           const fakeEmail = `${username}@${school.slug}.emberlms.local`;
-          const cred = await createUserWithEmailAndPassword(auth, fakeEmail, password);
-          await setDoc(doc(db, 'tenants', school.slug, 'students', cred.user.uid), {
+          // A retry after a failed profile write reuses the login that was already created.
+          let user = auth.currentUser?.email === fakeEmail ? auth.currentUser : null;
+          if (!user) {
+            if (auth.currentUser) await signOut(auth);
+            user = (await createUserWithEmailAndPassword(auth, fakeEmail, password)).user;
+          }
+          await setDoc(doc(db, 'tenants', school.slug, 'students', user.uid), {
             username, firstName: first, lastName: last, displayName: `${first} ${last}`.trim(),
             email: fakeEmail, role: 'student', status: 'pending', enrolledCourseIds: [], createdAt: serverTimestamp()
           });
@@ -1356,7 +1371,8 @@ function renderWizard() {
           navigate(`/${school.slug}/pending`, { replace: true });
         } catch (ex) {
           console.error(ex);
-          showError(err, ex.code === 'auth/email-already-in-use' ? 'That username is already taken at this school — try another.' : friendlyError(ex));
+          showError(err, ex.code === 'auth/email-already-in-use' ? 'That username is already taken at this school — try another.'
+            : auth.currentUser ? `Your login was created, but we couldn't finish setting up your account (${friendlyError(ex)}). Press Create account to try again.` : friendlyError(ex));
         }
       }));
     });
@@ -1650,9 +1666,13 @@ function adminTrayHTML() {
   if (district) {
     const p = s => buildUrl(`/district/${district.id}${s}`);
     return `<p class="label">${escapeHtml(district.name || district.id)}</p>
-      ${trayLink(p(''), 'layout-dashboard', 'District dashboard')}${trayLink(p('/schools'), 'building-2', 'Schools')}${trayLink(p('/teachers'), 'users', 'Teachers')}${trayLink(p('/planning'), 'clipboard-check', 'Lesson plans')}`;
+      ${trayLink(p(''), 'layout-dashboard', 'District dashboard')}${trayLink(p('/schools'), 'building-2', 'Schools')}
+      ${navSection('Student information')}${trayLink(p('/students'), 'graduation-cap', 'Students')}${trayLink(p('/attendance'), 'calendar-check', 'Attendance')}${trayLink(p('/safety'), 'shield-alert', 'Safety')}
+      ${navSection('Staff')}${trayLink(p('/teachers'), 'users', 'Teachers')}${trayLink(p('/planning'), 'clipboard-check', 'Lesson plans')}`;
   }
   const p = s => buildUrl(`/${ctx.slug}${s}`);
+  const backToDistrict = ctx.tenant.districtId && (ctx.roleInfo.data?.districtAdmin || ls(`ember_district:${currentUser.uid}`) === ctx.tenant.districtId)
+    ? `<div class="mb-4">${trayLink(buildUrl(`/district/${ctx.tenant.districtId}`), 'arrow-left', 'District dashboard', 'Back to all schools')}</div>` : '';
   const sisLinks = `${navSection('Student information')}
     ${ctx.isAdmin ? trayLink(p('/admin/attendance'), 'calendar-check', 'Attendance', 'Daily view, trends, chronic absence') : ''}
     ${ctx.isAdmin ? trayLink(p('/admin/schedule'), 'calendar-range', 'Master schedule') : ''}
@@ -1661,7 +1681,7 @@ function adminTrayHTML() {
     ${ctx.can('safety') ? trayLink(p('/admin/safety'), 'shield-alert', 'Safety & incidents') : ''}
     ${ctx.isAdmin ? trayLink(p('/admin/setup'), 'settings-2', 'School setup', 'Bell schedule, terms, grade scale') : ''}`;
   if (!ctx.isAdmin) return `<p class="label">${escapeHtml(ctx.tenant.name)}</p>${sisLinks}`;
-  return `<p class="label">${escapeHtml(ctx.tenant.name)}</p>
+  return `${backToDistrict}<p class="label">${escapeHtml(ctx.tenant.name)}</p>
     ${ctx.isPersonal ? '' : trayLink(p('/admin'), 'shield-check', 'Overview', 'Join code, stats, plans to review')}
     ${trayLink(p('/admin/students'), 'graduation-cap', 'Students', 'Create logins, approve sign-ups')}
     ${ctx.isPersonal ? '' : trayLink(p('/admin/teachers'), 'user-cog', 'Teachers', 'Invite and manage staff')}
@@ -1726,30 +1746,39 @@ async function viewDistrict(districtId, segs = []) {
   if (!currentUser) return navigate(`/login?next=${encodeURIComponent(currentAppPath())}`, { replace: true });
   const t = routeToken;
   render(loadingScreen());
-  const dSnap = await getDoc(doc(db, 'districts', districtId));
+  let dSnap = null;
+  try { dSnap = await getDoc(doc(db, 'districts', districtId)); }
+  catch (e) { if (!isPermErr(e)) throw e; } // the rules hide districts you don't administer
   if (!live(t)) return;
-  if (!dSnap.exists()) return viewNotFound();
-  const district = { id: dSnap.id, ...dSnap.data() };
-  if (!(district.adminUids || []).includes(currentUser.uid)) {
+  const district = dSnap?.exists() ? { id: dSnap.id, ...dSnap.data() } : null;
+  if (!district || !(district.adminUids || []).includes(currentUser.uid)) {
     return render(centeredMessage({ icon: 'lock', tone: 'red', title: 'Access denied', text: "You aren't a district administrator for this district.", actions: `<button data-signout class="btn btn-secondary">Switch account</button>` }));
   }
+  ls(`ember_district:${currentUser.uid}`, districtId);
   const dctx = { districtId, district, t };
   const sub = segs[0] || 'overview';
   if (sub === 'schools') return viewDistrictSchools(dctx);
   if (sub === 'teachers') return viewDistrictTeachers(dctx);
   if (sub === 'planning') return viewDistrictPlanning(dctx);
-  if (sub === 'attendance') return viewDistrictStub(dctx);
-  return viewDistrictOverview(dctx);
+  const sis = await import('./sis.js');
+  if (!live(t)) return;
+  if (sub === 'attendance') return sis.viewDistrictAttendance(dctx);
+  if (sub === 'students') return sis.viewDistrictStudents(dctx);
+  if (sub === 'safety') return sis.viewDistrictSafety(dctx);
+  return sis.viewDistrictHome(dctx);
 }
 function districtShell({ districtId, district }, active, header, body) {
   layoutState = { ctx: null, district: { id: districtId, ...district }, course: null };
   const p = s => buildUrl(`/district/${districtId}${s}`);
-  const labels = { overview: 'Dashboard', schools: 'Schools', teachers: 'Teachers', planning: 'Lesson plans', attendance: 'Attendance' };
+  const labels = { overview: 'Dashboard', schools: 'Schools', teachers: 'Teachers', planning: 'Lesson plans', attendance: 'Attendance', students: 'Students', safety: 'Safety' };
   const subnav = subnavHTML({
     accent: 'violet', eyebrow: 'District', title: district.name || districtId, items: [
       { href: p(''), label: 'Dashboard', active: active === 'overview' }, { href: p('/schools'), label: 'Schools', active: active === 'schools' },
+      { section: 'Student information' },
+      { href: p('/students'), label: 'Students', active: active === 'students' }, { href: p('/attendance'), label: 'Attendance', active: active === 'attendance' },
+      { href: p('/safety'), label: 'Safety', active: active === 'safety' },
+      { section: 'Staff' },
       { href: p('/teachers'), label: 'Teachers', active: active === 'teachers' }, { href: p('/planning'), label: 'Lesson plans', active: active === 'planning' },
-      { href: p('/attendance'), label: 'Attendance', active: active === 'attendance', soon: true },
     ]
   });
   return appShell({
@@ -1783,31 +1812,6 @@ function schoolsTable(schools) {
       ]
     }))
   );
-}
-async function viewDistrictOverview(dctx) {
-  const { districtId, district, t } = dctx;
-  setTitle('Dashboard', district.name);
-  render(districtShell(dctx, 'overview',
-    { eyebrow: 'District admin', title: escapeHtml(district.name || districtId), subtitle: 'Every school in your district at a glance.', actions: `<button data-create-school class="btn btn-violet">${ico('plus')} New school</button>` },
-    `<div id="district-content" class="max-w-6xl"><div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">${Array.from({ length: 4 }, () => '<div class="skeleton h-32"></div>').join('')}</div>${skeletonRows(4)}</div>`));
-  try {
-    const schools = await getDistrictSchools(districtId);
-    if (!live(t)) return;
-    const sum = k => schools.reduce((a, s) => a + (s[k] || 0), 0);
-    const p = s => buildUrl(`/district/${districtId}${s}`);
-    $('#district-content').innerHTML = `
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">
-        ${[
-          { icon: 'building-2', label: 'Schools', value: schools.length, href: p('/schools') },
-          { icon: 'users', label: 'Teachers', value: sum('_teacherCount'), href: p('/teachers') },
-          { icon: 'graduation-cap', label: 'Students', value: sum('_studentCount'), href: p('/schools') },
-          { icon: 'book-open', label: 'Courses', value: sum('_courseCount'), href: p('/schools') },
-        ].map(s => `<a href="${s.href}" class="card card-hover p-5 block">${iconTile(s.icon, 'violet')}<div class="font-serif text-3xl text-white mt-3">${s.value.toLocaleString()}</div><div class="text-xs text-gray-500">${s.label}</div></a>`).join('')}
-      </div>
-      <div class="flex items-center justify-between mb-3"><h2 class="font-serif text-xl text-white">Schools</h2>${schools.length > 6 ? `<a href="${p('/schools')}" class="text-xs text-[#A78BFA] hover:underline">View all →</a>` : ''}</div>
-      ${schools.length ? schoolsTable(schools.slice(0, 6)) : emptyState({ icon: 'building-2', tone: 'violet', title: 'No schools yet', text: 'Create the first school in your district. You\'ll become its admin and get a join code for teachers.', action: `<button data-create-school class="btn btn-violet">${ico('plus')} Create first school</button>` })}`;
-    refreshIcons();
-  } catch (e) { console.error(e); if (live(t)) $('#district-content').innerHTML = errorBox(e); refreshIcons(); }
 }
 async function viewDistrictSchools(dctx) {
   const { districtId, district, t } = dctx;
@@ -1873,11 +1877,6 @@ async function viewDistrictPlanning(dctx) {
     mountPlanList(all, { mode: 'district', defaultFilter: 'submitted', onReview: p => openPlanReviewModal(p._schoolId, p, () => renderRoute()) });
   } catch (e) { console.error(e); if (live(t)) { $('#plans-list').innerHTML = errorBox(e); refreshIcons(); } }
 }
-function viewDistrictStub(dctx) {
-  setTitle('Attendance', dctx.district.name);
-  render(districtShell(dctx, 'attendance', { eyebrow: escapeHtml(dctx.district.name || dctx.districtId), title: 'Attendance' },
-    `<div class="max-w-2xl">${emptyState({ icon: 'calendar-check', tone: 'violet', title: 'Coming soon', text: 'District-wide attendance insights are on the roadmap.' })}</div>`));
-}
 function openCreateSchoolModal(districtId, district) {
   const m = openModal({
     html: modalHeader({ title: 'New school', subtitle: `Add a school to ${escapeHtml(district.name || districtId)}.`, icon: 'building-2', tone: 'violet' }) + `
@@ -1942,6 +1941,21 @@ function makeCtx(slug, tenant, roleInfo) {
     me: { uid: currentUser.uid, name: roleInfo.data?.displayName || currentUser.displayName || displayNameOf(roleInfo.data) },
   };
 }
+// District admins can open any school in their district; the first visit adds them as a school admin
+// (allowed by the users rule) so every school tool works for them.
+async function joinAsDistrictAdmin(slug, tenant) {
+  try {
+    const d = await getDoc(doc(db, 'districts', tenant.districtId));
+    if (!d.exists() || !(d.data().adminUids || []).includes(currentUser.uid)) return null;
+    const data = {
+      userId: currentUser.uid, role: 'admin', districtAdmin: true, email: currentUser.email || '',
+      displayName: currentUser.displayName || (currentUser.email ? currentUser.email.split('@')[0] : 'District admin'),
+      photoURL: currentUser.photoURL || null, createdAt: serverTimestamp()
+    };
+    await setDoc(doc(db, 'tenants', slug, 'users', currentUser.uid), data);
+    return { role: 'admin', data };
+  } catch (e) { if (!isPermErr(e)) console.warn('district admin join failed', e); return null; }
+}
 async function viewTenant(slug, segs) {
   const t = routeToken;
   if (!tenantCache.has(slug)) render(loadingScreen());
@@ -1949,7 +1963,9 @@ async function viewTenant(slug, segs) {
   if (!live(t)) return;
   if (!tenant) return viewTenantNotFound(slug);
   if (!currentUser) return navigate(`/login?school=${encodeURIComponent(slug)}&next=${encodeURIComponent(currentAppPath())}`, { replace: true });
-  const roleInfo = await getRoleInTenant(slug, currentUser.uid);
+  let roleInfo = await getRoleInTenant(slug, currentUser.uid);
+  if (!live(t)) return;
+  if (!roleInfo && tenant.districtId) roleInfo = await joinAsDistrictAdmin(slug, tenant);
   if (!live(t)) return;
   if (!roleInfo) return viewNoAccess(slug, tenant);
   if (roleInfo.role !== 'student' || roleInfo.data.status === 'approved') rememberTenant(currentUser.uid, slug);
@@ -1970,7 +1986,8 @@ async function viewTenant(slug, segs) {
   const [sub, a, b, c, d] = segs;
   const teacherOnly = fn => ctx.isRealTeacher ? fn() : viewNotFound();
   const adminOnly = fn => ctx.isAdmin ? fn() : viewNotFound();
-  const sis = () => import('./sis.js');
+  // If the user navigates away while sis.js is still downloading, drop this render.
+  const sis = async () => { const m = await import('./sis.js'); if (!live(t)) throw Object.assign(new Error('stale'), { stale: true }); return m; };
   if (ctx.isGuardian && !['dashboard', 'record', 'activities', 'inbox', 'calendar', 'announcements'].includes(sub || 'dashboard')) return navigate('/' + slug, { replace: true });
   switch (sub || 'dashboard') {
     case 'dashboard': return ctx.isGuardian ? (await sis()).viewFamilyHome(ctx) : viewDashboard(ctx);
@@ -2071,6 +2088,10 @@ async function viewCourseSection(ctx, courseId, section, x, y) {
   const course = await loadCourse(ctx, courseId);
   if (!live(t)) return;
   if (!course) return viewNotFound();
+  if (!ctx.isRealTeacher && course.published === false) {
+    setTitle(course.title);
+    return render(tenantPage(ctx, 'dashboard', `<div class="max-w-xl mt-10">${emptyState({ icon: 'eye-off', title: "This course isn't open yet", text: 'Your teacher hasn\'t published it. Check back later.', action: `<a href="${buildUrl('/' + ctx.slug)}" class="btn btn-secondary">Back to dashboard</a>` })}</div>`));
+  }
   section = section || 'home';
   if (section === 'roster') return navigate(`/${ctx.slug}/course/${courseId}/people`, { replace: true });
   if (ctx.studentView && (course.navHidden || []).includes(section)) {
@@ -2082,8 +2103,8 @@ async function viewCourseSection(ctx, courseId, section, x, y) {
     case 'home': return viewCourseHome(ctx, course);
     case 'announcements': return viewCourseAnnouncements(ctx, course);
     case 'modules': return viewCourse(ctx, courseId);
-    case 'grades': return x === 'term' ? (await import('./sis.js')).viewTermGrades(ctx, course) : viewGrades(ctx, courseId);
-    case 'attendance': return (await import('./sis.js')).viewRollCall(ctx, course);
+    case 'grades': if (x !== 'term') return viewGrades(ctx, courseId); { const m = await import('./sis.js'); return live(t) && m.viewTermGrades(ctx, course); }
+    case 'attendance': { const m = await import('./sis.js'); return live(t) && m.viewRollCall(ctx, course); }
     case 'collaborations': return viewCollaborations(ctx, course);
     case 'syllabus': return viewSyllabus(ctx, course);
     case 'assignments': return viewItemIndex(ctx, course, 'assignment');
@@ -2101,7 +2122,7 @@ async function viewCourseSection(ctx, courseId, section, x, y) {
 }
 
 function openCourseModal(ctx, existing = null) {
-  let grad = existing?.gradient || GRADIENTS[0];
+  let grad = GRADIENTS.includes(existing?.gradient) ? existing.gradient : GRADIENTS[0];
   const m = openModal({
     html: modalHeader({ title: existing ? 'Edit course' : 'New course', subtitle: existing ? '' : 'Create a course for your students.', icon: 'book-open' }) + `
     <form novalidate>
@@ -2176,7 +2197,7 @@ async function loadCourse(ctx, courseId) {
   const s = await getDoc(doc(db, 'tenants', ctx.slug, 'courses', courseId));
   return s.exists() ? { id: s.id, ...s.data() } : null;
 }
-function courseLead(course) { return `<div class="${course.gradient || pickGradient(course.title)} w-12 h-12 sm:w-14 sm:h-14 rounded-xl shrink-0 relative overflow-hidden hidden sm:block"><div class="absolute inset-0 grad-pattern opacity-30"></div></div>`; }
+function courseLead(course) { return `<div class="${gradOf(course)} w-12 h-12 sm:w-14 sm:h-14 rounded-xl shrink-0 relative overflow-hidden hidden sm:block"><div class="absolute inset-0 grad-pattern opacity-30"></div></div>`; }
 
 async function viewCourse(ctx, courseId) {
   const t = routeToken;
@@ -2243,8 +2264,8 @@ function subscribeToModules(ctx, courseId) {
       switch (b.dataset.action) {
         case 'add-module': return $('#add-module-btn')?.click();
         case 'add-item': return openItemTypeModal(ctx, courseId, mod.id);
-        case 'mod-up': return mi > 0 && swapPositions(mod, mods[mi - 1]);
-        case 'mod-down': return mi < mods.length - 1 && swapPositions(mod, mods[mi + 1]);
+        case 'mod-up': if (mi > 0) await swapPositions(mod, mods[mi - 1]); return;
+        case 'mod-down': if (mi < mods.length - 1) await swapPositions(mod, mods[mi + 1]); return;
         case 'mod-rename': {
           const title = await promptDialog({ title: 'Rename module', label: 'Module title', value: mod.title || '' });
           if (title && title !== mod.title) await updateDoc(mod.ref, { title });
@@ -2256,8 +2277,8 @@ function subscribeToModules(ctx, courseId) {
           await deleteDoc(mod.ref);
           return toast('Module deleted');
         }
-        case 'item-up': return ii > 0 && swapPositions(items[ii], items[ii - 1]);
-        case 'item-down': return ii < items.length - 1 && swapPositions(items[ii], items[ii + 1]);
+        case 'item-up': if (ii > 0) await swapPositions(items[ii], items[ii - 1]); return;
+        case 'item-down': if (ii < items.length - 1) await swapPositions(items[ii], items[ii + 1]); return;
         case 'item-edit': return openItemEditor(ctx, courseId, mod.id, items[ii], items[ii].type);
         case 'item-delete': {
           if (!await confirmDialog({ title: `Delete “${items[ii].title || 'item'}”?`, confirmLabel: 'Delete', danger: true })) return;
@@ -2500,7 +2521,7 @@ const isLate = (sub, item) => { const due = toDate(item.data?.dueDate), at = toD
 const hasGrade = s => s && s.grade !== null && s.grade !== undefined && s.grade !== '';
 function gradeChip(s, points) {
   if (!s) return `<span class="text-xs text-gray-600">—</span>`;
-  if (hasGrade(s)) return `<span class="text-sm text-white font-medium tabular-nums">${s.grade}<span class="text-gray-500">/${points}</span></span>`;
+  if (hasGrade(s)) return `<span class="text-sm text-white font-medium tabular-nums">${escapeHtml(s.grade)}<span class="text-gray-500">/${points}</span></span>`;
   return badge('Needs grading', 'amber');
 }
 
@@ -2576,13 +2597,13 @@ function mountAssignmentWork(ctx, courseId, moduleId, item) {
       host.innerHTML = `<div class="card overflow-hidden">
         <div class="px-6 py-4 border-b border-white/[0.06] flex flex-wrap items-center justify-between gap-3">
           <div class="flex items-center gap-3">${iconTile(graded ? 'award' : 'circle-check', graded ? 'amber' : 'green')}<div><div class="text-sm text-white font-medium">${graded ? 'Graded' : 'Submitted'}</div><div class="text-xs text-gray-500">${escapeHtml(formatDateTime(mine.submittedAt) || 'just now')}${isLate(mine, item) ? ' · <span class="text-red-400">late</span>' : ''}</div></div></div>
-          ${graded ? `<div class="text-right"><div class="font-serif text-3xl text-white tabular-nums">${mine.grade}<span class="text-gray-500 text-lg">/${points}</span></div></div>` : `<button data-edit-sub class="btn btn-secondary btn-sm">${ico('pencil', 'w-3.5 h-3.5')} Edit submission</button>`}
+          ${graded ? `<div class="text-right"><div class="font-serif text-3xl text-white tabular-nums">${escapeHtml(mine.grade)}<span class="text-gray-500 text-lg">/${points}</span></div></div>` : mine.gradedBy ? badge('Reviewed by teacher', 'violet') : `<button data-edit-sub class="btn btn-secondary btn-sm">${ico('pencil', 'w-3.5 h-3.5')} Edit submission</button>`}
         </div>
         <div class="p-6 space-y-4">
           ${mine.content ? `<div><span class="label">Your answer</span><div class="text-sm text-gray-300 whitespace-pre-wrap leading-relaxed">${escapeHtml(mine.content)}</div></div>` : ''}
           ${url ? `<div><span class="label">Link</span><a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="text-sm text-[#F59E0B] hover:underline break-all">${escapeHtml(url)}</a></div>` : ''}
           ${mine.feedback ? `<div class="p-4 rounded-lg bg-[#8B5CF6]/5 border border-[#8B5CF6]/20"><span class="label !text-[#A78BFA]">Teacher feedback</span><p class="text-sm text-gray-300 whitespace-pre-wrap">${escapeHtml(mine.feedback)}</p></div>` : ''}
-          ${!graded ? `<p class="text-xs text-gray-500">You can edit your submission until it's graded.</p>` : ''}
+          ${!graded && !mine.gradedBy ? `<p class="text-xs text-gray-500">You can edit your submission until it's graded.</p>` : ''}
         </div>
       </div>`;
       refreshIcons();
@@ -2614,7 +2635,7 @@ function mountAssignmentWork(ctx, courseId, moduleId, item) {
       if (rawUrl && !url) return showError(err, 'That link doesn\'t look valid.');
       withBusy(e.currentTarget.querySelector('[type=submit]'), 'Submitting…', async () => {
         try {
-          mine = await saveSubmission(ctx, courseId, moduleId, item, mine, { kind: 'assignment', content, url, grade: null, feedback: null, points });
+          mine = await saveSubmission(ctx, courseId, moduleId, item, mine, { kind: 'assignment', content, url, grade: null, points });
           toast('Submitted!'); draw(false);
         } catch (ex) { console.error(ex); showError(err, friendlyError(ex)); }
       });
@@ -2640,13 +2661,14 @@ function mountQuizWork(ctx, courseId, moduleId, item) {
   if (!qs.length) { host.innerHTML = emptyState({ icon: 'list-checks', title: 'This quiz has no questions yet' }); refreshIcons(); return; }
   host.innerHTML = `<div class="skeleton h-48"></div>`;
   const results = () => {
-    const pct = Math.round((mine.score / (mine.points || qs.length)) * 100);
+    const got = hasGrade(mine) ? Number(mine.grade) : mine.score; // a teacher's override wins over the auto score
+    const pct = Math.round((got / (mine.points || qs.length)) * 100);
     host.innerHTML = `<div class="card p-6 mb-6 flex flex-col sm:flex-row sm:items-center gap-5">
         <div class="relative w-20 h-20 shrink-0">
           <svg viewBox="0 0 36 36" class="w-20 h-20 -rotate-90"><circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="3"/><circle cx="18" cy="18" r="15.9" fill="none" stroke="${pct >= 70 ? '#34D399' : pct >= 50 ? '#F59E0B' : '#F87171'}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${pct} 100"/></svg>
           <div class="absolute inset-0 flex items-center justify-center font-serif text-xl text-white">${pct}%</div>
         </div>
-        <div class="flex-1"><div class="font-serif text-2xl text-white">${mine.score} / ${mine.points || qs.length} correct</div><div class="text-xs text-gray-500 mt-1">Submitted ${escapeHtml(formatDateTime(mine.submittedAt) || 'just now')}</div></div>
+        <div class="flex-1"><div class="font-serif text-2xl text-white">${escapeHtml(got)} / ${escapeHtml(mine.points || qs.length)} ${hasGrade(mine) && Number(mine.grade) !== mine.score ? 'points' : 'correct'}</div><div class="text-xs text-gray-500 mt-1">Submitted ${escapeHtml(formatDateTime(mine.submittedAt) || 'just now')}</div></div>
         ${item.data?.allowRetake ? `<button data-retake class="btn btn-secondary">${ico('rotate-ccw', 'w-4 h-4')} Retake</button>` : ''}
       </div>
       ${mine.feedback ? `<div class="p-4 mb-6 rounded-lg bg-[#8B5CF6]/5 border border-[#8B5CF6]/20"><span class="label !text-[#A78BFA]">Teacher feedback</span><p class="text-sm text-gray-300 whitespace-pre-wrap">${escapeHtml(mine.feedback)}</p></div>` : ''}
@@ -2717,7 +2739,7 @@ function mountSubmissionsPanel(ctx, courseId, item) {
             `<div class="flex items-center gap-3">${avatar(s.studentName || 'Student')}<div class="min-w-0"><div class="text-sm text-white truncate">${escapeHtml(s.studentName || 'Student')}</div>${s.username ? `<div class="text-xs text-gray-500 font-mono truncate">${escapeHtml(s.username)}</div>` : ''}</div></div>`,
             `<div class="text-xs text-gray-400">${escapeHtml(formatDateTime(s.submittedAt) || 'just now')} ${isLate(s, item) ? badge('Late', 'red') : ''}</div>`,
             gradeChip(s, points),
-            `<button data-grade="${s.id}" class="btn btn-secondary btn-sm">${hasGrade(s) ? 'View' : 'Grade'}</button>`
+            `<button data-grade="${escapeHtml(s.id)}" class="btn btn-secondary btn-sm">${hasGrade(s) ? 'View' : 'Grade'}</button>`
           ]
         })))}`;
     refreshIcons();
@@ -2745,7 +2767,7 @@ function openGradeModal(ctx, courseId, item, sub, allSubs = []) {
       ${modalBody(`
         <div class="space-y-4 mb-6">
           ${sub.kind === 'quiz' || item.type === 'quiz' ? `
-            <div class="p-4 rounded-lg bg-white/[0.03] border border-white/[0.06] flex items-center justify-between"><span class="text-sm text-gray-300">Auto-graded score</span><span class="font-serif text-2xl text-white">${sub.score ?? '—'} / ${sub.points || qs.length}</span></div>
+            <div class="p-4 rounded-lg bg-white/[0.03] border border-white/[0.06] flex items-center justify-between"><span class="text-sm text-gray-300">Auto-graded score</span><span class="font-serif text-2xl text-white">${escapeHtml(sub.score ?? '—')} / ${escapeHtml(sub.points || qs.length)}</span></div>
             <ol class="space-y-2 max-h-72 overflow-y-auto pr-1">${qs.map((q, i) => { const a = sub.answers?.[i]; const ok = a === q.answer; return `<li class="text-sm flex items-start gap-2">${ico(ok ? 'circle-check' : 'circle-x', 'w-4 h-4 mt-0.5 shrink-0 ' + (ok ? 'text-emerald-400' : 'text-red-400'))}<div><div class="text-gray-200">${escapeHtml(q.prompt)}</div><div class="text-xs text-gray-500">Answered: ${escapeHtml(q.choices[a] ?? '—')}${ok ? '' : ` · Correct: ${escapeHtml(q.choices[q.answer])}`}</div></div></li>`; }).join('')}</ol>`
           : `
             ${sub.content ? `<div><span class="label">Answer</span><div class="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed bg-[#0A0A0A] border border-white/[0.08] rounded-lg p-4 max-h-80 overflow-y-auto">${escapeHtml(sub.content)}</div></div>` : ''}
@@ -2872,7 +2894,7 @@ async function viewGrades(ctx, courseId) {
           return { cells: [
             `<a href="${itemHref(it)}" class="flex items-center gap-3 hover:text-[#F59E0B] transition-colors">${iconTile(typeMeta(it.type).icon, 'muted')}<div class="min-w-0"><div class="text-sm text-white truncate">${escapeHtml(it.title || 'Untitled')}</div><div class="text-[11px] text-gray-500 truncate">${escapeHtml(it.moduleTitle || '')}${due ? ' · due ' + escapeHtml(formatDate(due)) : ''}</div></div></a>`,
             status,
-            `<div class="text-right">${hasGrade(s) ? `<span class="text-sm text-white tabular-nums">${s.grade}<span class="text-gray-500">/${itemPoints(it)}</span></span>` : `<span class="text-xs text-gray-600">— / ${itemPoints(it)}</span>`}</div>`
+            `<div class="text-right">${hasGrade(s) ? `<span class="text-sm text-white tabular-nums">${escapeHtml(s.grade)}<span class="text-gray-500">/${itemPoints(it)}</span></span>` : `<span class="text-xs text-gray-600">— / ${itemPoints(it)}</span>`}</div>`
           ] };
         }))}</div>`;
     refreshIcons();
@@ -3118,9 +3140,10 @@ function openBulkStudentsModal(ctx) {
   const parse = () => [...new Set(ta.value.split(/\r?\n/).map(l => l.replace(/[\t,;]+/g, ' ').trim()).filter(Boolean))];
   ta.addEventListener('input', () => { const n = parse().length; go.disabled = !n; m.$('#bulk-count').textContent = n ? `${plural(n, 'student')} will be created.` : ''; go.textContent = n ? `Create ${plural(n, 'account')}` : 'Create accounts'; });
   go.addEventListener('click', async () => {
+    if (go.dataset.running) return;
     const names = parse();
     if (names.length > 200) return showError(m.$('#bulk-error'), 'Add at most 200 students at a time.');
-    m.dismissible = false;
+    m.dismissible = false; go.dataset.running = '1'; go.disabled = true;
     let existing = [];
     try { existing = (await getDocs(collection(db, 'tenants', ctx.slug, 'students'))).docs.map(d => d.data().username); } catch (e) {}
     const results = [];
@@ -3572,7 +3595,7 @@ async function viewAdminCourses(ctx) {
       const tn = teachers[c.ownerUid] ? displayNameOf(teachers[c.ownerUid]) : 'Unknown teacher';
       return `<div class="card card-hover overflow-hidden relative group">
         <a href="${buildUrl(`/${slug}/course/${c.id}`)}" class="absolute inset-0 z-10" aria-label="Open ${escapeHtml(c.title || 'course')}"></a>
-        <div class="${c.gradient || pickGradient(c.title)} h-16 relative"><div class="absolute inset-0 grad-pattern opacity-30"></div></div>
+        <div class="${gradOf(c)} h-16 relative"><div class="absolute inset-0 grad-pattern opacity-30"></div></div>
         <div class="p-5">
           <p class="text-xs text-gray-500 mb-1 truncate">${escapeHtml(c.code || ' ')}</p>
           <h3 class="font-serif text-lg text-white mb-3 truncate">${escapeHtml(c.title || 'Untitled')}</h3>
@@ -3588,7 +3611,7 @@ async function viewAdminCourses(ctx) {
 // SHARED COURSE DATA
 // ═══════════════════════════════════════════════════════════════
 const GRAD_HEX = { 'grad-amber': '#F59E0B', 'grad-violet': '#8B5CF6', 'grad-teal': '#14B8A6', 'grad-rose': '#F43F5E', 'grad-blue': '#3B82F6', 'grad-emerald': '#10B981' };
-const courseHex = c => GRAD_HEX[c?.gradient || pickGradient(c?.title)] || '#F59E0B';
+const courseHex = c => GRAD_HEX[gradOf(c)] || '#F59E0B';
 const courseCol = (ctx, courseId, name) => collection(db, 'tenants', ctx.slug, 'courses', courseId, name);
 const cHref = (ctx, courseId, sub = '') => buildUrl(`/${ctx.slug}/course/${courseId}${sub ? '/' + sub : ''}`);
 const itemHref = (ctx, it) => buildUrl(`/${ctx.slug}/course/${it.courseId}/item/${it.moduleId}/${it.id}`);
@@ -3616,6 +3639,7 @@ async function myCourses(ctx, { fresh = false } = {}) {
     const ids = (s.exists() && s.data().enrolledCourseIds) || [];
     list = (await Promise.all(ids.map(id => getDoc(doc(db, 'tenants', ctx.slug, 'courses', id)).then(c => c.exists() ? { id: c.id, ...c.data() } : null).catch(() => null)))).filter(Boolean);
   }
+  if (!ctx.isRealTeacher) list = list.filter(c => c.published !== false); // unpublished courses are hidden from students & families
   list.sort((a, b) => recency(b.createdAt) - recency(a.createdAt));
   Object.assign(coursesCache, { key, at: Date.now(), list });
   return list;
@@ -3679,8 +3703,10 @@ async function pickModule(ctx, courseId) {
       if (sel && sel.value !== '__new') { result = sel.value; return m.close(); }
       const title = m.$('#pm-name').value.trim();
       if (!title) return showError(m.$('#pm-error'), 'Name the new module.');
-      try { const ref = await addDoc(courseCol(ctx, courseId, 'modules'), { title, position: Date.now(), createdAt: serverTimestamp() }); result = ref.id; m.close(); }
-      catch (ex) { showError(m.$('#pm-error'), friendlyError(ex)); }
+      await withBusy(m.$('[type=submit]'), 'Creating…', async () => {
+        try { const ref = await addDoc(courseCol(ctx, courseId, 'modules'), { title, position: Date.now(), createdAt: serverTimestamp() }); result = ref.id; m.close(); }
+        catch (ex) { showError(m.$('#pm-error'), friendlyError(ex)); }
+      });
     });
   });
 }
@@ -3754,7 +3780,7 @@ function mountAnnouncementStrip(ctx) {
   }, () => { host.innerHTML = ''; }));
 }
 function renderCourseCard(ctx, c, fav = false) {
-  const grad = c.gradient || pickGradient(c.title);
+  const grad = gradOf(c);
   const hidden = new Set(ctx.studentView ? (c.navHidden || []) : []);
   const quick = [['announcements', 'megaphone', 'Announcements'], ['assignments', 'clipboard-list', 'Assignments'], ['discussions', 'messages-square', 'Discussions'], ['files', 'folder', 'Files']].filter(q => !hidden.has(q[0]));
   return `<div class="card card-hover overflow-hidden group relative flex flex-col">
@@ -3792,7 +3818,7 @@ async function renderDashSide(ctx, courses, t) {
       const itemById = Object.fromEntries(items.map(i => [i.id, i]));
       html += panel('Recent feedback', feedback.length ? feedback.slice(0, 4).map(({ s, course }) => {
         const it = itemById[s.itemId];
-        return it ? todoRow(ctx, it, { course, note: `${hasGrade(s) ? `<span class="text-white">${s.grade}/${itemPoints(it)}</span>` : ''}${s.feedback ? ` · “${escapeHtml(s.feedback.slice(0, 60))}${s.feedback.length > 60 ? '…' : ''}”` : ''}` }) : '';
+        return it ? todoRow(ctx, it, { course, note: `${hasGrade(s) ? `<span class="text-white">${escapeHtml(s.grade)}/${itemPoints(it)}</span>` : ''}${s.feedback ? ` · “${escapeHtml(s.feedback.slice(0, 60))}${s.feedback.length > 60 ? '…' : ''}”` : ''}` }) : '';
       }).join('') : `<p class="text-sm text-gray-500">No feedback yet.</p>`);
     } else {
       const subs = (await Promise.all(courses.map(c => getDocs(subsCol(ctx, c.id)).then(s => s.docs.map(d => d.data())).catch(() => [])))).flat();
@@ -3977,7 +4003,7 @@ async function viewItemIndex(ctx, course, type) {
       const due = toDate(it.data?.dueDate);
       let right = '';
       if (type !== 'page') {
-        if (ctx.studentView) { const s = mine.get(it.id); right = hasGrade(s) ? `<span class="text-sm text-white tabular-nums">${s.grade}<span class="text-gray-500">/${itemPoints(it)}</span></span>` : s ? badge('Submitted', 'blue') : due && due.getTime() < now ? badge('Missing', 'red') : `<span class="text-xs text-gray-500">${itemPoints(it)} pts</span>`; }
+        if (ctx.studentView) { const s = mine.get(it.id); right = hasGrade(s) ? `<span class="text-sm text-white tabular-nums">${escapeHtml(s.grade)}<span class="text-gray-500">/${itemPoints(it)}</span></span>` : s ? badge('Submitted', 'blue') : due && due.getTime() < now ? badge('Missing', 'red') : `<span class="text-xs text-gray-500">${itemPoints(it)} pts</span>`; }
         else { const subs = allSubs.filter(s => s.itemId === it.id); const ng = subs.filter(s => !hasGrade(s)).length; right = `<span class="text-xs text-gray-500">${subs.length} submitted</span>${ng ? ` ${badge(`${ng} to grade`, 'amber')}` : ''}`; }
       }
       return `<a href="${itemHref(ctx, it)}" data-search-text="${escapeHtml((it.title || '').toLowerCase())}" class="flex items-center gap-4 px-5 py-3.5 hover:bg-white/[0.03] transition-colors">
@@ -4121,7 +4147,7 @@ async function viewDiscussion(ctx, course, topicId) {
   const one = (r, nested = false) => `<div class="${nested ? 'ml-6 sm:ml-12 pl-4 border-l border-white/[0.08]' : 'card p-5'}">
     <div class="flex items-start gap-3">${avatar(r.authorName, null, nested ? 'w-7 h-7' : 'w-8 h-8')}
       <div class="flex-1 min-w-0"><div class="flex items-center gap-2 flex-wrap"><span class="text-sm text-white">${escapeHtml(r.authorName || '')}</span>${r.authorRole === 'teacher' ? badge('Teacher', 'violet') : ''}<span class="text-[11px] text-gray-500">${escapeHtml(timeAgo(r.createdAt))}</span></div>
-        <p class="text-sm text-gray-300 whitespace-pre-wrap break-words mt-1">${escapeHtml(r.body || '')}</p>
+        ${r.deleted ? `<p class="text-sm text-gray-600 italic mt-1">Reply deleted by its author.</p>` : `<p class="text-sm text-gray-300 whitespace-pre-wrap break-words mt-1">${escapeHtml(r.body || '')}</p>`}
         <div class="flex gap-3 mt-2 text-xs">${!nested && !topic.locked ? `<button data-reply-to="${r.id}" class="text-gray-500 hover:text-[#F59E0B]">Reply</button>` : ''}${canModerate || r.authorUid === ctx.me.uid ? `<button data-del-reply="${r.id}" class="text-gray-500 hover:text-red-400">Delete</button>` : ''}</div>
         <div data-inline="${r.id}"></div></div></div></div>`;
   const draw = () => {
@@ -4147,6 +4173,11 @@ async function viewDiscussion(ctx, course, topicId) {
     if (del && await confirmDialog({ title: 'Delete this reply?', confirmLabel: 'Delete', danger: true })) {
       try {
         const kids = replies.filter(r => r.parentId === del.dataset.delReply);
+        // Students can't delete classmates' replies, so a reply with others' answers under it is blanked instead.
+        if (!ctx.isRealTeacher && kids.some(k => k.authorUid !== ctx.me.uid)) {
+          await updateDoc(doc(repliesCol, del.dataset.delReply), { body: '', deleted: true });
+          return;
+        }
         await batchDelete([del.dataset.delReply, ...kids.map(k => k.id)].map(id => doc(repliesCol, id)));
         await updateDoc(ref, { replyCount: increment(-(1 + kids.length)) }).catch(() => {});
       } catch (ex) { toast(friendlyError(ex), 'error'); }
@@ -4507,7 +4538,7 @@ function viewCourseSettings(ctx, course) {
   if (!ctx.teacherMode) return viewNotFound();
   setTitle('Settings', course.title);
   const ref = doc(db, 'tenants', ctx.slug, 'courses', course.id);
-  let tab = 'details', grad = course.gradient || pickGradient(course.title);
+  let tab = 'details', grad = gradOf(course);
   let order = orderedCourseNav(course).map(n => n.key), hidden = new Set(course.navHidden || []);
   render(tenantPage(ctx, 'settings', sectionHeader(ctx, course, 'Settings') + `
     <div class="grid lg:grid-cols-[minmax(0,1fr)_240px] gap-8 max-w-6xl">
@@ -5086,7 +5117,7 @@ window.addEventListener('popstate', () => renderRoute());
 async function renderRoute() {
   if (!authReady) return;
   currentUser = auth.currentUser; // source of truth, even mid sign-in while routing is suppressed
-  routeToken++;
+  const t = ++routeToken;
   clearSubs(); closeAllModals(); closeSidebar(); closeTray();
   contentCache.clear();
   layoutState = { ctx: null, district: null, course: null };
@@ -5101,8 +5132,9 @@ async function renderRoute() {
       default: return viewNotFound();
     }
   } catch (e) {
+    if (e?.stale) return;
     console.error('Render failed:', e);
-    viewFatal(e);
+    if (live(t)) viewFatal(e); // a late failure from a page the user already left must not replace the new one
   }
 }
 
@@ -5134,6 +5166,7 @@ onAuthStateChanged(auth, async user => {
 // ── Shared with ./sis.js (loaded on demand) ─────────────────────
 const routeTokenNow = () => routeToken;
 export {
+  districtShell, getDistrictSchools,
   db, $, $$, ico, refreshIcons, escapeHtml, plural, displayNameOf, toDate, tsMillis, recency, formatDate, formatDateTime,
   timeAgo, toDateInput, render, setTitle, showError, iconTile, badge, avatar, skeletonRows, emptyState, errorBox, dataTable,
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
