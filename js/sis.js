@@ -9,7 +9,8 @@ import {
   timeAgo, toDateInput, render, setTitle, showError, iconTile, badge, avatar, skeletonRows, emptyState, errorBox, dataTable,
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
-  GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, routeTokenNow, randInt, renderRoute, districtShell, getDistrictSchools
+  GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, routeTokenNow, randInt, renderRoute, districtShell, getDistrictSchools,
+  officeMenu, OFFICE_TRAY
 } from './app.js';
 
 // ═══════════════════════════════════════════════════════════════
@@ -412,7 +413,7 @@ export async function viewAttendanceOffice(ctx) {
   const settings = await getSettings(ctx);
   let tab = new URLSearchParams(location.search).get('tab') || 'today';
   let date = todayISO(), range = '30';
-  render(tenantPage(ctx, 'sis-attendance', pageHeader({ eyebrow: 'Student information', title: 'Attendance', subtitle: escapeHtml(settings.schoolYear) }) + `
+  render(tenantPage(ctx, 'sis-attendance', pageHeader({ eyebrow: 'Office', title: 'Attendance', subtitle: escapeHtml(settings.schoolYear) }) + `
     <div class="max-w-6xl"><div class="flex flex-wrap items-center justify-between gap-3 mb-6">
       <div class="segmented" role="tablist"><button data-tab="today">Daily</button><button data-tab="trends">Trends</button><button data-tab="chronic">Chronic absence</button></div>
       <div id="att-controls" class="flex items-center gap-2"></div></div>
@@ -596,7 +597,7 @@ async function contactFamily(ctx, sid, name) {
 export async function viewMasterSchedule(ctx) {
   const t = routeTokenNow();
   setTitle('Master schedule', ctx.tenant.name);
-  render(tenantPage(ctx, 'sis-schedule', pageHeader({ eyebrow: 'Student information', title: 'Master schedule', subtitle: 'Assign every section a period, room and meeting days. Conflicts are checked automatically.', actions: `<div class="segmented" role="group" aria-label="Group by"><button data-by="teacher" aria-pressed="true">By teacher</button><button data-by="room" aria-pressed="false">By room</button></div>` }) +
+  render(tenantPage(ctx, 'sis-schedule', pageHeader({ eyebrow: 'Office', title: 'Master schedule', subtitle: 'Assign every section a period, room and meeting days. Conflicts are checked automatically.', actions: `<div class="segmented" role="group" aria-label="Group by"><button data-by="teacher" aria-pressed="true">By teacher</button><button data-by="room" aria-pressed="false">By room</button></div>` }) +
     `<div id="ms" class="max-w-7xl">${skeletonRows(6, 'h-16')}</div>`));
   let by = 'teacher', settings, courses, staff, rosters;
   const el = $('#ms');
@@ -778,7 +779,7 @@ export async function viewReportCards(ctx) {
   setTitle('Report cards', ctx.tenant.name);
   let settings = await getSettings(ctx, { fresh: true });
   let termId = currentTerm(settings)?.id, grade = '', q = '';
-  render(tenantPage(ctx, 'sis-reportcards', pageHeader({ eyebrow: 'Student information', title: 'Report cards', subtitle: 'Track which teachers have entered grades, publish to families, and print.', actions: `<label class="sr-only" for="rcs-term">Term</label><select id="rcs-term" class="input !py-2 !w-auto">${settings.terms.map(x => `<option value="${x.id}" ${x.id === termId ? 'selected' : ''}>${escapeHtml(x.name)}</option>`).join('')}</select><a href="${buildUrl(`/${ctx.slug}/admin/setup`)}" class="btn btn-secondary">${ico('settings-2')} Template</a>` }) + `<div id="rcs" class="max-w-6xl">${skeletonRows(5)}</div>`));
+  render(tenantPage(ctx, 'sis-reportcards', pageHeader({ eyebrow: 'Office', title: 'Report cards', subtitle: 'Track which teachers have entered grades, publish to families, and print.', actions: `<label class="sr-only" for="rcs-term">Term</label><select id="rcs-term" class="input !py-2 !w-auto">${settings.terms.map(x => `<option value="${x.id}" ${x.id === termId ? 'selected' : ''}>${escapeHtml(x.name)}</option>`).join('')}</select><a href="${buildUrl(`/${ctx.slug}/office/setup`)}" class="btn btn-secondary">${ico('settings-2')} Template</a>` }) + `<div id="rcs" class="max-w-6xl">${skeletonRows(5)}</div>`));
   const el = $('#rcs');
   let students = [], courses = [], progress = null, progressFor = null;
   // refetch=false re-renders from cached data (search / grade filter), so typing doesn't hit Firestore or lose focus.
@@ -840,7 +841,7 @@ export async function viewSisSetup(ctx) {
   if (!ctx.isAdmin) return navigate(`/${ctx.slug}`, { replace: true });
   setTitle('School setup', ctx.tenant.name);
   const s = structuredClone(await getSettings(ctx, { fresh: true }));
-  render(tenantPage(ctx, 'sis-setup', pageHeader({ eyebrow: 'Student information', title: 'School setup', subtitle: 'Bell schedule, grading periods, grade scale and report card template.' }) + `
+  render(tenantPage(ctx, 'sis-setup', pageHeader({ eyebrow: 'Office', title: 'School setup', subtitle: 'Bell schedule, grading periods, grade scale and report card template.' }) + `
     <form id="setup" class="max-w-4xl space-y-8" novalidate>
       <section class="card p-6"><h2 class="font-serif text-xl text-white mb-4">School year</h2><label class="label" for="su-year">Label</label><input id="su-year" class="input max-w-xs" value="${escapeHtml(s.schoolYear)}">
         <label class="label mt-4" for="su-chronic">Chronic absence threshold (% of class time)</label><input id="su-chronic" type="number" min="1" max="50" class="input max-w-[120px]" value="${s.chronicThreshold}"></section>
@@ -1191,7 +1192,7 @@ export async function viewServices(ctx) {
   const t = routeTokenNow();
   setTitle('Student services', ctx.tenant.name);
   let tab = 'iep';
-  render(tenantPage(ctx, 'sis-services', pageHeader({ eyebrow: 'Student information', title: 'Student services', subtitle: 'IEP and 504 compliance, ELL services and accommodations. Visible only to admins and staff with Student services access.', actions: `<button id="sv-add" class="btn btn-primary">${ico('plus')} Add student</button>` }) + `
+  render(tenantPage(ctx, 'sis-services', pageHeader({ eyebrow: 'Office', title: 'Student services', subtitle: 'IEP and 504 compliance, ELL services and accommodations. Visible only to admins and staff with Student services access.', actions: `<button id="sv-add" class="btn btn-primary">${ico('plus')} Add student</button>` }) + `
     <div class="max-w-6xl"><div class="segmented mb-6" role="tablist"><button data-tab="iep">IEP caseload</button><button data-tab="plan504">504 plans</button><button data-tab="ell">ELL</button></div><div id="sv">${skeletonRows(5)}</div></div>`));
   let services = [], students = [];
   const el = $('#sv');
@@ -1334,9 +1335,9 @@ function incidentList(list) {
 export async function viewIncidents(ctx) {
   if (!ctx.can('safety')) return navigate(`/${ctx.slug}`, { replace: true });
   const t = routeTokenNow();
-  setTitle('Safety & incidents', ctx.tenant.name);
+  setTitle('Discipline & safety', ctx.tenant.name);
   let status = 'open', type = '', q = '';
-  render(tenantPage(ctx, 'sis-safety', pageHeader({ eyebrow: 'Student information', title: 'Safety & incidents', subtitle: 'Discipline, safety concerns and follow-up. Teachers can report concerns; only admins and Safety staff can see this log.', actions: `<button id="inc-new" class="btn btn-primary">${ico('plus')} Incident</button>` }) + `
+  render(tenantPage(ctx, 'sis-safety', pageHeader({ eyebrow: 'Office', title: 'Discipline & safety', subtitle: 'Referrals, incidents, safety concerns and follow-up. Teachers can report concerns; only admins and Safety staff can see this log.', actions: `<button id="inc-new" class="btn btn-primary">${ico('plus')} Incident</button>` }) + `
     <div class="max-w-6xl"><div class="flex flex-wrap items-center gap-3 mb-4"><div class="segmented" role="group"><button data-status="open" aria-pressed="true">Open</button><button data-status="closed" aria-pressed="false">Closed</button><button data-status="" aria-pressed="false">All</button></div>
       <select id="inc-type" class="input !py-2 !w-auto" aria-label="Type"><option value="">All types</option>${INCIDENT_TYPES.map(x => `<option>${x}</option>`).join('')}</select>${searchBox('inc-q', 'Search students…')}</div><div id="inc">${skeletonRows(5)}</div></div>`));
   let list = [];
@@ -1687,7 +1688,7 @@ export async function viewDistrictHome(dctx) {
         <div class="grid lg:grid-cols-3 gap-6 mb-8">
           <div class="lg:col-span-2">${chartCard('trend', 'District attendance', `Present + tardy as a share of all student-periods, ${rangeLabel(range)}.`, charts.trend)}</div>
           <section class="card p-5 sm:p-6 flex flex-col"><h2 class="text-sm text-white font-medium mb-1">Needs attention</h2><p class="text-xs text-gray-500 mb-4">Schools below target, ${rangeLabel(range)}.</p>
-            ${watch.length ? `<ul class="space-y-3 overflow-y-auto max-h-72 -mr-2 pr-2">${watch.map(({ s, flags }) => `<li><a href="${schoolHref(s, '/admin/attendance')}" class="text-sm text-white hover:text-[#A78BFA] transition-colors">${escapeHtml(s.name || s.id)}</a><div class="mt-1 space-y-1">${flags.map(f => `<div>${statusChip(f.level, f.text)}</div>`).join('')}</div></li>`).join('')}</ul>`
+            ${watch.length ? `<ul class="space-y-3 overflow-y-auto max-h-72 -mr-2 pr-2">${watch.map(({ s, flags }) => `<li><a href="${schoolHref(s, '/office/attendance')}" class="text-sm text-white hover:text-[#A78BFA] transition-colors">${escapeHtml(s.name || s.id)}</a><div class="mt-1 space-y-1">${flags.map(f => `<div>${statusChip(f.level, f.text)}</div>`).join('')}</div></li>`).join('')}</ul>`
               : `<div class="flex-1 flex flex-col items-center justify-center text-center py-6">${ico('circle-check', 'w-8 h-8 st-good mb-2')}<p class="text-sm text-gray-300">Every school is on track.</p></div>`}
           </section>
         </div>
@@ -1727,8 +1728,8 @@ export async function viewDistrictAttendance(dctx) {
       const p = s => buildUrl(`/district/${dctx.districtId}${s}`);
       charts = {
         trend: vizLine(dailySeries(data.records), { label: 'District daily attendance rate' }),
-        bySchool: vizRank(withData.map(s => ({ label: s.name || s.id, href: schoolHref(s, '/admin/attendance'), value: s.att.absenceRate ?? 0, detail: `${s.att.absent.toLocaleString()} of ${s.att.total.toLocaleString()} student-periods`, status: ADA_LEVEL(s.att.rate) })).sort((a, b) => b.value - a.value), { label: 'Absence rate by school' }),
-        chronic: vizRank(withData.map(s => ({ label: s.name || s.id, href: schoolHref(s, '/admin/attendance?tab=chronic'), value: s.chronicRate ?? 0, detail: `${s.chronic.length} of ${new Set(s.records.map(r => r.studentUid)).size} students`, status: CHRONIC_LEVEL(s.chronicRate) })).sort((a, b) => b.value - a.value), { label: 'Chronic absence rate by school' }),
+        bySchool: vizRank(withData.map(s => ({ label: s.name || s.id, href: schoolHref(s, '/office/attendance'), value: s.att.absenceRate ?? 0, detail: `${s.att.absent.toLocaleString()} of ${s.att.total.toLocaleString()} student-periods`, status: ADA_LEVEL(s.att.rate) })).sort((a, b) => b.value - a.value), { label: 'Absence rate by school' }),
+        chronic: vizRank(withData.map(s => ({ label: s.name || s.id, href: schoolHref(s, '/office/attendance?tab=chronic'), value: s.chronicRate ?? 0, detail: `${s.chronic.length} of ${new Set(s.records.map(r => r.studentUid)).size} students`, status: CHRONIC_LEVEL(s.chronicRate) })).sort((a, b) => b.value - a.value), { label: 'Chronic absence rate by school' }),
         byGrade: vizBars(GRADE_LEVELS.filter(g => gAgg[g]).map(g => ({ label: g === 'K' ? 'K' : `Gr ${g}`, value: pct(gAgg[g].abs, gAgg[g].n) || 0, detail: `${gAgg[g].abs} of ${gAgg[g].n} student-periods` })), { label: 'Absence rate by grade level' }),
       };
       const lvl = ADA_LEVEL(att.rate);
@@ -1749,7 +1750,7 @@ export async function viewDistrictAttendance(dctx) {
         <div class="mb-10">${dataTable(
           [{ label: 'School', cls: 'col-span-12 sm:col-span-4' }, { label: 'Attendance', cls: 'col-span-3 sm:col-span-2 sm:text-right' }, { label: 'Absences', cls: 'col-span-3 sm:col-span-2 sm:text-right' }, { label: 'Tardies', cls: 'col-span-3 sm:col-span-1 sm:text-right' }, { label: 'Chronic', cls: 'col-span-3 sm:col-span-1 sm:text-right' }, { label: 'Status', cls: 'col-span-12 sm:col-span-2' }],
           schools.map(s => { const l = ADA_LEVEL(s.att.rate); const cell = (lab, v) => `<span class="text-sm text-gray-200 tabular-nums sm:block sm:text-right"><span class="sm:hidden text-gray-500 text-xs">${lab} </span>${v}</span>`; return { cells: [
-            `<a href="${schoolHref(s, '/admin/attendance')}" class="text-sm text-white hover:text-[#A78BFA] transition-colors truncate block">${escapeHtml(s.name || s.id)}</a>`,
+            `<a href="${schoolHref(s, '/office/attendance')}" class="text-sm text-white hover:text-[#A78BFA] transition-colors truncate block">${escapeHtml(s.name || s.id)}</a>`,
             cell('Rate', fmtPct(s.att.rate)), cell('Abs.', s.att.absent.toLocaleString()), cell('Tardy', s.att.T.toLocaleString()), cell('Chronic', s.records.length ? s.chronic.length : '—'),
             l ? statusChip(l, ADA_LABEL[l]) : `<span class="text-xs text-gray-500">No data</span>`] }; }))}</div>
         <div id="chronic" class="flex flex-wrap items-center justify-between gap-3 mb-3 scroll-mt-6"><div><h2 class="font-serif text-xl text-white">Chronically absent students</h2><p class="text-xs text-gray-500 mt-1">Missing 10% or more of class time; 20%+ is severe. ${plural(data.chronic.length, 'student')}.</p></div><button data-csv="chronic" class="btn btn-secondary btn-sm" ${data.chronic.length ? '' : 'disabled'}>${ico('download', 'w-3.5 h-3.5')} Export CSV</button></div>
@@ -1854,7 +1855,7 @@ export async function viewDistrictSafety(dctx) {
       const byType = {}; inc.forEach(i => { byType[i.type || 'Other'] = (byType[i.type || 'Other'] || 0) + 1; });
       const perK = s => s.students.length ? Math.round((s.incidents || []).length / s.students.length * 1000 * 10) / 10 : null;
       charts = {
-        school: vizRank(data.schools.filter(s => s.incidents).map(s => ({ label: s.name || s.id, href: schoolHref(s, '/admin/safety'), value: (s.incidents || []).length, detail: s.students.length ? `${perK(s)} per 1,000 students` : '' })).sort((a, b) => b.value - a.value), { label: 'Incidents by school', format: v => v.toLocaleString() }),
+        school: vizRank(data.schools.filter(s => s.incidents).map(s => ({ label: s.name || s.id, href: schoolHref(s, '/office/discipline'), value: (s.incidents || []).length, detail: s.students.length ? `${perK(s)} per 1,000 students` : '' })).sort((a, b) => b.value - a.value), { label: 'Incidents by school', format: v => v.toLocaleString() }),
         type: vizRank(Object.entries(byType).map(([k, v]) => ({ label: k, value: v })).sort((a, b) => b.value - a.value), { label: 'Incidents by type', format: v => v.toLocaleString() }),
       };
       return `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
@@ -1869,7 +1870,7 @@ export async function viewDistrictSafety(dctx) {
         </div>
         <h2 class="font-serif text-xl text-white mb-3">Recent high-severity incidents</h2>
         ${hi.length ? `<div class="card overflow-hidden divide-y divide-white/[0.05]">${[...hi].sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 25).map(i => `
-          <a href="${schoolHref(i.school, '/admin/safety')}" class="flex items-center gap-4 px-5 py-3 hover:bg-white/[0.02] transition-colors">
+          <a href="${schoolHref(i.school, '/office/discipline')}" class="flex items-center gap-4 px-5 py-3 hover:bg-white/[0.02] transition-colors">
             <div class="w-20 shrink-0 text-xs text-gray-400 tabular-nums">${escapeHtml(formatDate((i.date || '') + 'T12:00'))}</div>
             <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(i.type || 'Incident')}</div><div class="text-[11px] text-gray-500 truncate">${escapeHtml(i.school.name || i.school.id)}${i.location ? ' · ' + escapeHtml(i.location) : ''}</div></div>
             ${statusChip(SEVERITY[i.severity]?.[1] || 'serious', SEVERITY[i.severity]?.[0] || 'High')}
@@ -1878,4 +1879,69 @@ export async function viewDistrictSafety(dctx) {
         <p class="hint mt-4">Student names and details stay in each school's incident log; open a school to review individual reports.</p>`;
     });
   body.addEventListener('district:drawn', () => mountAll(body, charts));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// OFFICE HOME (the school office's front page — separate from courses and LMS admin)
+// ═══════════════════════════════════════════════════════════════
+export async function viewOfficeHome(ctx) {
+  const t = routeTokenNow();
+  setTitle('Office', ctx.tenant.name);
+  const today = todayISO();
+  render(tenantPage(ctx, 'office-home', pageHeader({ eyebrow: 'Office', title: escapeHtml(ctx.tenant.name), subtitle: escapeHtml(new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })) }) + `
+    <div class="max-w-6xl"><div id="oh-kpis" class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">${Array.from({ length: 4 }, () => '<div class="skeleton h-28"></div>').join('')}</div>
+      <div class="grid lg:grid-cols-[minmax(0,1fr)_360px] gap-8">
+        <section><h2 class="label">Office tools</h2><div class="grid sm:grid-cols-2 gap-3">${officeMenu(ctx).filter(([k]) => k !== '§' && k !== 'office-home').map(([k, l, path]) => `
+          <a href="${buildUrl(`/${ctx.slug}${path}`)}" class="card card-hover p-4 flex items-start gap-3">${iconTile(OFFICE_TRAY[k][0], 'teal')}<span class="min-w-0"><span class="block text-sm text-white">${escapeHtml(l)}</span><span class="block text-xs text-gray-500 mt-0.5">${escapeHtml(OFFICE_TRAY[k][1])}</span></span></a>`).join('')}</div></section>
+        <section><h2 class="label">Needs attention</h2><div id="oh-todo">${skeletonRows(3)}</div></section>
+      </div></div>`));
+  const settled = p => p.then(v => v, () => null);
+  const [settings, students, courses, sess, recs, inc, svc] = await Promise.all([
+    settled(getSettings(ctx)), settled(loadStudents(ctx)),
+    ctx.isAdmin ? settled(loadAllCourses(ctx)) : null,
+    ctx.isAdmin ? settled(getDocs(query(tcol(ctx, 'attendanceSessions'), where('date', '==', today)))) : null,
+    ctx.isAdmin ? settled(getDocs(query(tcol(ctx, 'attendance'), where('date', '==', today)))) : null,
+    ctx.can('safety') ? settled(getDocs(tcol(ctx, 'incidents'))) : null,
+    ctx.can('services') ? settled(getDocs(tcol(ctx, 'services'))) : null,
+  ]);
+  if (!live(t)) return;
+  const href = path => buildUrl(`/${ctx.slug}${path}`);
+  const tiles = [], todo = [];
+  tiles.push(kpi('Students enrolled', (students || []).length.toLocaleString(), settings?.schoolYear ? escapeHtml(settings.schoolYear) : '', null, href('/sis')));
+  if (courses && sess && recs) {
+    const scheduled = courses.filter(c => c.periodId), pool = scheduled.length ? scheduled : courses;
+    const taken = new Set(sess.docs.map(d => d.data().courseId));
+    const missing = pool.filter(c => !taken.has(c.id));
+    const sum = summarize(recs.docs.map(d => d.data()));
+    const weekend = [0, 6].includes(new Date().getDay());
+    tiles.push(kpi('Attendance taken', `${pool.length - missing.length}<span class="text-gray-500 text-lg">/${pool.length}</span>`, weekend ? 'No school today' : missing.length ? `${plural(missing.length, 'class', 'classes')} still to take` : 'Every class is done', weekend ? null : missing.length ? 'warning' : 'good', href('/office/attendance')));
+    tiles.push(kpi('Absent today', sum.absent.toLocaleString(), sum.total ? `${fmtPct(sum.rate)} attendance · ${sum.T} tardy` : 'Nothing recorded yet', null, href('/office/attendance')));
+    if (!weekend && missing.length) todo.push({ level: 'warning', icon: 'calendar-check', text: `${plural(missing.length, 'class', 'classes')} ${missing.length === 1 ? "hasn't" : "haven't"} taken attendance today`, href: href('/office/attendance') });
+  }
+  if (inc) {
+    const open = inc.docs.map(d => d.data()).filter(i => i.status !== 'resolved' && i.status !== 'closed');
+    const serious = open.filter(i => i.severity === 'high' || i.severity === 'critical');
+    tiles.push(kpi('Open discipline cases', open.length.toLocaleString(), serious.length ? `${serious.length} high severity` : open.length ? 'Awaiting follow-up' : 'All resolved', serious.length ? 'serious' : open.length ? 'warning' : 'good', href('/office/discipline')));
+    if (serious.length) todo.push({ level: 'serious', icon: 'shield-alert', text: `${plural(serious.length, 'high-severity incident')} open`, href: href('/office/discipline') });
+    const concerns = open.filter(i => i.isConcern).length;
+    if (concerns) todo.push({ level: 'warning', icon: 'flag', text: `${plural(concerns, 'teacher concern')} to review`, href: href('/office/discipline') });
+  }
+  if (svc) {
+    const ieps = svc.docs.map(d => d.data()).filter(x => x.iep?.active);
+    const overdue = ieps.filter(x => x.iep.annualReview && x.iep.annualReview < today).length;
+    const soon = ieps.filter(x => { const d = x.iep.annualReview; return d && d >= today && (new Date(d + 'T12:00') - Date.now()) / 864e5 <= 30; }).length;
+    if (tiles.length < 4) tiles.push(kpi('Active IEPs', ieps.length.toLocaleString(), overdue ? `${overdue} reviews overdue` : soon ? `${soon} reviews due in 30 days` : 'Reviews up to date', overdue ? 'critical' : soon ? 'warning' : 'good', href('/office/services')));
+    if (overdue) todo.push({ level: 'critical', icon: 'heart-handshake', text: `${plural(overdue, 'IEP annual review')} overdue`, href: href('/office/services') });
+    if (soon) todo.push({ level: 'warning', icon: 'heart-handshake', text: `${plural(soon, 'IEP review')} due in the next 30 days`, href: href('/office/services') });
+  }
+  if (settings && ctx.isAdmin && tiles.length < 4) {
+    const term = currentTerm(settings), pub = term && (settings.publishedTerms || []).includes(term.id);
+    tiles.push(kpi('Report cards', term ? escapeHtml(term.name) : '—', term ? (pub ? 'Published to families' : 'Not published yet') : 'Set up terms', term ? (pub ? 'good' : null) : 'warning', href('/office/reportcards')));
+  }
+  const sev = { critical: 0, serious: 1, warning: 2 };
+  todo.sort((a, b) => sev[a.level] - sev[b.level]);
+  $('#oh-kpis').innerHTML = tiles.join('');
+  $('#oh-todo').innerHTML = todo.length ? `<div class="card divide-y divide-white/[0.05] overflow-hidden">${todo.map(x => `<a href="${x.href}" class="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.03] transition-colors">${ico(STATUS[x.level][0], 'w-4 h-4 shrink-0 ' + STATUS[x.level][1])}<span class="flex-1 text-sm text-gray-200">${escapeHtml(x.text)}</span>${ico('chevron-right', 'w-4 h-4 text-gray-600')}</a>`).join('')}</div>`
+    : `<div class="card p-6 text-center">${ico('circle-check', 'w-7 h-7 st-good mx-auto mb-2')}<p class="text-sm text-gray-300">Nothing needs attention right now.</p></div>`;
+  refreshIcons();
 }

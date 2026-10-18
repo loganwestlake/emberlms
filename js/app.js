@@ -1543,10 +1543,11 @@ function globalNavHTML(active) {
   return `<nav class="gnav accent-${accent}" aria-label="Global navigation">
     <a href="${buildUrl(home)}" class="gnav-logo" aria-label="${APP_NAME} dashboard">${ico('flame', 'w-8 h-8 ' + (district ? 'text-[#8B5CF6]' : 'text-[#F59E0B]'))}</a>
     ${tray('account', `<span class="gnav-avatar">${avatar(uname, currentUser?.photoURL, 'w-7 h-7', 'text-[10px]')}</span>`, 'Account')}
-    ${district || ctx?.isAdmin || ctx?.can('services') || ctx?.can('safety') ? tray('admin', ico('shield-check'), 'Admin') : ''}
+    ${district || ctx?.isAdmin ? tray('admin', ico('shield-check'), 'Admin') : ''}
+    ${hasOffice(ctx) ? tray('office', ico('building-2'), 'Office') : ''}
     ${link('dashboard', 'layout-dashboard', 'Dashboard', home)}
     ${ctx && !ctx.isGuardian ? tray('courses', ico('book-open'), 'Courses') : ''}
-    ${ctx?.isRealTeacher ? link('students', 'contact', 'Students', `${home}/sis`) : ''}
+    ${ctx?.isRealTeacher && !hasOffice(ctx) ? link('students', 'contact', 'Students', `${home}/sis`) : ''}
     ${ctx ? link('calendar', 'calendar-days', 'Calendar', `${home}/calendar`) : ''}
     ${ctx ? link('inbox', 'inbox', 'Inbox', `${home}/inbox`, `<span class="gnav-badge ${inbox.count ? '' : 'hidden'}" data-inbox-badge aria-label="unread conversations">${inbox.count > 99 ? '99+' : inbox.count}</span>`) : ''}
     ${ctx?.isRealTeacher ? link('commons', 'library', 'Commons', `${home}/commons`) : ''}
@@ -1622,6 +1623,7 @@ async function openTray(kind) {
   try {
     if (kind === 'account') fill(await accountTrayHTML());
     else if (kind === 'admin') fill(adminTrayHTML());
+    else if (kind === 'office') fill(officeTrayHTML());
     else if (kind === 'courses') fill(await coursesTrayHTML());
     else if (kind === 'help') fill(helpTrayHTML());
   } catch (e) { console.error(e); fill(errorBox(e)); }
@@ -1673,14 +1675,6 @@ function adminTrayHTML() {
   const p = s => buildUrl(`/${ctx.slug}${s}`);
   const backToDistrict = ctx.tenant.districtId && (ctx.roleInfo.data?.districtAdmin || ls(`ember_district:${currentUser.uid}`) === ctx.tenant.districtId)
     ? `<div class="mb-4">${trayLink(buildUrl(`/district/${ctx.tenant.districtId}`), 'arrow-left', 'District dashboard', 'Back to all schools')}</div>` : '';
-  const sisLinks = `${navSection('Student information')}
-    ${ctx.isAdmin ? trayLink(p('/admin/attendance'), 'calendar-check', 'Attendance', 'Daily view, trends, chronic absence') : ''}
-    ${ctx.isAdmin ? trayLink(p('/admin/schedule'), 'calendar-range', 'Master schedule') : ''}
-    ${ctx.isAdmin ? trayLink(p('/admin/reportcards'), 'file-text', 'Report cards') : ''}
-    ${ctx.can('services') ? trayLink(p('/admin/services'), 'heart-handshake', 'Student services', 'IEP, 504, ELL') : ''}
-    ${ctx.can('safety') ? trayLink(p('/admin/safety'), 'shield-alert', 'Safety & incidents') : ''}
-    ${ctx.isAdmin ? trayLink(p('/admin/setup'), 'settings-2', 'School setup', 'Bell schedule, terms, grade scale') : ''}`;
-  if (!ctx.isAdmin) return `<p class="label">${escapeHtml(ctx.tenant.name)}</p>${sisLinks}`;
   return `${backToDistrict}<p class="label">${escapeHtml(ctx.tenant.name)}</p>
     ${ctx.isPersonal ? '' : trayLink(p('/admin'), 'shield-check', 'Overview', 'Join code, stats, plans to review')}
     ${trayLink(p('/admin/students'), 'graduation-cap', 'Students', 'Create logins, approve sign-ups')}
@@ -1688,7 +1682,18 @@ function adminTrayHTML() {
     ${trayLink(p('/admin/courses'), 'book-open', 'All courses')}
     ${ctx.isPersonal ? '' : trayLink(p('/admin/planning'), 'clipboard-check', 'Lesson plan reviews')}
     ${trayLink(p('/announcements'), 'megaphone', ctx.isPersonal ? 'Classroom announcements' : 'School announcements')}
-    ${sisLinks}`;
+    ${hasOffice(ctx) ? `<p class="hint mt-5">Attendance office, report cards, discipline and other school records are under ${ico('building-2', 'w-3.5 h-3.5 inline -mt-0.5')} Office.</p>` : ''}`;
+}
+const OFFICE_TRAY = {
+  'office-home': ['layout-grid', 'Today in the office'], 'sis-directory': ['contact', 'Search every student record'],
+  'sis-attendance': ['calendar-check', 'Daily view, trends, chronic absence'], 'sis-schedule': ['calendar-range', 'Periods, rooms, conflicts'],
+  'sis-reportcards': ['file-text', 'Grade entry, publish, print'], 'sis-services': ['heart-handshake', 'IEPs, 504 plans, English learners'],
+  'sis-safety': ['shield-alert', 'Incidents, referrals, concerns'], 'sis-activities': ['trophy', 'Clubs, teams, join requests'], 'sis-setup': ['settings-2', 'Bell schedule, terms, grade scale'],
+};
+function officeTrayHTML() {
+  const { ctx } = layoutState;
+  const p = s => buildUrl(`/${ctx.slug}${s}`);
+  return `<p class="label">${escapeHtml(ctx.tenant.name)}</p>` + officeMenu(ctx).map(([k, l, path]) => k === '§' ? navSection(l) : trayLink(p(path), OFFICE_TRAY[k][0], escapeHtml(l), OFFICE_TRAY[k][1])).join('');
 }
 async function coursesTrayHTML() {
   const { ctx } = layoutState;
@@ -2009,13 +2014,23 @@ async function viewTenant(slug, segs) {
         case 'students': return adminOnly(() => viewStudents(ctx));
         case 'courses': return adminOnly(() => viewAdminCourses(ctx));
         case 'planning': return adminOnly(() => viewAdminPlanning(ctx));
+        // Old links from before the Office split
+        case 'attendance': case 'schedule': case 'reportcards': case 'setup': case 'services':
+          return navigate(`/${slug}/office/${a}${location.search}`, { replace: true });
+        case 'safety': return navigate(`/${slug}/office/discipline`, { replace: true });
+        default: return adminOnly(() => viewAdminOverview(ctx));
+      }
+    case 'office':
+      if (!hasOffice(ctx)) return viewNotFound();
+      switch (a) {
         case 'attendance': return ctx.isAdmin ? (await sis()).viewAttendanceOffice(ctx) : viewNotFound();
         case 'schedule': return ctx.isAdmin ? (await sis()).viewMasterSchedule(ctx) : viewNotFound();
         case 'reportcards': return ctx.isAdmin ? (await sis()).viewReportCards(ctx) : viewNotFound();
         case 'setup': return ctx.isAdmin ? (await sis()).viewSisSetup(ctx) : viewNotFound();
         case 'services': return ctx.can('services') ? (await sis()).viewServices(ctx) : viewNotFound();
-        case 'safety': return ctx.can('safety') ? (await sis()).viewIncidents(ctx) : viewNotFound();
-        default: return adminOnly(() => viewAdminOverview(ctx));
+        case 'discipline': return ctx.can('safety') ? (await sis()).viewIncidents(ctx) : viewNotFound();
+        case undefined: return (await sis()).viewOfficeHome(ctx);
+        default: return viewNotFound();
       }
     case 'course':
       if (!a) break;
@@ -2047,10 +2062,15 @@ function tenantPage(ctx, active, content, course = null, { crumbs: extra = [], s
     const P = ctx.isPersonal;
     const admin = adminMenu(ctx);
     const hit = admin.find(a => a[0] === active);
+    const office = officeMenu(ctx), oHit = office.find(a => a[0] === active);
     if (hit) {
       subnav = subnavHTML({ eyebrow: 'Admin', title: ctx.tenant.name, items: admin.map(([k, l, path]) => k === '§' ? { section: l } : ({ href: buildUrl(base + path), label: l, active: k === active })) });
       crumbs = [{ label: 'Admin', href: buildUrl(base + (P ? '/admin/students' : '/admin')) }, { label: hit[1] }];
       gActive = 'admin';
+    } else if (oHit) {
+      subnav = subnavHTML({ accent: 'teal', eyebrow: 'Office', title: ctx.tenant.name, items: office.map(([k, l, path]) => k === '§' ? { section: l } : ({ href: buildUrl(base + path), label: l, active: k === active })) });
+      crumbs = [{ label: 'Office', href: buildUrl(base + '/office') }, ...(active === 'office-home' ? [] : [{ label: oHit[1] }])];
+      gActive = 'office';
     } else {
       gActive = { dashboard: 'dashboard', calendar: 'calendar', inbox: 'inbox', commons: 'commons', 'all-courses': 'courses', 'sis-directory': 'students' }[active] || 'account';
     }
@@ -2070,16 +2090,29 @@ function adminMenu(ctx) {
     ...(P ? [] : [['admin-planning', 'Plan reviews', '/admin/planning']]),
     ['announcements', P ? 'Announcements' : 'School announcements', '/announcements'],
     ...(P ? [] : [['planning', 'My lesson plans', '/planning']]),
-    ['§', 'Student information'],
-    ['sis-attendance', 'Attendance', '/admin/attendance'],
-    ['sis-schedule', 'Master schedule', '/admin/schedule'],
-    ['sis-reportcards', 'Report cards', '/admin/reportcards'],
-    ['sis-services', 'Student services', '/admin/services', 'services'],
-    ['sis-safety', 'Safety & incidents', '/admin/safety', 'safety'],
-    ['sis-activities', 'Activities', '/activities'],
-    ['sis-setup', 'School setup', '/admin/setup'],
   ];
-  const visible = all.filter(i => i[0] === '§' || ctx.isAdmin || (i[3] && ctx.can(i[3])));
+  return ctx.isAdmin ? all : [];
+}
+// The school office (SIS) lives apart from the LMS: course pages never show it, and Admin is only for LMS setup.
+const hasOffice = ctx => !!ctx && (ctx.isAdmin || ctx.can('services') || ctx.can('safety'));
+function officeMenu(ctx) {
+  if (!hasOffice(ctx)) return [];
+  const all = [
+    ['office-home', 'Overview', '/office'],
+    ['sis-directory', 'Student directory', '/sis'],
+    ['§', 'Attendance & scheduling'],
+    ['sis-attendance', 'Attendance office', '/office/attendance', 'admin'],
+    ['sis-schedule', 'Master schedule', '/office/schedule', 'admin'],
+    ['§', 'Grades & reporting'],
+    ['sis-reportcards', 'Report cards', '/office/reportcards', 'admin'],
+    ['§', 'Student services'],
+    ['sis-services', 'Special ed · 504 · ELL', '/office/services', 'services'],
+    ['sis-safety', 'Discipline & safety', '/office/discipline', 'safety'],
+    ['sis-activities', 'Activities & clubs', '/activities'],
+    ['§', 'Settings'],
+    ['sis-setup', 'School setup', '/office/setup', 'admin'],
+  ];
+  const visible = all.filter(i => i[0] === '§' || !i[3] || (i[3] === 'admin' ? ctx.isAdmin : ctx.can(i[3])));
   return visible.filter((i, n) => i[0] !== '§' || (visible[n + 1] && visible[n + 1][0] !== '§'));
 }
 
@@ -3556,7 +3589,7 @@ async function viewAdminTeachers(ctx) {
     });
   } catch (e) { console.error(e); if (live(t)) { $('#teachers-list').innerHTML = errorBox(e); refreshIcons(); } }
 }
-const STAFF_CAPS = { services: 'Student services', safety: 'Safety & incidents' };
+const STAFF_CAPS = { services: 'Special ed · 504 · ELL', safety: 'Discipline & safety' };
 const STAFF_CAP_HELP = { services: 'IEP / 504 / ELL caseloads, accommodations, confidential notes.', safety: 'View and manage the incident log; see every reported concern.' };
 function openInviteTeacherModal(tenant, joinCode) {
   const signupUrl = location.origin + buildUrl('/signup');
@@ -5166,7 +5199,7 @@ onAuthStateChanged(auth, async user => {
 // ── Shared with ./sis.js (loaded on demand) ─────────────────────
 const routeTokenNow = () => routeToken;
 export {
-  districtShell, getDistrictSchools,
+  hasOffice, officeMenu, OFFICE_TRAY, districtShell, getDistrictSchools,
   db, $, $$, ico, refreshIcons, escapeHtml, plural, displayNameOf, toDate, tsMillis, recency, formatDate, formatDateTime,
   timeAgo, toDateInput, render, setTitle, showError, iconTile, badge, avatar, skeletonRows, emptyState, errorBox, dataTable,
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
