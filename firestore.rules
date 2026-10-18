@@ -97,7 +97,9 @@ service cloud.firestore {
       // Staff (teachers & admins)
       match /users/{uid} {
         allow read: if canManage(t) || (signedIn() && me() == uid);
-        allow create: if signedIn() && me() == uid && request.resource.data.userId == me() && (
+        // School admins add staff and administrators directly (Admin → Administrators / Teachers & staff).
+        allow create: if ((isAdmin(t) || isDistrictAdmin(t)) && request.resource.data.userId == uid && request.resource.data.role in ['teacher', 'admin'])
+          || signedIn() && me() == uid && request.resource.data.userId == me() && (
           // owner of a new classroom/school becomes its admin
           (request.resource.data.role == 'admin' && (tenant(t).ownerUid == me() || isDistrictAdmin(t))) ||
           // teachers must present a valid join code
@@ -171,6 +173,8 @@ service cloud.firestore {
         // Teacher-managed course tools
         match /announcements/{a} { allow read: if canReadCourse(t, c); allow write: if isStaff(t); }
         match /files/{f}         { allow read: if canReadCourse(t, c); allow write: if isStaff(t); }
+        // Contents of small uploaded files (no Firebase Storage). One doc per file, under 1 MB.
+        match /fileBlobs/{f}     { allow read: if canReadCourse(t, c); allow write: if isStaff(t); }
         match /conferences/{x}   { allow read: if canReadCourseContent(t, c); allow write: if isStaff(t); }
         match /outcomes/{o}      { allow read: if canReadCourse(t, c); allow write: if isStaff(t); }
         match /events/{e}        { allow read: if canReadCourseContent(t, c); allow write: if isStaff(t); }
@@ -297,6 +301,11 @@ service cloud.firestore {
       allow create: if isStaff(t) && request.resource.data.reportedBy == me();
       allow update, delete: if hasCap(t, 'safety');
     }
+    // Family-safe copies of discipline referrals the office chose to share (no internal notes).
+    match /tenants/{t}/disciplineRecords/{id} {
+      allow read: if canSeeStudent(t, resource.data.studentUid);
+      allow write: if hasCap(t, 'safety');
+    }
     match /tenants/{t}/activities/{a} {
       allow read: if isMember(t);
       allow create, delete: if isAdmin(t);
@@ -317,15 +326,18 @@ service cloud.firestore {
     match /tenants/{t}/guardians/{uid} {
       allow read: if canManage(t) || (signedIn() && me() == uid);
       // Becoming a guardian requires a Family Access code issued by this school.
-      allow create: if signedIn() && me() == uid && request.resource.data.userId == me()
-        && get(/databases/$(database)/documents/familyCodes/$(request.resource.data.code)).data.tenantId == t;
-      allow update: if signedIn() && me() == uid && request.resource.data.userId == me() && unchanged(['code']);
+      allow create: if (isAdmin(t) && request.resource.data.userId == uid)
+        || (signedIn() && me() == uid && request.resource.data.userId == me()
+            && get(/databases/$(database)/documents/familyCodes/$(request.resource.data.code)).data.tenantId == t);
+      allow update: if (isAdmin(t) && request.resource.data.userId == uid)
+        || (signedIn() && me() == uid && request.resource.data.userId == me() && unchanged(['code']));
       allow delete: if isAdmin(t);
     }
     match /tenants/{t}/guardianLinks/{id} {
       allow read: if canManage(t) || (signedIn() && resource.data.guardianUid == me());
-      // A parent links themselves to a student by presenting that student's current Family Access code.
-      allow create: if signedIn() && request.resource.data.guardianUid == me()
+      // Admins link parents directly; a parent links themselves by presenting the student's Family Access code.
+      allow create: if (isAdmin(t) && id == request.resource.data.guardianUid + '_' + request.resource.data.studentUid)
+        || signedIn() && request.resource.data.guardianUid == me()
         && id == me() + '_' + request.resource.data.studentUid
         && get(/databases/$(database)/documents/familyCodes/$(request.resource.data.code)).data.studentUid == request.resource.data.studentUid
         && get(/databases/$(database)/documents/familyCodes/$(request.resource.data.code)).data.tenantId == t;

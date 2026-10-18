@@ -12,7 +12,6 @@ import {
   onSnapshot, getDocs, serverTimestamp, arrayUnion, arrayRemove,
   writeBatch, getCountFromServer, deleteField, increment
 } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
-import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
@@ -37,7 +36,6 @@ const firebaseConfig = {
   apiKey: "AIzaSyDHMgZklzO2Uu7v8Lm248DuU4QJ2RaCp44",
   authDomain: "ember-lms.firebaseapp.com",
   projectId: "ember-lms",
-  storageBucket: "ember-lms.firebasestorage.app",
   messagingSenderId: "198763545245",
   appId: "1:198763545245:web:58b4d76df1181600fd0a74"
 };
@@ -45,7 +43,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const storage = getStorage(app);
 // A second auth instance lets teachers create student logins without being signed out themselves.
 const secondaryApp = initializeApp(firebaseConfig, 'Secondary');
 const secondaryAuth = getAuth(secondaryApp);
@@ -1629,12 +1626,10 @@ function globalNavHTML(active) {
   return `<nav class="gnav accent-${accent}" aria-label="Global navigation">
     <a href="${buildUrl(home)}" class="gnav-logo" aria-label="${APP_NAME} dashboard">${ico('flame', 'w-8 h-8 ' + (district ? 'text-[#8B5CF6]' : 'text-[#F59E0B]'))}</a>
     ${tray('account', `<span class="gnav-avatar">${avatar(uname, currentUser?.photoURL, 'w-7 h-7', 'text-[10px]')}</span>`, 'Account')}
-    ${district || ctx?.isAdmin ? tray('admin', ico('shield-check'), 'Admin') : ''}
-    ${hasOffice(ctx) ? tray('office', ico('building-2'), 'Office') : ''}
+    ${district ? tray('admin', ico('shield-check'), 'Admin') : ''}
+    ${ctx?.isRealTeacher ? link('school', ctx.isAdmin ? 'shield-check' : 'clipboard-list', schoolHome(ctx).label, home + schoolHome(ctx).path) : ''}
     ${link('dashboard', 'layout-dashboard', 'Dashboard', home)}
     ${ctx && !ctx.isGuardian ? tray('courses', ico('book-open'), 'Courses') : ''}
-    ${ctx?.isRealTeacher ? link('staff', 'clipboard-list', 'Staff Hub', `${home}/staff`) : ''}
-    ${ctx?.isRealTeacher && !hasOffice(ctx) ? link('students', 'contact', 'Students', `${home}/sis`) : ''}
     ${ctx ? link('calendar', 'calendar-days', 'Calendar', `${home}/calendar`) : ''}
     ${ctx ? link('inbox', 'inbox', 'Inbox', `${home}/inbox`, `<span class="gnav-badge ${inbox.count ? '' : 'hidden'}" data-inbox-badge aria-label="unread conversations">${inbox.count > 99 ? '99+' : inbox.count}</span>`) : ''}
     ${ctx?.isRealTeacher ? link('commons', 'library', 'Commons', `${home}/commons`) : ''}
@@ -1711,7 +1706,6 @@ async function openTray(kind) {
   try {
     if (kind === 'account') fill(await accountTrayHTML());
     else if (kind === 'admin') fill(adminTrayHTML());
-    else if (kind === 'office') fill(officeTrayHTML());
     else if (kind === 'notifications') fill(notifTrayHTML());
     else if (kind === 'courses') fill(await coursesTrayHTML());
     else if (kind === 'help') fill(helpTrayHTML());
@@ -1747,7 +1741,7 @@ async function accountTrayHTML() {
       ${ctx?.isRealTeacher && !ctx.isAdmin ? trayLink(buildUrl(`${base}/students`), 'users', 'Student accounts') : ''}
       ${ctx?.isRealTeacher ? trayButton('data-concern', 'flag', 'Report a student concern') : ''}
     </div>
-    ${ctx?.isStudent ? navSection('My records') + [['schedule', 'calendar-range', 'Schedule'], ['attendance', 'calendar-check', 'Attendance'], ['reportcards', 'file-text', 'Report cards'], ['career', 'compass', 'Career plan']].map(([k, i, l]) => trayLink(buildUrl(`${base}/record/me/${k}`), i, l)).join('') : ''}
+    ${ctx?.isStudent ? navSection('My records') + [['schedule', 'calendar-range', 'Schedule'], ['attendance', 'calendar-check', 'Attendance'], ['reportcards', 'file-text', 'Report cards'], ['discipline', 'shield', 'Discipline'], ['career', 'compass', 'Career plan']].map(([k, i, l]) => trayLink(buildUrl(`${base}/record/me/${k}`), i, l)).join('') : ''}
     ${ctx?.isGuardian ? navSection('My students') + (ctx.children || []).map(k => trayLink(buildUrl(`${base}/record/${k.uid}`), 'user', escapeHtml(displayNameOf(k)), k.gradeLevel ? `Grade ${escapeHtml(k.gradeLevel)}` : '')).join('') + trayButton('data-add-child', 'user-plus', 'Add a student') : ''}
     ${ctx ? trayLink(buildUrl(`${base}/activities`), 'trophy', 'Activities') : ''}
     ${switcher}`;
@@ -1761,28 +1755,7 @@ function adminTrayHTML() {
       ${navSection('Student information')}${trayLink(p('/students'), 'graduation-cap', 'Students')}${trayLink(p('/attendance'), 'calendar-check', 'Attendance')}${trayLink(p('/safety'), 'shield-alert', 'Safety')}
       ${navSection('Staff')}${trayLink(p('/teachers'), 'users', 'Teachers')}${trayLink(p('/planning'), 'clipboard-check', 'Lesson plans')}`;
   }
-  const p = s => buildUrl(`/${ctx.slug}${s}`);
-  const backToDistrict = ctx.tenant.districtId && (ctx.roleInfo.data?.districtAdmin || ls(`ember_district:${currentUser.uid}`) === ctx.tenant.districtId)
-    ? `<div class="mb-4">${trayLink(buildUrl(`/district/${ctx.tenant.districtId}`), 'arrow-left', 'District dashboard', 'Back to all schools')}</div>` : '';
-  return `${backToDistrict}<p class="label">${escapeHtml(ctx.tenant.name)}</p>
-    ${ctx.isPersonal ? '' : trayLink(p('/admin'), 'shield-check', 'Overview', 'Join code, stats, plans to review')}
-    ${trayLink(p('/admin/students'), 'graduation-cap', 'Students', 'Create logins, approve sign-ups')}
-    ${ctx.isPersonal ? '' : trayLink(p('/admin/teachers'), 'user-cog', 'Teachers', 'Invite and manage staff')}
-    ${trayLink(p('/admin/courses'), 'book-open', 'All courses')}
-    ${ctx.isPersonal ? '' : trayLink(p('/admin/planning'), 'clipboard-check', 'Lesson plan reviews')}
-    ${trayLink(p('/announcements'), 'megaphone', ctx.isPersonal ? 'Classroom announcements' : 'School announcements')}
-    ${hasOffice(ctx) ? `<p class="hint mt-5">Attendance office, report cards, discipline and other school records are under ${ico('building-2', 'w-3.5 h-3.5 inline -mt-0.5')} Office.</p>` : ''}`;
-}
-const OFFICE_TRAY = {
-  'office-home': ['layout-grid', 'Today in the office'], 'sis-directory': ['contact', 'Search every student record'],
-  'sis-attendance': ['calendar-check', 'Daily view, trends, chronic absence'], 'sis-schedule': ['calendar-range', 'Periods, rooms, conflicts'],
-  'sis-reportcards': ['file-text', 'Grade entry, publish, print'], 'sis-services': ['heart-handshake', 'IEPs, 504 plans, English learners'],
-  'sis-safety': ['shield-alert', 'Incidents, referrals, concerns'], 'sis-activities': ['trophy', 'Clubs, teams, join requests'], 'staff-requests': ['clipboard-list', 'Call-outs, subs, coverage, work orders'], 'sis-setup': ['settings-2', 'Bell schedule, terms, grade scale'],
-};
-function officeTrayHTML() {
-  const { ctx } = layoutState;
-  const p = s => buildUrl(`/${ctx.slug}${s}`);
-  return `<p class="label">${escapeHtml(ctx.tenant.name)}</p>` + officeMenu(ctx).map(([k, l, path]) => k === '§' ? navSection(l) : trayLink(p(path), OFFICE_TRAY[k][0], escapeHtml(l), OFFICE_TRAY[k][1])).join('');
+  return '';
 }
 async function coursesTrayHTML() {
   const { ctx } = layoutState;
@@ -2106,6 +2079,8 @@ async function viewTenant(slug, segs) {
     case 'admin':
       switch (a) {
         case 'teachers': return adminOnly(() => viewAdminTeachers(ctx));
+        case 'administrators': return adminOnly(async () => (await staff()).viewAdministrators(ctx));
+        case 'parents': return adminOnly(async () => (await staff()).viewParents(ctx));
         case 'students': return adminOnly(() => viewStudents(ctx));
         case 'courses': return adminOnly(() => viewAdminCourses(ctx));
         case 'planning': return adminOnly(() => viewAdminPlanning(ctx));
@@ -2125,7 +2100,7 @@ async function viewTenant(slug, segs) {
         case 'services': return ctx.can('services') ? (await sis()).viewServices(ctx) : viewNotFound();
         case 'discipline': return ctx.can('safety') ? (await sis()).viewIncidents(ctx) : viewNotFound();
         case 'requests': return ctx.isAdmin ? (await staff()).viewRequestQueue(ctx) : viewNotFound();
-        case undefined: return (await sis()).viewOfficeHome(ctx);
+        case undefined: return navigate(`/${slug}${schoolHome(ctx).path}`, { replace: true });
         default: return viewNotFound();
       }
     case 'course':
@@ -2155,64 +2130,95 @@ function tenantPage(ctx, active, content, course = null, { crumbs: extra = [], s
     crumbs.push(...extra);
     gActive = 'courses';
   } else {
-    const P = ctx.isPersonal;
-    const admin = adminMenu(ctx);
-    const hit = admin.find(a => a[0] === active);
-    const office = officeMenu(ctx), oHit = office.find(a => a[0] === active);
+    const hit = schoolMenuItems(ctx).find(i => i.key === active);
     if (hit) {
-      subnav = subnavHTML({ eyebrow: 'Admin', title: ctx.tenant.name, items: admin.map(([k, l, path]) => k === '§' ? { section: l } : ({ href: buildUrl(base + path), label: l, active: k === active })) });
-      crumbs = [{ label: 'Admin', href: buildUrl(base + (P ? '/admin/students' : '/admin')) }, { label: hit[1] }];
-      gActive = 'admin';
-    } else if (oHit) {
-      subnav = subnavHTML({ accent: 'teal', eyebrow: 'Office', title: ctx.tenant.name, items: office.map(([k, l, path]) => k === '§' ? { section: l } : ({ href: buildUrl(base + path), label: l, active: k === active })) });
-      crumbs = [{ label: 'Office', href: buildUrl(base + '/office') }, ...(active === 'office-home' ? [] : [{ label: oHit[1] }])];
-      gActive = 'office';
+      const home = schoolHome(ctx);
+      subnav = schoolSubnav(ctx, active);
+      crumbs = [{ label: home.label, href: buildUrl(base + home.path) }, ...(hit.path === home.path ? [] : [{ label: hit.label, href: buildUrl(base + hit.path) }]), ...extra];
+      gActive = 'school';
     } else {
-      gActive = { dashboard: 'dashboard', calendar: 'calendar', inbox: 'inbox', commons: 'commons', 'all-courses': 'courses', 'sis-directory': 'students', notifications: 'notifications' }[active] || 'account';
+      gActive = { dashboard: 'dashboard', calendar: 'calendar', inbox: 'inbox', commons: 'commons', 'all-courses': 'courses', notifications: 'notifications' }[active] || 'account';
     }
   }
   return appShell({ active: gActive, subnav, crumbs, banner: previewBanner(), content });
 }
 
-// Admin menu: [key, label, path, capability?]; '§' rows are section headings. Non-admin staff only see items their caps allow.
-function adminMenu(ctx) {
-  const P = ctx.isPersonal;
-  const all = [
-    ['§', 'School'],
-    ...(P ? [] : [['admin-overview', 'Overview', '/admin']]),
-    ['students', 'Student accounts', '/admin/students'],
-    ...(P ? [] : [['admin-teachers', 'Teachers & staff', '/admin/teachers']]),
-    ['admin-courses', 'Courses', '/admin/courses'],
-    ...(P ? [] : [['admin-planning', 'Plan reviews', '/admin/planning']]),
-    ['announcements', P ? 'Announcements' : 'School announcements', '/announcements'],
-    ...(P ? [] : [['planning', 'My lesson plans', '/planning']]),
-  ];
-  return ctx.isAdmin ? all : [];
+// ONE workspace menu for school staff. Admins see it as "Admin", teachers as "Staff Hub"; each item is
+// shown only to the roles it applies to. Course pages never show it.
+// Item: { key, label, path, icon, desc, show(ctx) }. Paths starting with '@' are absolute; '#concern' opens the concern modal.
+const isAdminC = c => c.isAdmin, isStaffC = c => c.isRealTeacher, notPersonal = c => !c.isPersonal;
+const SCHOOL_MENU = [
+  { group: null, items: [
+    { key: 'admin-overview', label: 'Today', path: '/admin', icon: 'layout-grid', desc: 'What needs attention right now', show: isAdminC },
+    { key: 'hub-overview', label: 'Overview', path: '/staff', icon: 'layout-grid', desc: 'Your forms and their status', show: c => !c.isAdmin },
+  ] },
+  { group: 'People', key: 'people', items: [
+    { key: 'students', label: 'Student accounts', path: '/admin/students', icon: 'graduation-cap', desc: 'Create logins, approve sign-ups', show: isAdminC },
+    { key: 'sis-directory', label: 'Student records', path: '/sis', icon: 'contact', desc: 'Every student’s record', show: isStaffC },
+    { key: 'admin-parents', label: 'Parents & guardians', path: '/admin/parents', icon: 'users', desc: 'Family accounts and links', show: isAdminC },
+    { key: 'admin-teachers', label: 'Teachers & staff', path: '/admin/teachers', icon: 'user-cog', desc: 'Invite and manage staff', show: c => c.isAdmin && notPersonal(c) },
+    { key: 'admin-admins', label: 'Administrators', path: '/admin/administrators', icon: 'shield-check', desc: 'Who can run the school', show: c => c.isAdmin && notPersonal(c) },
+  ] },
+  { group: 'Attendance & scheduling', key: 'att', items: [
+    { key: 'sis-attendance', label: 'Attendance office', path: '/office/attendance', icon: 'calendar-check', desc: 'Daily view, trends, chronic absence', show: isAdminC },
+    { key: 'sis-schedule', label: 'Master schedule', path: '/office/schedule', icon: 'calendar-range', desc: 'Periods, rooms, conflicts', show: isAdminC },
+  ] },
+  { group: 'Students', key: 'stu', items: [
+    { key: 'sis-safety', label: 'Discipline & safety', path: '/office/discipline', icon: 'shield-alert', desc: 'Referrals, incidents, concerns', show: c => c.can('safety') },
+    { key: 'sis-services', label: 'Special ed · 504 · ELL', path: '/office/services', icon: 'heart-handshake', desc: 'IEPs, 504 plans, English learners', show: c => c.can('services') },
+    { key: 'sis-reportcards', label: 'Report cards', path: '/office/reportcards', icon: 'file-text', desc: 'Grade entry, publish, print', show: isAdminC },
+    { key: 'sis-activities', label: 'Activities & clubs', path: '/activities', icon: 'trophy', desc: 'Clubs, teams, join requests', show: c => isStaffC(c) && notPersonal(c) },
+  ] },
+  { group: 'Learning', key: 'learn', items: [
+    { key: 'admin-courses', label: 'All courses', path: '/admin/courses', icon: 'book-open', desc: 'Every course in the school', show: isAdminC },
+    { key: 'admin-planning', label: 'Plan reviews', path: '/admin/planning', icon: 'clipboard-check', desc: 'Approve lesson plans', show: c => c.isAdmin && notPersonal(c) },
+    { key: 'planning', label: 'My lesson plans', path: '/planning', icon: 'notebook-pen', desc: 'Write and submit plans', show: c => isStaffC(c) && notPersonal(c) },
+    { key: 'announcements', label: 'School announcements', path: '/announcements', icon: 'megaphone', desc: 'Post to everyone', show: isAdminC },
+  ] },
+  { group: 'Forms & requests', key: 'forms', items: [
+    { key: 'staff-requests', label: 'Staff requests', path: '/office/requests', icon: 'inbox', desc: 'Call-outs, subs, coverage, work orders', show: c => c.isAdmin && notPersonal(c) },
+    { key: 'hub-overview', label: 'My submissions', path: '/staff', icon: 'folder-check', desc: 'Forms you have sent', show: c => c.isAdmin && notPersonal(c) },
+    { key: 'hub-referral', label: 'Discipline referral', path: '/staff/new/referral', icon: 'flag', desc: 'Behavioral documentation', show: c => isStaffC(c) && notPersonal(c) },
+    { key: 'hub-concern', label: 'Quick concern', path: '#concern', icon: 'message-square-warning', desc: 'A short note to the office', show: c => isStaffC(c) && notPersonal(c) },
+    { key: 'hub-parentcontact', label: 'Parent contact log', path: '/staff/new/parentcontact', icon: 'phone-call', desc: 'Document family contact', show: c => isStaffC(c) && notPersonal(c) },
+    { key: 'hub-callout', label: 'Call out', path: '/staff/new/callout', icon: 'phone-off', desc: 'Report an absence', show: c => isStaffC(c) && notPersonal(c) },
+    { key: 'hub-sub', label: 'Request a sub', path: '/staff/new/sub', icon: 'user-round-plus', desc: 'Plan ahead for time away', show: c => isStaffC(c) && notPersonal(c) },
+    { key: 'hub-coverage', label: 'Request a break', path: '/staff/new/coverage', icon: 'hand', desc: 'Classroom coverage now', show: c => isStaffC(c) && notPersonal(c) },
+    { key: 'hub-maintenance', label: 'Maintenance & tech', path: '/staff/new/maintenance', icon: 'wrench', desc: 'Work orders', show: c => isStaffC(c) && notPersonal(c) },
+    { key: 'hub-fieldtrip', label: 'Field trip', path: '/staff/new/fieldtrip', icon: 'bus', desc: 'Trip approval', show: c => isStaffC(c) && notPersonal(c) },
+  ] },
+  { group: 'Settings', key: 'settings', items: [
+    { key: 'sis-setup', label: 'School setup', path: '/office/setup', icon: 'settings-2', desc: 'Bell schedule, terms, grade scale', show: isAdminC },
+  ] },
+];
+function schoolMenu(ctx) {
+  if (!ctx?.isRealTeacher) return [];
+  return SCHOOL_MENU.map(g => ({ ...g, items: g.items.filter(i => i.show(ctx)) })).filter(g => g.items.length);
 }
-// The school office (SIS) lives apart from the LMS: course pages never show it, and Admin is only for LMS setup.
+const schoolMenuItems = ctx => schoolMenu(ctx).flatMap(g => g.items);
+const schoolHome = ctx => ctx.isAdmin ? { label: 'Admin', path: '/admin' } : { label: 'Staff Hub', path: '/staff' };
+// Kept for older callers: anyone with office-type access (admin or a services/safety capability).
 const hasOffice = ctx => !!ctx && (ctx.isAdmin || ctx.can('services') || ctx.can('safety'));
-function officeMenu(ctx) {
-  if (!hasOffice(ctx)) return [];
-  const all = [
-    ['office-home', 'Overview', '/office'],
-    ['sis-directory', 'Student directory', '/sis'],
-    ['§', 'Attendance & scheduling'],
-    ['sis-attendance', 'Attendance office', '/office/attendance', 'admin'],
-    ['sis-schedule', 'Master schedule', '/office/schedule', 'admin'],
-    ['§', 'Grades & reporting'],
-    ['sis-reportcards', 'Report cards', '/office/reportcards', 'admin'],
-    ['§', 'Student services'],
-    ['sis-services', 'Special ed · 504 · ELL', '/office/services', 'services'],
-    ['sis-safety', 'Discipline & safety', '/office/discipline', 'safety'],
-    ['sis-activities', 'Activities & clubs', '/activities'],
-    ['§', 'Staff'],
-    ['staff-requests', 'Staff requests', '/office/requests', 'admin'],
-    ['§', 'Settings'],
-    ['sis-setup', 'School setup', '/office/setup', 'admin'],
-  ];
-  const visible = all.filter(i => i[0] === '§' || !i[3] || (i[3] === 'admin' ? ctx.isAdmin : ctx.can(i[3])));
-  return visible.filter((i, n) => i[0] !== '§' || (visible[n + 1] && visible[n + 1][0] !== '§'));
+function schoolSubnav(ctx, active) {
+  const base = `/${ctx.slug}`;
+  const href = path => path.startsWith('@') ? buildUrl(path.slice(1)) : path.startsWith('#') ? '#' : buildUrl(base + path);
+  const groups = schoolMenu(ctx);
+  const district = ctx.tenant.districtId && (ctx.roleInfo.data?.districtAdmin || ls(`ember_district:${currentUser.uid}`) === ctx.tenant.districtId);
+  const open = navGroupState();
+  const link = i => `<a href="${href(i.path)}" ${i.path === '#concern' ? 'data-concern' : ''} class="subnav-link" ${i.key === active ? 'aria-current="page"' : ''}>${ico(i.icon, 'w-4 h-4 shrink-0 opacity-70')}<span class="truncate">${escapeHtml(i.label)}</span></a>`;
+  return `<nav class="subnav accent-amber" aria-label="${escapeHtml(schoolHome(ctx).label)} navigation">
+    <div class="text-[10px] text-gray-500 uppercase tracking-widest px-3 mb-1 truncate">${escapeHtml(schoolHome(ctx).label)}</div>
+    <div class="text-white text-sm font-medium px-3 mb-4 line-clamp-2" title="${escapeHtml(ctx.tenant.name)}">${escapeHtml(ctx.tenant.name)}</div>
+    ${district ? `<a href="${buildUrl(`/district/${ctx.tenant.districtId}`)}" class="subnav-link mb-2 text-[#A78BFA]">${ico('arrow-left', 'w-4 h-4 shrink-0')}<span class="truncate">District dashboard</span></a>` : ''}
+    ${groups.map(g => {
+      if (!g.group) return `<div class="space-y-0.5">${g.items.map(link).join('')}</div>`;
+      const hasActive = g.items.some(i => i.key === active);
+      const isOpen = hasActive || (open[g.key] ?? true); // open unless this person collapsed it
+      return `<div class="subnav-group ${isOpen ? '' : 'collapsed'}"><button type="button" class="nav-section nav-group-toggle" data-group-toggle="${g.key}" aria-expanded="${isOpen}"><span>${escapeHtml(g.group)}</span>${ico('chevron-down', 'w-3 h-3')}</button><div class="space-y-0.5" data-group-body>${g.items.map(link).join('')}</div></div>`;
+    }).join('')}
+  </nav>`;
 }
+function navGroupState() { try { return JSON.parse(ls('ember_nav_groups') || '{}'); } catch { return {}; } }
 
 async function viewCourseSection(ctx, courseId, section, x, y) {
   const t = routeToken;
@@ -3092,6 +3098,12 @@ async function openEnrollModal(ctx, courseId) {
 // ═══════════════════════════════════════════════════════════════
 const loginText = (ctx, username, password) =>
   `${APP_NAME} login\nWebsite: ${location.origin}${buildUrl(`/login?school=${ctx.slug}&as=student`)}\nSchool: ${ctx.tenant.name}\nUsername: ${username}\nPassword: ${password || '(ask your teacher)'}`;
+// Create a Firebase Auth login for someone else (admins, parents) without signing the current user out.
+async function createLogin(email, password) {
+  const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+  await signOut(secondaryAuth);
+  return cred.user.uid;
+}
 async function createStudentAccount(slug, { firstName, lastName, username, password }) {
   const fakeEmail = `${username}@${slug}.emberlms.local`;
   const cred = await createUserWithEmailAndPassword(secondaryAuth, fakeEmail, password);
@@ -3573,7 +3585,7 @@ async function viewAdminOverview(ctx) {
   const { slug, tenant } = ctx;
   const t = routeToken;
   setTitle('Admin', tenant.name);
-  render(tenantPage(ctx, 'admin-overview', pageHeader({ eyebrow: 'Admin', title: escapeHtml(tenant.name), subtitle: 'School overview' }) +
+  render(tenantPage(ctx, 'admin-overview', pageHeader({ eyebrow: 'Admin', title: escapeHtml(tenant.name), subtitle: escapeHtml(new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })) }) +
     `<div id="admin-content" class="max-w-6xl"><div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">${Array.from({ length: 4 }, () => '<div class="skeleton h-32"></div>').join('')}</div><div class="skeleton h-48"></div></div>`));
   try {
     const studentsCol = collection(db, 'tenants', slug, 'students');
@@ -3592,39 +3604,37 @@ async function viewAdminOverview(ctx) {
     if (!live(t)) return;
     const toReview = plansSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => recency(b.submittedAt) - recency(a.submittedAt));
     const p = s => buildUrl(`/${slug}${s}`);
+    const pendingPlans = toReview.length;
     $('#admin-content').innerHTML = `
-      ${failed.length ? `<div class="mb-6 p-4 rounded-xl bg-red-500/5 border border-red-500/20 text-sm text-gray-300 flex gap-3">${ico('triangle-alert', 'w-4 h-4 text-red-400 shrink-0 mt-0.5')}<span>Some data couldn't be loaded: ${escapeHtml(friendlyError(failed[0]))} Check that your Firestore security rules match <code class="text-[#F59E0B]">firestore.rules</code>.</span></div>` : ''}
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">
-        ${[
-          { icon: 'graduation-cap', label: 'Students', value: studentCount, sub: pendingCount ? `${pendingCount} pending approval` : 'All approved', tone: pendingCount ? 'amber' : 'muted', href: p('/admin/students') },
-          { icon: 'user-cog', label: 'Teachers', value: teacherCount, sub: 'Including admins', tone: 'violet', href: p('/admin/teachers') },
-          { icon: 'book-open', label: 'Courses', value: courseCount, sub: 'Across all teachers', tone: 'teal', href: p('/admin/courses') },
-          { icon: 'clipboard-check', label: 'Plans to review', value: toReview.length, sub: toReview.length ? 'Needs your attention' : 'All caught up', tone: toReview.length ? 'amber' : 'muted', href: p('/admin/planning') },
-        ].map(s => `<a href="${s.href}" class="card card-hover p-5 block">${iconTile(s.icon, s.tone)}<div class="font-serif text-3xl text-white mt-3">${s.value.toLocaleString()}</div><div class="text-xs text-gray-400">${s.label}</div><div class="text-[11px] ${s.tone === 'amber' ? 'text-[#F59E0B]' : 'text-gray-600'}">${s.sub}</div></a>`).join('')}
-      </div>
-      <div class="grid lg:grid-cols-3 gap-4">
-        <div class="lg:col-span-2 card overflow-hidden">
-          <div class="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between"><h2 class="font-serif text-lg text-white">Waiting for review</h2><a href="${p('/admin/planning')}" class="text-xs text-[#F59E0B] hover:underline">All plans →</a></div>
-          ${toReview.length ? `<div class="divide-y divide-white/[0.04]">${toReview.slice(0, 5).map(pl => `<button data-review="${pl.id}" class="w-full text-left flex items-center gap-3 px-5 py-3 hover:bg-white/[0.02] transition-colors">${avatar(pl.teacherName || 'T')}<div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(pl.title || 'Untitled')}</div><div class="text-xs text-gray-500 truncate">${escapeHtml(pl.teacherName || '')} · ${escapeHtml(describeWeek(pl.week))}</div></div><span class="text-[11px] text-gray-500 shrink-0">${escapeHtml(timeAgo(pl.submittedAt))}</span>${ico('chevron-right', 'w-4 h-4 text-gray-600 shrink-0')}</button>`).join('')}</div>`
-            : `<div class="p-8 text-center text-sm text-gray-500">${ico('circle-check', 'w-6 h-6 mx-auto mb-2 text-emerald-400')}No plans waiting — you're all caught up.</div>`}
-        </div>
-        <div class="card p-5">
-          <p class="label">Teacher join code</p>
-          <div class="flex items-center gap-2 mb-3">
-            <code class="text-2xl font-mono text-[#F59E0B] tracking-[0.2em]">${escapeHtml(joinCode || '——')}</code>
-            <button id="copy-join-code" class="btn-icon" aria-label="Copy join code" title="Copy">${ico('copy')}</button>
-            <button id="regen-join-code" class="btn-icon" aria-label="Generate a new join code" title="Regenerate">${ico('refresh-cw')}</button>
-          </div>
-          <p class="text-xs text-gray-500 leading-relaxed mb-4">Teachers enter this at sign-up to join ${escapeHtml(tenant.name)}.</p>
-          <div class="border-t border-white/[0.06] pt-4 space-y-2">
+      ${failed.length ? `<div class="mb-6 p-4 rounded-xl bg-red-500/5 border border-red-500/20 text-sm text-gray-300 flex gap-3">${ico('triangle-alert', 'w-4 h-4 text-red-400 shrink-0 mt-0.5')}<span>Some data couldn't be loaded: ${escapeHtml(friendlyError(failed[0]))} Check that your Firestore security rules are published.</span></div>` : ''}
+      <div id="today-kpis" class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">${Array.from({ length: 4 }, () => '<div class="skeleton h-28"></div>').join('')}</div>
+      <div class="grid lg:grid-cols-3 gap-6 mb-8">
+        <section class="lg:col-span-2"><div class="flex items-center justify-between mb-3"><h2 class="font-serif text-xl text-white">Needs attention</h2></div>
+          <div id="today-todo">${skeletonRows(3)}</div>
+          ${pendingPlans ? `<div class="card overflow-hidden mt-4"><div class="px-5 py-3 border-b border-white/[0.06] flex items-center justify-between"><h3 class="text-sm text-white font-medium">${plural(pendingPlans, 'lesson plan')} to review</h3><a href="${p('/admin/planning')}" class="text-xs text-[#F59E0B] hover:underline">All plans →</a></div>
+            <div class="divide-y divide-white/[0.04]">${toReview.slice(0, 4).map(pl => `<button data-review="${pl.id}" class="w-full text-left flex items-center gap-3 px-5 py-3 hover:bg-white/[0.02] transition-colors">${avatar(pl.teacherName || 'T')}<div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(pl.title || 'Untitled plan')}</div><div class="text-xs text-gray-500 truncate">${escapeHtml(pl.teacherName || '')}${pl.week ? ' · ' + escapeHtml(pl.week) : ''}</div></div>${badge('Review', 'amber')}</button>`).join('')}</div></div>` : ''}
+        </section>
+        <aside class="space-y-4">
+          ${tenant.type === 'personal' ? '' : `<div class="card p-5"><p class="label">Teacher join code</p>
+            <div class="flex items-center gap-2 mb-2"><code class="text-2xl font-mono text-[#F59E0B] tracking-[0.2em]">${escapeHtml(joinCode || '——')}</code>
+              <button id="copy-join-code" class="btn-icon" aria-label="Copy join code" title="Copy">${ico('copy')}</button><button id="regen-join-code" class="btn-icon" aria-label="Generate a new join code" title="Regenerate">${ico('refresh-cw')}</button></div>
+            <p class="text-xs text-gray-500 leading-relaxed">Teachers enter this at sign-up to join ${escapeHtml(tenant.name)}.</p></div>`}
+          <div class="card p-5"><p class="label">At a glance</p><div class="grid grid-cols-2 gap-3">
+            ${[['graduation-cap', 'Students', studentCount, p('/admin/students'), pendingCount ? `${pendingCount} pending` : ''], ['user-cog', 'Staff', teacherCount, p('/admin/teachers'), ''], ['book-open', 'Courses', courseCount, p('/admin/courses'), ''], ['clipboard-check', 'Plans to review', pendingPlans, p('/admin/planning'), '']]
+              .map(([i, l, v, h, sub]) => `<a href="${h}" class="rounded-lg border border-white/[0.06] p-3 hover:border-white/20 transition-colors">${ico(i, 'w-4 h-4 text-gray-500')}<div class="text-xl text-white font-semibold mt-1 tabular-nums">${v.toLocaleString()}</div><div class="text-[11px] text-gray-500">${l}${sub ? ` · <span class="text-[#F59E0B]">${sub}</span>` : ''}</div></a>`).join('')}</div></div>
+          <div class="card p-5"><p class="label">Quick actions</p><div class="space-y-2">
+            <a href="${p('/staff/new/referral')}" class="flex items-center gap-2 text-sm text-gray-300 hover:text-[#F59E0B] transition-colors">${ico('flag')} Write a referral</a>
             <a href="${p('/announcements')}" class="flex items-center gap-2 text-sm text-gray-300 hover:text-[#F59E0B] transition-colors">${ico('megaphone')} Post an announcement</a>
             <a href="${p('/admin/students')}" class="flex items-center gap-2 text-sm text-gray-300 hover:text-[#F59E0B] transition-colors">${ico('user-plus')} Add students</a>
-          </div>
-        </div>
+            <a href="${p('/admin/parents')}" class="flex items-center gap-2 text-sm text-gray-300 hover:text-[#F59E0B] transition-colors">${ico('users')} Add a parent</a>
+          </div></div>
+        </aside>
       </div>`;
+    import('./sis.js' + BUILD).then(m => m.officeToday(ctx)).then(r => { if (!live(t) || !$('#today-kpis')) return; $('#today-kpis').innerHTML = r.tiles || ''; $('#today-todo').innerHTML = r.todo; refreshIcons(); })
+      .catch(e => { console.warn(e); if (live(t) && $('#today-todo')) { $('#today-todo').innerHTML = errorBox(e); refreshIcons(); } });
     refreshIcons();
-    $('#copy-join-code').addEventListener('click', () => copyText(joinCode, 'Join code copied'));
-    $('#regen-join-code').addEventListener('click', async () => {
+    $('#copy-join-code')?.addEventListener('click', () => copyText(joinCode, 'Join code copied'));
+    $('#regen-join-code')?.addEventListener('click', async () => {
       if (!await confirmDialog({ title: 'Generate a new join code?', message: 'The current code will stop working immediately. Teachers who already joined are not affected.', confirmLabel: 'Regenerate' })) return;
       try { await setJoinCode(slug, joinCode); toast('New join code generated'); renderRoute(); }
       catch (e) { toast(friendlyError(e), 'error'); }
@@ -4392,11 +4402,12 @@ function openCollabModal(ctx, col, existing = null) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// FILES (Firebase Storage)
+// FILES (no Firebase Storage: links, plus small files stored in Firestore)
 // ═══════════════════════════════════════════════════════════════
-const MAX_UPLOAD = 50 * 1024 * 1024;
+const MAX_INLINE = 700 * 1024; // Firestore documents max out at 1 MB, and base64 adds a third
 function fileIcon(f) {
   const t = f.contentType || '', n = (f.name || '').toLowerCase();
+  if (f.kind === 'link') return /youtube|youtu\.be|vimeo/.test(f.url || '') ? 'youtube' : /docs\.google|drive\.google|onedrive|sharepoint|dropbox/.test(f.url || '') ? 'cloud' : 'link';
   if (t.startsWith('image/')) return 'file-image';
   if (t.startsWith('video/')) return 'film';
   if (t.startsWith('audio/')) return 'file-audio';
@@ -4410,11 +4421,11 @@ function viewFiles(ctx, course) {
   setTitle('Files', course.title);
   const col = courseCol(ctx, course.id, 'files');
   const canUpload = ctx.teacherMode;
-  render(tenantPage(ctx, 'files', sectionHeader(ctx, course, 'Files', canUpload ? `<button id="new-folder" class="btn btn-secondary">${ico('folder-plus')} Folder</button><label class="btn btn-primary cursor-pointer">${ico('upload')} Upload<input type="file" id="file-input" multiple class="sr-only"></label>` : '') + `
+  render(tenantPage(ctx, 'files', sectionHeader(ctx, course, 'Files', canUpload ? `<button id="new-folder" class="btn btn-secondary">${ico('folder-plus')} Folder</button><button id="add-link" class="btn btn-secondary">${ico('link')} Add link</button><label class="btn btn-primary cursor-pointer" title="Files up to 700 KB. Share bigger files as a link.">${ico('upload')} Upload<input type="file" id="file-input" multiple class="sr-only"></label>` : '') + `
     <div class="max-w-5xl" id="files-root">
       <div class="flex flex-wrap items-center justify-between gap-3 mb-4"><div id="folder-bar" class="flex flex-wrap gap-2"></div>${searchBox('file-search', 'Search files…')}</div>
       <div id="uploads" class="space-y-2 mb-4"></div>
-      ${canUpload ? `<div id="dropzone" class="hidden border-2 border-dashed border-[#F59E0B]/50 bg-[#F59E0B]/5 rounded-xl p-10 text-center text-sm text-[#F59E0B] mb-4">Drop files to upload</div>` : ''}
+      ${canUpload ? `<p class="hint mb-4">${ico('info', 'w-3.5 h-3.5 inline -mt-0.5')} Upload files up to 700 KB, or use <strong class="text-gray-300">Add link</strong> for anything bigger (Google Drive, OneDrive, YouTube…).</p><div id="dropzone" class="hidden border-2 border-dashed border-[#F59E0B]/50 bg-[#F59E0B]/5 rounded-xl p-10 text-center text-sm text-[#F59E0B] mb-4">Drop files to upload</div>` : ''}
       <div id="file-list">${skeletonRows(4)}</div>
     </div>`, course));
   let files = [], folder = '', q = '', extraFolders = new Set();
@@ -4428,10 +4439,10 @@ function viewFiles(ctx, course) {
       : dataTable(
         [{ label: 'Name', cls: 'col-span-12 sm:col-span-6' }, { label: 'Size', cls: 'col-span-4 sm:col-span-2' }, { label: 'Added', cls: 'col-span-4 sm:col-span-2' }, { label: '', cls: 'col-span-4 sm:col-span-2 text-right' }],
         list.map(f => ({ cells: [
-          `<a href="${escapeHtml(safeUrl(f.url))}" target="_blank" rel="noopener noreferrer" class="flex items-center gap-3 group/f">${iconTile(fileIcon(f), 'muted')}<span class="min-w-0"><span class="block text-sm text-white truncate group-hover/f:text-[#F59E0B]">${escapeHtml(f.name)}</span>${f.folder && !folder ? `<span class="block text-[11px] text-gray-500 truncate">${ico('folder', 'w-3 h-3 inline -mt-0.5')} ${escapeHtml(f.folder)}</span>` : ''}</span></a>`,
-          `<span class="text-xs text-gray-400">${formatBytes(f.size)}</span>`,
+          `<a href="${f.inline ? '#' : escapeHtml(safeUrl(f.url))}" ${f.inline ? `data-open-file="${f.id}"` : 'target="_blank" rel="noopener noreferrer"'} class="flex items-center gap-3 group/f">${iconTile(fileIcon(f), f.kind === 'link' ? 'teal' : 'muted')}<span class="min-w-0"><span class="block text-sm text-white truncate group-hover/f:text-[#F59E0B]">${escapeHtml(f.name)}</span>${f.folder && !folder ? `<span class="block text-[11px] text-gray-500 truncate">${ico('folder', 'w-3 h-3 inline -mt-0.5')} ${escapeHtml(f.folder)}</span>` : ''}</span></a>`,
+          `<span class="text-xs text-gray-400">${f.kind === 'link' ? 'Link' : formatBytes(f.size)}</span>`,
           `<span class="text-xs text-gray-500">${escapeHtml(formatDate(f.createdAt) || 'just now')}</span>`,
-          `<div class="row-actions"><a href="${escapeHtml(safeUrl(f.url))}" download="${escapeHtml(f.name)}" target="_blank" rel="noopener noreferrer" class="btn-icon" aria-label="Download">${ico('download', 'w-4 h-4')}</a><button class="btn-icon" data-copy-file="${f.id}" aria-label="Copy link">${ico('link', 'w-4 h-4')}</button>${canUpload ? `<button class="btn-icon danger" data-del-file="${f.id}" aria-label="Delete">${ico('trash-2', 'w-4 h-4')}</button>` : ''}</div>`
+          `<div class="row-actions">${f.inline ? `<button class="btn-icon" data-open-file="${f.id}" data-download aria-label="Download">${ico('download', 'w-4 h-4')}</button>` : `<a href="${escapeHtml(safeUrl(f.url))}" target="_blank" rel="noopener noreferrer" class="btn-icon" aria-label="Open">${ico(f.kind === 'link' ? 'external-link' : 'download', 'w-4 h-4')}</a><button class="btn-icon" data-copy-file="${f.id}" aria-label="Copy link">${ico('link', 'w-4 h-4')}</button>`}${canUpload ? `<button class="btn-icon danger" data-del-file="${f.id}" aria-label="Delete">${ico('trash-2', 'w-4 h-4')}</button>` : ''}</div>`
         ] })));
     refreshIcons();
   };
@@ -4440,15 +4451,47 @@ function viewFiles(ctx, course) {
   $('#files-root').addEventListener('click', async e => {
     const fb = e.target.closest('[data-folder]'); if (fb) { folder = fb.dataset.folder; return draw(); }
     const cp = e.target.closest('[data-copy-file]'); if (cp) return copyText(files.find(f => f.id === cp.dataset.copyFile)?.url || '', 'Link copied');
+    const of = e.target.closest('[data-open-file]');
+    if (of) {
+      e.preventDefault();
+      const f = files.find(x => x.id === of.dataset.openFile); if (!f) return;
+      try {
+        const b = await getDoc(doc(courseCol(ctx, course.id, 'fileBlobs'), f.id));
+        if (!b.exists()) throw new Error('This file’s contents are missing.');
+        const bin = atob(b.data().data), bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const url = URL.createObjectURL(new Blob([bytes], { type: f.contentType || 'application/octet-stream' }));
+        const a = document.createElement('a'); a.href = url;
+        if (of.hasAttribute('data-download') || !/^(image|video|audio)\/|pdf|text\//.test(f.contentType || '')) a.download = f.name; else a.target = '_blank';
+        a.click(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+      } catch (ex) { toast(friendlyError(ex), 'error'); }
+      return;
+    }
     const del = e.target.closest('[data-del-file]');
     if (del) {
       const f = files.find(x => x.id === del.dataset.delFile);
       if (!await confirmDialog({ title: `Delete “${f.name}”?`, confirmLabel: 'Delete', danger: true })) return;
-      try { if (f.storagePath) await deleteObject(storageRef(storage, f.storagePath)).catch(() => {}); await deleteDoc(doc(col, f.id)); toast('File deleted'); }
+      try { if (f.inline) await deleteDoc(doc(courseCol(ctx, course.id, 'fileBlobs'), f.id)).catch(() => {}); await deleteDoc(doc(col, f.id)); toast('File deleted'); }
       catch (ex) { toast(friendlyError(ex), 'error'); }
     }
   });
   if (!canUpload) return;
+  $('#add-link').addEventListener('click', () => {
+    const m = openModal({ size: 'sm', html: `<form class="p-6 sm:p-7" novalidate><h2 class="font-serif text-xl text-white mb-1">Add a link</h2><p class="text-sm text-gray-500 mb-5">Share a Google Drive, OneDrive, YouTube or any web link.</p>
+      <label class="label" for="lk-url">Link</label><input id="lk-url" type="url" class="input mb-4" placeholder="https://…" autocomplete="off">
+      <label class="label" for="lk-name">Name</label><input id="lk-name" class="input" placeholder="Unit 3 slides" maxlength="120">
+      <p id="lk-err" class="form-error mt-3 hidden"></p>
+      <div class="flex gap-3 mt-6"><button type="button" data-close class="btn btn-secondary flex-1">Cancel</button><button type="submit" class="btn btn-primary flex-1">Add</button></div></form>` });
+    m.$('form').addEventListener('submit', e => {
+      e.preventDefault();
+      const url = safeUrl(m.$('#lk-url').value.trim()), name = m.$('#lk-name').value.trim();
+      if (!url || !/^https?:/i.test(url)) return showError(m.$('#lk-err'), 'Enter a full web address starting with https://');
+      withBusy(m.$('[type=submit]'), 'Adding…', async () => {
+        try { await addDoc(col, { name: name || url.replace(/^https?:\/\//, '').slice(0, 80), kind: 'link', url, folder, uploadedBy: ctx.me.uid, uploadedByName: ctx.me.name, createdAt: serverTimestamp() }); m.close(); toast('Link added'); }
+        catch (ex) { showError(m.$('#lk-err'), friendlyError(ex)); }
+      });
+    });
+  });
   $('#new-folder').addEventListener('click', async () => {
     const name = await promptDialog({ title: 'New folder', label: 'Folder name', placeholder: 'Week 1 readings', confirmLabel: 'Create' });
     if (name) { extraFolders.add(name.slice(0, 60)); folder = name.slice(0, 60); draw(); }
@@ -4461,16 +4504,15 @@ function viewFiles(ctx, course) {
       $('#uploads')?.appendChild(row); refreshIcons();
       const bar = row.querySelector('span > span');
       try {
-        if (file.size > MAX_UPLOAD) throw new Error(`${file.name} is larger than 50 MB.`);
-        const path = `tenants/${ctx.slug}/courses/${course.id}/files/${Date.now()}_${file.name.replace(/[^\w.\- ]+/g, '_')}`;
-        const r = storageRef(storage, path);
-        const task = uploadBytesResumable(r, file, { contentType: file.type || 'application/octet-stream' });
-        await new Promise((res, rej) => task.on('state_changed', s => { bar.style.width = `${Math.round(s.bytesTransferred / (s.totalBytes || 1) * 100)}%`; }, rej, res));
-        const url = await getDownloadURL(r);
-        await addDoc(col, { name: file.name, size: file.size, contentType: file.type || '', storagePath: path, url, folder, uploadedBy: ctx.me.uid, uploadedByName: ctx.me.name, createdAt: serverTimestamp() });
+        if (file.size > MAX_INLINE) throw Object.assign(new Error(`is ${formatBytes(file.size)} — files over 700 KB need to be shared as a link (Google Drive, OneDrive…).`), { expected: true });
+        const data = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.onerror = () => rej(fr.error); fr.onprogress = ev => { bar.style.width = `${Math.round(ev.loaded / (ev.total || 1) * 80)}%`; }; fr.readAsDataURL(file); });
+        const ref = doc(col);
+        await setDoc(doc(courseCol(ctx, course.id, 'fileBlobs'), ref.id), { data, uploadedBy: ctx.me.uid });
+        bar.style.width = '100%';
+        await setDoc(ref, { name: file.name, size: file.size, contentType: file.type || '', inline: true, folder, uploadedBy: ctx.me.uid, uploadedByName: ctx.me.name, createdAt: serverTimestamp() });
         row.remove();
       } catch (ex) {
-        console.error(ex);
+        if (!ex.expected) console.error(ex);
         row.innerHTML = `${ico('circle-x', 'w-4 h-4 text-red-400 shrink-0')}<span class="text-sm text-red-300 flex-1">${escapeHtml(file.name)}: ${escapeHtml(friendlyError(ex))}</span><button class="btn-icon" aria-label="Dismiss">${ico('x', 'w-4 h-4')}</button>`;
         refreshIcons(); row.querySelector('button').addEventListener('click', () => row.remove());
       }
@@ -5193,6 +5235,13 @@ document.addEventListener('click', async e => {
   const nr = t.closest('[data-notif]');
   if (nr) { const n = notifItems().find(x => x.id === nr.dataset.notif); if (n) markNotifRead(n); if (nr.getAttribute('href') === '#') e.preventDefault(); }
   if (t.closest('[data-notif-readall]')) { markAllNotifsRead(); return; }
+  const gt = t.closest('[data-group-toggle]');
+  if (gt) {
+    const g = gt.closest('.subnav-group'), open = g.classList.toggle('collapsed') === false;
+    gt.setAttribute('aria-expanded', String(open));
+    const st = navGroupState(); st[gt.dataset.groupToggle] = open; ls('ember_nav_groups', JSON.stringify(st));
+    return;
+  }
   if (t.closest('[data-sidebar-open]')) { document.body.classList.add('sidebar-open'); return; }
   if (t.closest('[data-sidebar-close]')) { closeSidebar(); return; }
   if (t.closest('[data-retry]')) { renderRoute(); return; }
@@ -5313,7 +5362,7 @@ const routeTokenNow = () => routeToken;
 // Lazy modules (sis.js, staff.js) read helpers from here instead of importing app.js, so a versioned
 // app.js URL never loads a second copy of the app.
 const EMBER_API = {
-  notify, officeStaffUids, guardianUidsOf, notifItems, notifRow, notifUnread, markNotifRead, markAllNotifsRead, NOTIF_KINDS, hasOffice, officeMenu, OFFICE_TRAY, districtShell, getDistrictSchools,
+  notify, officeStaffUids, guardianUidsOf, notifItems, notifRow, notifUnread, markNotifRead, markAllNotifsRead, NOTIF_KINDS, hasOffice, schoolMenu, schoolMenuItems, schoolHome, createLogin, friendlyError, getTenant, districtShell, getDistrictSchools,
   db, $, $$, ico, refreshIcons, escapeHtml, plural, displayNameOf, toDate, tsMillis, recency, formatDate, formatDateTime,
   timeAgo, toDateInput, render, setTitle, showError, iconTile, badge, avatar, skeletonRows, emptyState, errorBox, dataTable,
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
@@ -5322,7 +5371,7 @@ const EMBER_API = {
 };
 globalThis.__ember = EMBER_API;
 export {
-  notify, officeStaffUids, guardianUidsOf, notifItems, notifRow, notifUnread, markNotifRead, markAllNotifsRead, NOTIF_KINDS, hasOffice, officeMenu, OFFICE_TRAY, districtShell, getDistrictSchools,
+  notify, officeStaffUids, guardianUidsOf, notifItems, notifRow, notifUnread, markNotifRead, markAllNotifsRead, NOTIF_KINDS, hasOffice, schoolMenu, schoolMenuItems, schoolHome, createLogin, friendlyError, getTenant, districtShell, getDistrictSchools,
   db, $, $$, ico, refreshIcons, escapeHtml, plural, displayNameOf, toDate, tsMillis, recency, formatDate, formatDateTime,
   timeAgo, toDateInput, render, setTitle, showError, iconTile, badge, avatar, skeletonRows, emptyState, errorBox, dataTable,
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,

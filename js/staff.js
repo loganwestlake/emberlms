@@ -1,13 +1,14 @@
 // Ember Staff Hub — staff forms (referrals, call-outs, coverage, requests), the office review queue,
 // and the notification center. Loaded on demand by app.js; helpers come from app.js via globalThis.__ember.
 import {
-  doc, getDoc, addDoc, updateDoc, deleteDoc, collection, query, where, getDocs, serverTimestamp
+  doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, getDocs, serverTimestamp, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 const {
   db, $, $$, ico, refreshIcons, escapeHtml, plural, displayNameOf, tsMillis, formatDate, formatDateTime, timeAgo, toDateInput,
   render, setTitle, showError, iconTile, badge, avatar, skeletonRows, emptyState, errorBox, dataTable, toast, withBusy, confirmDialog,
   buildUrl, navigate, live, pageHeader, tenantPage, myCourses, routeTokenNow, renderRoute, districtShell,
-  notify, officeStaffUids, guardianUidsOf, notifItems, notifRow, notifUnread, markAllNotifsRead, NOTIF_KINDS
+  notify, officeStaffUids, guardianUidsOf, notifItems, notifRow, notifUnread, markAllNotifsRead, NOTIF_KINDS,
+  openModal, modalHeader, modalBody, modalFooter, copyText, createLogin, friendlyError, getTenant
 } = globalThis.__ember;
 const BUILD = new URL(import.meta.url).search;
 const sisModule = () => import('./sis.js' + BUILD);
@@ -520,7 +521,8 @@ function referralForm({ settings, courses, canOffice, isNew }) {
         { id: 'adminDate', type: 'date', label: 'Date', required: true },
         { id: 'adminPhone', type: 'phone', label: 'Phone number' },
         { id: 'status', type: 'chips', label: 'Referral status', required: true, options: ['Open', 'Under review', 'Resolved'] },
-        { id: 'shareWithFamily', type: 'yesno', label: "Notify the student's family in Ember?", hint: 'Sends a notification to linked parents/guardians and the student with the behavior and actions (not your notes).' },
+        { id: 'shareWithFamily', type: 'yesno', label: "Share with the student's family in Ember?", hint: 'Parents and the student see the behavior, date, location and actions on the Discipline tab and get a notification. Teacher descriptions and internal notes are never shared.' },
+        { id: 'familyNote', type: 'textarea', label: 'Note for the family', rows: 2, showIf: { id: 'shareWithFamily', eq: 'Yes' }, placeholder: 'Optional: what happens next, expectations, how to reach you.' },
         { id: 'adminNotes', type: 'textarea', label: 'Internal notes', rows: 3, hint: 'Only administrators and safety staff can see these.' },
       ] } : { title: 'Office managed — administration only', locked: isNew ? 'An administrator completes this part after you submit. You’ll get a notification when they do.' : 'Waiting for an administrator to review this referral.', fields: [] },
     ],
@@ -542,22 +544,9 @@ const refStatusChip = st => chip(...(REF_STATUS[(st || 'open').toLowerCase()] ||
 // ═══════════════════════════════════════════════════════════════
 // STAFF HUB (side menu + pages)
 // ═══════════════════════════════════════════════════════════════
-const HUB_ITEMS = [
-  ['overview', 'My submissions', '', 'inbox'],
-  ['§', 'Instruction'], ['plans', 'Lesson plans', '@/planning', 'clipboard-check'], ['parentcontact', 'Parent contact log', '/new/parentcontact', 'phone-call'],
-  ['§', 'Students'], ['referral', 'Discipline referral', '/new/referral', 'flag'], ['concern', 'Quick concern', '#concern', 'message-square-warning'],
-  ['§', 'Time off & coverage'], ['callout', 'Call out', '/new/callout', 'phone-off'], ['sub', 'Request a sub', '/new/sub', 'user-round-plus'], ['coverage', 'Request a break', '/new/coverage', 'hand'],
-  ['§', 'Building'], ['maintenance', 'Maintenance & tech', '/new/maintenance', 'wrench'], ['fieldtrip', 'Field trip', '/new/fieldtrip', 'bus'],
-];
+// Staff Hub pages live inside the one school menu (app.js SCHOOL_MENU) under 'hub-*' keys.
 function hubPage(ctx, active, content, crumb = null) {
-  const base = `/${ctx.slug}/staff`;
-  const href = path => path.startsWith('@') ? buildUrl(`/${ctx.slug}${path.slice(1)}`) : path.startsWith('#') ? '#' : buildUrl(base + path);
-  const items = HUB_ITEMS.map(([k, l, path]) => k === '§' ? { section: l } : { href: href(path), label: l, active: k === active });
-  const html = tenantPage(ctx, 'staff', content, null, {
-    subnav: { eyebrow: 'Staff Hub', title: ctx.tenant.name, items }, gActive: 'staff',
-    crumbs: [{ label: 'Staff Hub', href: buildUrl(base) }, ...(crumb ? [{ label: crumb }] : [])],
-  });
-  return html.replace('href="#" class="subnav-link', 'href="#" data-concern class="subnav-link'); // the quick-concern item opens the existing modal
+  return tenantPage(ctx, `hub-${active}`, content, null, { crumbs: crumb ? [{ label: crumb }] : [] });
 }
 async function formEnv(ctx) {
   const [courses, sis] = await Promise.all([myCourses(ctx).catch(() => []), sisModule()]);
@@ -734,7 +723,7 @@ async function viewReferralForm(ctx) {
     showError(fe, '');
     withBusy(root.querySelector('[type=submit]'), 'Submitting…', async () => {
       try {
-        const officeIds = ['considered', 'basis', 'officeActions', 'adminName', 'adminDate', 'adminPhone', 'status', 'shareWithFamily', 'adminNotes'];
+        const officeIds = ['considered', 'basis', 'officeActions', 'adminName', 'adminDate', 'adminPhone', 'status', 'shareWithFamily', 'familyNote', 'adminNotes'];
         const teacher = {}, office = {};
         Object.entries(data).forEach(([k, v]) => (officeIds.includes(k.split('|')[0]) ? office : teacher)[k] = v);
         const doc0 = buildIncident(teacher, canOffice ? office : null);
@@ -742,6 +731,7 @@ async function viewReferralForm(ctx) {
         const who = (teacher.students || []).map(s => s.name).join(', ');
         officeStaffUids(ctx, 'safety').then(to => notify(ctx, { to, kind: 'referral', title: `New referral: ${who}`, body: `${doc0.type} · ${doc0.location} · ${fmtISO(doc0.date)} · from ${ctx.me.name}`, link: `/${ctx.slug}/referrals/${ref.id}` })).catch(e2 => console.warn(e2));
         if (ctx.tenant.districtId && (doc0.severity === 'high' || doc0.severity === 'critical')) notify(ctx, { toDistrict: ctx.tenant.districtId, kind: 'referral', title: `${SEV[doc0.severity][1]} referral at ${ctx.tenant.name}`, body: `${doc0.type} · ${fmtISO(doc0.date)}`, link: `/${ctx.slug}/referrals/${ref.id}` }).catch(e2 => console.warn(e2));
+        if (canOffice) await syncFamilyRecords(ctx, ref.id, teacher, office);
         if (canOffice && office.shareWithFamily === 'Yes') notifyFamily(ctx, teacher, office, ref.id);
         toast('Referral submitted'); navigate(`/${ctx.slug}/referrals/${ref.id}`);
       } catch (ex) { console.error(ex); showError(fe, ex.message); }
@@ -766,14 +756,27 @@ function officeSummary(office) {
   });
   return acts.join('; ');
 }
+// Family-safe copy of a referral (behavior, date, location, actions, contact) — never the teacher's
+// description or the office's internal notes. Removed again if the office stops sharing it.
+async function syncFamilyRecords(ctx, id, teacher, office) {
+  const share = office.shareWithFamily === 'Yes';
+  const behaviors = referralBehaviors(teacher);
+  await Promise.allSettled((teacher.students || []).map(st => {
+    const ref = doc(db, 'tenants', ctx.slug, 'disciplineRecords', `${id}_${st.uid}`);
+    if (!share) return deleteDoc(ref);
+    const loc = teacher.location === 'Other' ? (teacher['location|Other|text'] || 'Other') : teacher.location;
+    return setDoc(ref, { incidentId: id, studentUid: st.uid, studentName: st.name, date: teacher.date || '', location: loc || '', behavior: teacher.primary || behaviors[0] || 'Behavior referral', behaviors,
+      actions: officeSummary(office), summary: office.familyNote || '', status: (office.status || 'Open').toLowerCase(), adminName: office.adminName || '', adminPhone: office.adminPhone || '', sharedBy: ctx.me.uid, sharedAt: serverTimestamp() });
+  }));
+}
 function notifyFamily(ctx, teacher, office, id) {
   const sids = (teacher.students || []).map(s => s.uid);
   const what = teacher.primary || referralBehaviors(teacher)[0] || 'Behavior referral';
   const body = `${what} on ${fmtISO(teacher.date)}${officeSummary(office) ? ' · Action: ' + officeSummary(office) : ''}. Contact ${office.adminName || 'the school office'}${office.adminPhone ? ' at ' + office.adminPhone : ''} with questions.`;
   sids.forEach(sid => {
     const name = (teacher.students || []).find(s => s.uid === sid)?.name || 'Your student';
-    notify(ctx, { to: [sid], kind: 'referral', title: 'Discipline referral', body, link: `/${ctx.slug}/record/me` }).catch(e => console.warn(e));
-    guardianUidsOf(ctx, [sid]).then(to => notify(ctx, { to, kind: 'referral', title: `Discipline referral for ${name}`, body, link: `/${ctx.slug}/record/${sid}` })).catch(e => console.warn(e));
+    notify(ctx, { to: [sid], kind: 'referral', title: 'Discipline referral', body, link: `/${ctx.slug}/record/me/discipline` }).catch(e => console.warn(e));
+    guardianUidsOf(ctx, [sid]).then(to => notify(ctx, { to, kind: 'referral', title: `Discipline referral for ${name}`, body, link: `/${ctx.slug}/record/${sid}/discipline` })).catch(e => console.warn(e));
   });
 }
 
@@ -781,7 +784,7 @@ export async function viewReferral(ctx, id) {
   const t = routeTokenNow();
   const officeView = ctx.can('safety');
   const page = (content, crumb) => officeView
-    ? tenantPage(ctx, 'sis-safety', content, null, { crumbs: [{ label: 'Discipline & safety', href: buildUrl(`/${ctx.slug}/office/discipline`) }, { label: crumb || 'Referral' }] })
+    ? tenantPage(ctx, 'sis-safety', content, null, { crumbs: [{ label: crumb || 'Referral' }] })
     : hubPage(ctx, 'overview', content, crumb || 'Referral');
   render(page(`<div class="max-w-4xl">${skeletonRows(5, 'h-32')}</div>`));
   let snap;
@@ -832,6 +835,7 @@ export async function viewReferral(ctx, id) {
       try {
         const sevNow = referralSeverity(x.referral || {}, data);
         await updateDoc(doc(db, 'tenants', ctx.slug, 'incidents', id), { office: data, status: (data.status || 'Open').toLowerCase(), severity: sevNow, updatedAt: serverTimestamp(), updatedBy: ctx.me.uid });
+        await syncFamilyRecords(ctx, id, x.referral || {}, data);
         const actions = officeSummary(data);
         notify(ctx, { to: [x.reportedBy], kind: 'referral', title: `Your referral for ${who} was ${data.status === 'Resolved' ? 'resolved' : 'reviewed'}`, body: `${ctx.me.name}${actions ? ' · ' + actions : ''}`, link: `/${ctx.slug}/referrals/${id}` }).catch(e2 => console.warn(e2));
         if (data.shareWithFamily === 'Yes' && x.office?.shareWithFamily !== 'Yes') notifyFamily(ctx, x.referral || {}, data, id);
@@ -930,4 +934,244 @@ export function viewDistrictNotifications(dctx) {
   render(districtShell(dctx, 'notifications', { eyebrow: escapeHtml(dctx.district.name || dctx.districtId), title: 'Notifications', subtitle: 'Serious referrals and other alerts from every school in your district.' }, notifCenterBody()));
   refreshIcons();
   mountNotifCenter();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PEOPLE: administrators and parents (Admin → People)
+// ═══════════════════════════════════════════════════════════════
+const WORDS = ['maple', 'river', 'comet', 'cedar', 'harbor', 'falcon', 'meadow', 'summit', 'aspen', 'canyon', 'willow', 'orbit', 'prairie', 'lantern', 'ember', 'quartz'];
+const genPassword = () => `${WORDS[Math.floor(Math.random() * WORDS.length)]}-${1000 + Math.floor(Math.random() * 9000)}-${WORDS[Math.floor(Math.random() * WORDS.length)]}`;
+const isEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v || '');
+const ADMIN_TITLES = ['Principal', 'Assistant principal', 'Dean of students', 'Office manager', 'Registrar', 'Counselor', 'Athletic director', 'Curriculum coordinator', 'District administrator', 'Other'];
+const RELATIONSHIPS = ['Mother', 'Father', 'Guardian', 'Grandparent', 'Foster parent', 'Stepparent', 'Aunt / uncle', 'Other relative', 'Other'];
+// A modal built from the form engine. onSubmit(data, modal) returns true to close.
+function formModal({ title, subtitle = '', icon = 'user-plus', form, data = {}, env = {}, submit = 'Save', onSubmit }) {
+  const m = openModal({ size: 'lg', align: 'top', html: modalHeader({ title, subtitle, icon }) + `<form novalidate>${modalBody(`<div class="space-y-5" data-sections>${form.sections.map(sec => `<div class="grid sm:grid-cols-2 gap-x-5 gap-y-5">${sec.fields.map(f => fieldHTML(f, data, env)).join('')}</div>`).join('<hr class="border-white/[0.06]">')}</div><p class="form-error mt-4 hidden" data-form-error role="alert"></p>`)}
+    ${modalFooter(`<button type="button" data-close class="btn btn-secondary flex-1">Cancel</button><button type="submit" class="btn btn-primary flex-1">${escapeHtml(submit)}</button>`)}</form>` });
+  const root = m.$('form');
+  bindForm(root, form, env);
+  root.addEventListener('submit', e => {
+    e.preventDefault();
+    const d = collect(root, form), errs = validate(form, d);
+    showErrors(root, errs);
+    const fe = root.querySelector('[data-form-error]');
+    if (errs.length) return showError(fe, `Please fix ${plural(errs.length, 'item')}.`);
+    showError(fe, '');
+    withBusy(root.querySelector('[type=submit]'), 'Saving…', async () => {
+      try { if (await onSubmit(d, m)) m.close(); }
+      catch (ex) { console.error(ex); showError(fe, ex.code === 'auth/email-already-in-use' ? 'That email already has an Ember login.' : friendlyError(ex)); }
+    });
+  });
+  return m;
+}
+function credentialsModal(title, who, email, password, note) {
+  const m = openModal({ size: 'sm', html: `<div class="p-6 sm:p-7"><div class="tile tile-green tile-lg mb-4">${ico('key-round', 'w-5 h-5')}</div><h2 class="font-serif text-2xl text-white mb-1">${escapeHtml(title)}</h2><p class="text-sm text-gray-400 mb-5">Share these sign-in details with ${escapeHtml(who)}. This password is shown only once.</p>
+    <div class="card p-4 space-y-2 font-mono text-sm"><div><span class="text-gray-500 text-xs font-sans">Web address</span><br><span class="text-white break-all">${escapeHtml(location.origin + buildUrl('/login'))}</span></div><div><span class="text-gray-500 text-xs font-sans">Email</span><br><span class="text-white">${escapeHtml(email)}</span></div><div><span class="text-gray-500 text-xs font-sans">Temporary password</span><br><span class="text-[#F59E0B]">${escapeHtml(password)}</span></div></div>
+    ${note ? `<p class="hint mt-3">${escapeHtml(note)}</p>` : ''}
+    <div class="flex gap-3 mt-6"><button class="btn btn-secondary flex-1" data-copy-creds>${ico('copy', 'w-4 h-4')} Copy</button><button class="btn btn-primary flex-1" data-close>Done</button></div></div>` });
+  m.$('[data-copy-creds]').addEventListener('click', () => copyText(`Sign in to Ember: ${location.origin + buildUrl('/login')}\nEmail: ${email}\nTemporary password: ${password}`, 'Sign-in details copied'));
+  refreshIcons();
+}
+
+export async function viewAdministrators(ctx) {
+  const t = routeTokenNow();
+  setTitle('Administrators', ctx.tenant.name);
+  render(tenantPage(ctx, 'admin-admins', pageHeader({ eyebrow: 'People', title: 'Administrators', subtitle: 'Administrators can see and manage everything in this school.', actions: `<button id="adm-add" class="btn btn-primary">${ico('user-plus')} Add administrator</button>` })
+    + `<div class="max-w-5xl"><div id="adm-list">${skeletonRows(3)}</div><p class="hint mt-4">${ico('info', 'w-3.5 h-3.5 inline -mt-0.5')} Removing someone takes away their access to this school. Their login itself isn't deleted — they simply won't see ${escapeHtml(ctx.tenant.name)} anymore.</p></div>`));
+  let staff = [], tenant = ctx.tenant;
+  const col = collection(db, 'tenants', ctx.slug, 'users');
+  const load = async () => {
+    try {
+      const [snap, tn] = await Promise.all([getDocs(col), getTenant(ctx.slug, { fresh: true }).catch(() => ctx.tenant)]);
+      if (!live(t)) return;
+      tenant = tn || ctx.tenant;
+      staff = snap.docs.map(d => ({ uid: d.id, ...d.data() })).sort((a, b) => displayNameOf(a).localeCompare(displayNameOf(b)));
+      draw();
+    } catch (e) { console.error(e); if (live(t)) { $('#adm-list').innerHTML = errorBox(e); refreshIcons(); } }
+  };
+  const admins = () => staff.filter(x => x.role === 'admin');
+  const draw = () => {
+    const list = admins();
+    $('#adm-list').innerHTML = list.length ? dataTable(
+      [{ label: 'Administrator', cls: 'col-span-12 sm:col-span-5' }, { label: 'Title', cls: 'col-span-6 sm:col-span-3' }, { label: 'Phone', cls: 'col-span-6 sm:col-span-2' }, { label: '', cls: 'col-span-12 sm:col-span-2 text-right' }],
+      list.map(a => { const owner = a.uid === tenant.ownerUid, me = a.uid === ctx.me.uid; return { cells: [
+        `<div class="flex items-center gap-3">${avatar(displayNameOf(a), a.photoURL)}<div class="min-w-0"><div class="text-sm text-white truncate">${escapeHtml(displayNameOf(a))} ${owner ? badge('Owner', 'amber') : ''} ${me ? badge('You', 'muted') : ''} ${a.districtAdmin ? badge('District', 'violet') : ''}</div><div class="text-xs text-gray-500 truncate">${escapeHtml(a.email || '')}</div></div></div>`,
+        `<span class="text-sm text-gray-300">${escapeHtml(a.title || '—')}</span>`,
+        `<span class="text-xs text-gray-400">${escapeHtml(a.phone || '—')}</span>`,
+        `<div class="flex justify-end gap-1"><button class="btn-icon" data-edit="${a.uid}" aria-label="Edit ${escapeHtml(displayNameOf(a))}" title="Edit">${ico('pencil', 'w-4 h-4')}</button>${owner ? '' : `<button class="btn-icon" data-demote="${a.uid}" aria-label="Make ${escapeHtml(displayNameOf(a))} a teacher" title="Make teacher">${ico('user-minus', 'w-4 h-4')}</button><button class="btn-icon danger" data-remove="${a.uid}" aria-label="Remove ${escapeHtml(displayNameOf(a))}" title="Remove from school">${ico('trash-2', 'w-4 h-4')}</button>`}</div>`] }; }))
+      : emptyState({ icon: 'shield-check', title: 'No administrators', text: 'Add one so someone can manage the school.' });
+    refreshIcons();
+  };
+  const openAdd = () => {
+    const teachers = staff.filter(x => x.role !== 'admin');
+    const form = { sections: [{ fields: [
+      { id: 'mode', type: 'radio', label: 'Who?', required: true, cols: 1, options: [...(teachers.length ? [{ v: 'promote', l: 'Someone already on staff here' }] : []), { v: 'new', l: 'Someone new — create a login for them' }] },
+      { id: 'who', type: 'select', label: 'Staff member', required: true, options: teachers.map(x => ({ v: x.uid, l: `${displayNameOf(x)}${x.email ? ' · ' + x.email : ''}` })), showIf: { id: 'mode', eq: 'promote' }, span: 'sm:col-span-2' },
+      { id: 'name', type: 'text', label: 'Full name', required: true, showIf: { id: 'mode', eq: 'new' } },
+      { id: 'email', type: 'text', label: 'Email', required: true, placeholder: 'name@school.org', showIf: { id: 'mode', eq: 'new' } },
+      { id: 'title', type: 'select', label: 'Title', options: ADMIN_TITLES },
+      { id: 'phone', type: 'phone', label: 'Phone' },
+      { id: 'password', type: 'text', label: 'Temporary password', required: true, showIf: { id: 'mode', eq: 'new' }, hint: 'They can change it under Account → Profile after signing in.' },
+    ] }], rules: [d => d.mode === 'new' && d.email && !isEmail(d.email) ? { id: 'email', msg: 'Enter a valid email address.' } : null, d => d.mode === 'new' && d.password && d.password.length < 8 ? { id: 'password', msg: 'Use at least 8 characters.' } : null] };
+    formModal({ title: 'Add administrator', subtitle: ctx.tenant.name, icon: 'shield-check', form, data: { mode: teachers.length ? 'promote' : 'new', password: genPassword() }, submit: 'Add administrator', onSubmit: async d => {
+      if (d.mode === 'promote') {
+        await updateDoc(doc(col, d.who), { role: 'admin', title: d.title || '', phone: d.phone || '', promotedBy: ctx.me.uid, updatedAt: serverTimestamp() });
+        const p = staff.find(x => x.uid === d.who);
+        notify(ctx, { to: [d.who], kind: 'system', title: `You're now an administrator at ${ctx.tenant.name}`, body: `Added by ${ctx.me.name}. Look for Admin in the left menu.`, link: `/${ctx.slug}/admin` }).catch(() => {});
+        toast(`${displayNameOf(p)} is now an administrator`);
+      } else {
+        const email = d.email.toLowerCase();
+        const uid = await createLogin(email, d.password);
+        await setDoc(doc(col, uid), { userId: uid, role: 'admin', email, displayName: d.name, title: d.title || '', phone: d.phone || '', createdBy: ctx.me.uid, createdAt: serverTimestamp() });
+        credentialsModal('Administrator added', d.name, email, d.password, 'Ask them to change this password after their first sign-in.');
+      }
+      load(); return true;
+    } });
+  };
+  const openEdit = a => {
+    const form = { sections: [{ fields: [
+      { id: 'name', type: 'text', label: 'Full name', required: true },
+      { id: 'title', type: 'select', label: 'Title', options: ADMIN_TITLES },
+      { id: 'phone', type: 'phone', label: 'Phone' },
+      { id: 'note', type: 'note', text: `Email: ${a.email || '—'} (people change their own email from their account).` },
+    ] }] };
+    formModal({ title: `Edit ${displayNameOf(a)}`, icon: 'pencil', form, data: { name: displayNameOf(a), title: a.title || '', phone: a.phone || '' }, onSubmit: async d => {
+      await updateDoc(doc(col, a.uid), { displayName: d.name, title: d.title || '', phone: d.phone || '', updatedAt: serverTimestamp() });
+      toast('Saved'); load(); return true;
+    } });
+  };
+  $('#adm-add').addEventListener('click', openAdd);
+  $('#main').addEventListener('click', async e => {
+    const ed = e.target.closest('[data-edit]'); if (ed) return openEdit(staff.find(x => x.uid === ed.dataset.edit));
+    const dm = e.target.closest('[data-demote]'), rm = e.target.closest('[data-remove]');
+    if (!dm && !rm) return;
+    const a = staff.find(x => x.uid === (dm || rm).dataset[dm ? 'demote' : 'remove']);
+    if (admins().length <= 1) return toast('A school needs at least one administrator.', 'error');
+    const self = a.uid === ctx.me.uid;
+    if (!await confirmDialog({ title: dm ? `Make ${displayNameOf(a)} a teacher?` : `Remove ${displayNameOf(a)} from ${ctx.tenant.name}?`, message: dm ? 'They keep their courses but lose administrator access.' + (self ? ' You will lose admin access immediately.' : '') : 'They lose all access to this school, including any courses they teach.' + (self ? ' You will be signed out of this school.' : ''), confirmLabel: dm ? 'Make teacher' : 'Remove', danger: true })) return;
+    try {
+      if (dm) await updateDoc(doc(col, a.uid), { role: 'teacher', updatedAt: serverTimestamp() });
+      else await deleteDoc(doc(col, a.uid));
+      toast(dm ? 'Changed to teacher' : 'Removed');
+      if (self) return navigate(`/${ctx.slug}`, { replace: true });
+      load();
+    } catch (ex) { toast(friendlyError(ex), 'error'); }
+  });
+  load();
+}
+
+export async function viewParents(ctx) {
+  const t = routeTokenNow();
+  setTitle('Parents & guardians', ctx.tenant.name);
+  render(tenantPage(ctx, 'admin-parents', pageHeader({ eyebrow: 'People', title: 'Parents & guardians', subtitle: 'Create family logins, link them to students, and fix accounts.', actions: `<button id="par-add" class="btn btn-primary">${ico('user-plus')} Add parent</button>` })
+    + `<div class="max-w-6xl"><div id="par-kpis" class="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-6"></div>
+      <div class="flex flex-wrap items-center justify-between gap-3 mb-3"><div class="segmented" role="tablist"><button data-pt="parents" aria-pressed="true">Parent accounts</button><button data-pt="missing" aria-pressed="false">Students without a parent</button></div>
+        <div class="relative"><span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">${ico('search', 'w-3.5 h-3.5')}</span><input id="par-q" type="search" placeholder="Search name, email or student…" class="input !py-2 pl-9 w-64" aria-label="Search"></div></div>
+      <div id="par-list">${skeletonRows(5)}</div>
+      <p class="hint mt-4">${ico('info', 'w-3.5 h-3.5 inline -mt-0.5')} Parents can also sign themselves up at <span class="font-mono text-gray-300">${escapeHtml(location.origin + buildUrl('/signup?role=guardian'))}</span> with a student's Family Access code (Student records → Family).</p></div>`));
+  let parents = [], links = [], students = [], tab = 'parents', q = '';
+  const gcol = collection(db, 'tenants', ctx.slug, 'guardians'), lcol = collection(db, 'tenants', ctx.slug, 'guardianLinks');
+  const load = async () => {
+    try {
+      const [g, l, st] = await Promise.all([getDocs(gcol), getDocs(lcol), getDocs(collection(db, 'tenants', ctx.slug, 'students'))]);
+      if (!live(t)) return;
+      parents = g.docs.map(d => ({ uid: d.id, ...d.data() })).sort((a, b) => displayNameOf(a).localeCompare(displayNameOf(b)));
+      links = l.docs.map(d => ({ id: d.id, ...d.data() }));
+      students = st.docs.map(d => ({ uid: d.id, ...d.data() })).filter(x => x.status !== 'pending' && x.status !== 'rejected').sort((a, b) => displayNameOf(a).localeCompare(displayNameOf(b)));
+      draw();
+    } catch (e) { console.error(e); if (live(t)) { $('#par-list').innerHTML = errorBox(e); refreshIcons(); } }
+  };
+  const kidsOf = uid => links.filter(l => l.guardianUid === uid).map(l => students.find(s => s.uid === l.studentUid) || { uid: l.studentUid, displayName: 'Former student', missing: true });
+  const linked = () => new Set(links.map(l => l.studentUid));
+  const draw = () => {
+    $$('[data-pt]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.pt === tab)));
+    const withParent = students.filter(s => linked().has(s.uid)).length;
+    const k = (label, v, sub, lvl) => `<div class="card p-5"><div class="text-xs text-gray-400 mb-2">${label}</div><div class="stat-value">${v}</div><div class="mt-1 text-xs text-gray-500 flex items-center gap-1.5">${lvl ? ico(STATUS_ICON[lvl][0], 'w-3.5 h-3.5 ' + STATUS_ICON[lvl][1]) : ''}${sub}</div></div>`;
+    $('#par-kpis').innerHTML = k('Parent accounts', parents.length, `${links.length} student links`) + k('Students with a parent', `${withParent}<span class="text-gray-500 text-lg">/${students.length}</span>`, students.length ? `${Math.round(withParent / students.length * 100)}% connected` : '', students.length && withParent === students.length ? 'good' : null)
+      + k('Missing a parent', students.length - withParent, students.length - withParent ? 'Families who can’t see grades or attendance' : 'Every student is connected', students.length - withParent ? 'warning' : 'good');
+    const ql = q.toLowerCase();
+    if (tab === 'parents') {
+      const list = parents.filter(p => !ql || `${displayNameOf(p)} ${p.email || ''} ${kidsOf(p.uid).map(displayNameOf).join(' ')}`.toLowerCase().includes(ql));
+      $('#par-list').innerHTML = list.length ? dataTable(
+        [{ label: 'Parent / guardian', cls: 'col-span-12 sm:col-span-4' }, { label: 'Students', cls: 'col-span-12 sm:col-span-4' }, { label: 'Phone', cls: 'col-span-6 sm:col-span-2' }, { label: '', cls: 'col-span-6 sm:col-span-2 text-right' }],
+        list.map(p => { const kids = kidsOf(p.uid); return { cells: [
+          `<div class="flex items-center gap-3">${avatar(displayNameOf(p))}<div class="min-w-0"><div class="text-sm text-white truncate">${escapeHtml(displayNameOf(p))}${p.relationship ? ` <span class="text-xs text-gray-500">· ${escapeHtml(p.relationship)}</span>` : ''}</div><div class="text-xs text-gray-500 truncate">${escapeHtml(p.email || 'No email on file')}</div></div></div>`,
+          kids.length ? `<div class="flex flex-wrap gap-1">${kids.map(k2 => k2.missing ? badge('Former student', 'muted') : `<a href="${buildUrl(`/${ctx.slug}/record/${k2.uid}`)}" class="badge badge-amber hover:opacity-80">${escapeHtml(displayNameOf(k2))}</a>`).join('')}</div>` : `<span class="text-xs text-[#fab219]">${ico('triangle-alert', 'w-3.5 h-3.5 inline -mt-0.5')} Not linked to a student</span>`,
+          `<span class="text-xs text-gray-400">${escapeHtml(p.phone || '—')}</span>`,
+          `<div class="flex justify-end gap-1"><button class="btn-icon" data-pedit="${p.uid}" aria-label="Edit ${escapeHtml(displayNameOf(p))}" title="Edit & links">${ico('pencil', 'w-4 h-4')}</button><button class="btn-icon danger" data-pdel="${p.uid}" aria-label="Remove ${escapeHtml(displayNameOf(p))}" title="Remove">${ico('trash-2', 'w-4 h-4')}</button></div>`] }; }))
+        : emptyState({ icon: 'users', title: parents.length ? 'No matches' : 'No parent accounts yet', text: parents.length ? '' : 'Add parents here, or give families a Family Access code to sign up themselves.', action: parents.length ? '' : `<button class="btn btn-primary" data-padd>${ico('user-plus')} Add parent</button>` });
+    } else {
+      const list = students.filter(s => !linked().has(s.uid) && (!ql || displayNameOf(s).toLowerCase().includes(ql)));
+      $('#par-list').innerHTML = list.length ? dataTable(
+        [{ label: 'Student', cls: 'col-span-12 sm:col-span-6' }, { label: 'Grade', cls: 'col-span-4 sm:col-span-2' }, { label: '', cls: 'col-span-8 sm:col-span-4 text-right' }],
+        list.map(s2 => ({ cells: [
+          `<a href="${buildUrl(`/${ctx.slug}/record/${s2.uid}/family`)}" class="flex items-center gap-3">${avatar(displayNameOf(s2))}<span class="text-sm text-white truncate">${escapeHtml(displayNameOf(s2))}</span></a>`,
+          `<span class="text-xs text-gray-400">${escapeHtml(s2.gradeLevel ? `Grade ${s2.gradeLevel}` : '—')}</span>`,
+          `<div class="flex justify-end gap-2"><a href="${buildUrl(`/${ctx.slug}/record/${s2.uid}/family`)}" class="btn btn-ghost btn-sm">Family code</a><button class="btn btn-secondary btn-sm" data-padd="${s2.uid}">${ico('user-plus', 'w-3.5 h-3.5')} Add parent</button></div>`] })))
+        : emptyState({ icon: 'circle-check', tone: 'green', title: 'Every student has a parent account', text: '' });
+    }
+    refreshIcons();
+  };
+  const studentPick = ids => ids.map(id => students.find(s2 => s2.uid === id)).filter(Boolean).map(s2 => ({ uid: s2.uid, name: displayNameOf(s2), grade: s2.gradeLevel ?? '' }));
+  const openAdd = (studentId = null) => {
+    const form = { sections: [{ fields: [
+      { id: 'students', type: 'students', label: 'Student(s)', required: true },
+      { id: 'name', type: 'text', label: 'Parent / guardian name', required: true },
+      { id: 'relationship', type: 'select', label: 'Relationship', options: RELATIONSHIPS },
+      { id: 'email', type: 'text', label: 'Email (their sign-in)', required: true, placeholder: 'parent@example.com' },
+      { id: 'phone', type: 'phone', label: 'Phone' },
+      { id: 'password', type: 'text', label: 'Temporary password', required: true, hint: 'Share it with the family. They can change it after signing in.' },
+    ] }], rules: [d => d.email && !isEmail(d.email) ? { id: 'email', msg: 'Enter a valid email address.' } : null, d => d.password && d.password.length < 8 ? { id: 'password', msg: 'Use at least 8 characters.' } : null] };
+    formModal({ title: 'Add a parent or guardian', subtitle: 'Creates their Ember login and links it to the student.', form, env: { students }, data: { students: studentPick(studentId ? [studentId] : []), password: genPassword() }, submit: 'Create parent account', onSubmit: async d => {
+      const email = d.email.toLowerCase();
+      if (parents.some(p => (p.email || '').toLowerCase() === email)) throw new Error('A parent with that email is already in this school — edit them to link another student.');
+      let uid;
+      try { uid = await createLogin(email, d.password); }
+      catch (ex) { if (ex.code === 'auth/email-already-in-use') throw new Error('That email already has an Ember login (maybe from another school). Give this family the student’s Family Access code instead — they can link it from their own account.'); throw ex; }
+      const batch = writeBatch(db);
+      batch.set(doc(gcol, uid), { userId: uid, name: d.name, displayName: d.name, email, phone: d.phone || '', relationship: d.relationship || '', createdBy: ctx.me.uid, createdAt: serverTimestamp() });
+      d.students.forEach(st => batch.set(doc(lcol, `${uid}_${st.uid}`), { guardianUid: uid, studentUid: st.uid, linkedBy: ctx.me.uid, createdAt: serverTimestamp() }));
+      await batch.commit();
+      credentialsModal('Parent account created', d.name, email, d.password, `Linked to ${d.students.map(x => x.name).join(', ')}.`);
+      load(); return true;
+    } });
+  };
+  const openEdit = p => {
+    const form = { sections: [{ fields: [
+      { id: 'name', type: 'text', label: 'Name', required: true },
+      { id: 'relationship', type: 'select', label: 'Relationship', options: RELATIONSHIPS },
+      { id: 'phone', type: 'phone', label: 'Phone' },
+      { id: 'note', type: 'note', text: `Sign-in email: ${p.email || '—'}` },
+      { id: 'students', type: 'students', label: 'Linked students', hint: 'Remove a student to unlink them; search to link another.' },
+    ] }] };
+    const before = kidsOf(p.uid).filter(k2 => !k2.missing).map(k2 => k2.uid);
+    formModal({ title: `Edit ${displayNameOf(p)}`, icon: 'pencil', form, env: { students }, data: { name: displayNameOf(p), relationship: p.relationship || '', phone: p.phone || '', students: studentPick(before) }, onSubmit: async d => {
+      const after = (d.students || []).map(x => x.uid);
+      const batch = writeBatch(db);
+      batch.update(doc(gcol, p.uid), { name: d.name, displayName: d.name, phone: d.phone || '', relationship: d.relationship || '', userId: p.uid, updatedAt: serverTimestamp() });
+      after.filter(id => !before.includes(id)).forEach(id => batch.set(doc(lcol, `${p.uid}_${id}`), { guardianUid: p.uid, studentUid: id, linkedBy: ctx.me.uid, createdAt: serverTimestamp() }));
+      before.filter(id => !after.includes(id)).forEach(id => batch.delete(doc(lcol, `${p.uid}_${id}`)));
+      await batch.commit();
+      toast('Saved'); load(); return true;
+    } });
+  };
+  $('#par-add').addEventListener('click', () => openAdd());
+  $('#par-q').addEventListener('input', e => { q = e.target.value.trim(); draw(); });
+  $('#main').addEventListener('click', async e => {
+    const tb = e.target.closest('[data-pt]'); if (tb) { tab = tb.dataset.pt; return draw(); }
+    const ad = e.target.closest('[data-padd]'); if (ad) return openAdd(ad.dataset.padd || null);
+    const ed = e.target.closest('[data-pedit]'); if (ed) return openEdit(parents.find(x => x.uid === ed.dataset.pedit));
+    const dl = e.target.closest('[data-pdel]');
+    if (dl) {
+      const p = parents.find(x => x.uid === dl.dataset.pdel);
+      if (!await confirmDialog({ title: `Remove ${displayNameOf(p)}?`, message: 'They lose access to every student in this school. Their login itself isn’t deleted.', confirmLabel: 'Remove', danger: true })) return;
+      try {
+        const batch = writeBatch(db);
+        links.filter(l => l.guardianUid === p.uid).forEach(l => batch.delete(doc(lcol, l.id)));
+        batch.delete(doc(gcol, p.uid));
+        await batch.commit(); toast('Parent removed'); load();
+      } catch (ex) { toast(friendlyError(ex), 'error'); }
+    }
+  });
+  load();
 }

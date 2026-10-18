@@ -10,7 +10,7 @@ const {
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
   GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, routeTokenNow, randInt, renderRoute, districtShell, getDistrictSchools,
-  officeMenu, OFFICE_TRAY, notify, officeStaffUids, guardianUidsOf, notifItems, notifRow, notifUnread, markNotifRead, markAllNotifsRead, NOTIF_KINDS
+  notify, officeStaffUids, guardianUidsOf, notifItems, notifRow, notifUnread, markNotifRead, markAllNotifsRead, NOTIF_KINDS
 } = globalThis.__ember; // helpers from app.js (see EMBER_API there)
 
 // ═══════════════════════════════════════════════════════════════
@@ -934,7 +934,7 @@ export async function viewDirectory(ctx) {
 
 const RECORD_TABS = [
   ['overview', 'Overview'], ['schedule', 'Schedule'], ['attendance', 'Attendance'], ['grades', 'Grades'], ['reportcards', 'Report cards'],
-  ['activities', 'Activities'], ['career', 'Career plan'], ['services', 'Student services', 'services'], ['incidents', 'Incidents', 'safety'], ['family', 'Family & contacts', 'admin'],
+  ['activities', 'Activities'], ['career', 'Career plan'], ['services', 'Student services', 'services'], ['discipline', 'Discipline'], ['family', 'Family & contacts', 'admin'],
 ];
 export async function viewRecord(ctx, sidParam, tab = 'overview') {
   const t = routeTokenNow();
@@ -946,6 +946,7 @@ export async function viewRecord(ctx, sidParam, tab = 'overview') {
   const name = displayNameOf(student);
   const staff = ctx.isRealTeacher;
   const tabs = RECORD_TABS.filter(([, , need]) => !need || (need === 'admin' ? ctx.isAdmin : ctx.can(need)));
+  if (tab === 'incidents') tab = 'discipline'; // old links
   if (!tabs.some(x => x[0] === tab)) tab = 'overview';
   setTitle(name, ctx.tenant.name);
   const self = sid === ctx.me.uid;
@@ -956,10 +957,10 @@ export async function viewRecord(ctx, sidParam, tab = 'overview') {
       ${avatar(name, null, 'w-16 h-16', 'text-xl')}
       <div class="flex-1 min-w-0"><p class="text-[11px] text-[#F59E0B] uppercase tracking-[0.18em] mb-1">${escapeHtml(label)}</p><h1 class="font-serif text-3xl sm:text-4xl text-white leading-tight">${escapeHtml(name)}</h1>
         <p class="text-sm text-gray-500 mt-1 flex flex-wrap items-center gap-2">${escapeHtml(gradeLabel(student.gradeLevel))}${student.studentNumber ? ` · ID <span class="font-mono">${escapeHtml(student.studentNumber)}</span>` : ''}${staff ? ' ' + flagBadges(student) : ''}</p></div>
-      ${staff ? `<div class="flex flex-wrap gap-2">${ctx.isAdmin ? `<button data-rec="edit" class="btn btn-secondary">${ico('pencil', 'w-3.5 h-3.5')} Edit record</button>` : ''}<button data-rec="concern" class="btn btn-secondary">${ico('flag', 'w-3.5 h-3.5')} Report a concern</button></div>` : ''}
+      ${staff ? `<div class="flex flex-wrap gap-2">${ctx.isAdmin ? `<button data-rec="edit" class="btn btn-secondary">${ico('pencil', 'w-3.5 h-3.5')} Edit record</button>` : ''}<a href="${buildUrl(`/${ctx.slug}/staff/new/referral?student=${sid}`)}" class="btn btn-secondary">${ico('flag', 'w-3.5 h-3.5')} Write referral</a><button data-rec="concern" class="btn btn-ghost">${ico('message-square-warning', 'w-3.5 h-3.5')} Quick concern</button></div>` : ''}
     </header>
     ${staff && (student.alerts || []).length ? `<div class="max-w-6xl mb-6 space-y-2">${student.alerts.map(a => `<div class="card px-4 py-3 flex items-start gap-3 border-[#fab219]/30">${ico('triangle-alert', 'w-4 h-4 st-warning shrink-0 mt-0.5')}<div><span class="text-xs uppercase tracking-wider text-gray-400">${escapeHtml(a.type || 'Alert')}</span><p class="text-sm text-white">${escapeHtml(a.text)}</p></div></div>`).join('')}</div>` : ''}`;
-  render(tenantPage(ctx, 'record', header + `<div id="rec" class="max-w-6xl">${skeletonRows(4, 'h-24')}</div>`, null, { subnav, gActive: staff ? 'students' : (ctx.isGuardian ? 'dashboard' : 'account'), crumbs: [...(staff ? [{ label: 'Students', href: buildUrl(`/${ctx.slug}/sis`) }] : []), { label: name, href: buildUrl(base) }, ...(tab !== 'overview' ? [{ label }] : [])] }));
+  render(tenantPage(ctx, 'record', header + `<div id="rec" class="max-w-6xl">${skeletonRows(4, 'h-24')}</div>`, null, { subnav, gActive: staff ? 'school' : (ctx.isGuardian ? 'dashboard' : 'account'), crumbs: [...(staff ? [{ label: 'Students', href: buildUrl(`/${ctx.slug}/sis`) }] : []), { label: name, href: buildUrl(base) }, ...(tab !== 'overview' ? [{ label }] : [])] }));
   const el = $('#rec');
   $('#main').addEventListener('click', e => {
     const r = e.target.closest('[data-rec]'); if (!r) return;
@@ -1021,12 +1022,8 @@ export async function viewRecord(ctx, sidParam, tab = 'overview') {
       await careerPlanTab(ctx, el, student, { canEdit: staff || self });
     } else if (tab === 'services') {
       await servicesTab(ctx, el, student);
-    } else if (tab === 'incidents') {
-      const snap = await getDocs(query(tcol(ctx, 'incidents'), where('studentUids', 'array-contains', sid)));
-      if (!live(t)) return;
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-      el.innerHTML = `<div class="flex justify-end mb-4"><button data-rec="concern" class="btn btn-primary">${ico('plus')} Incident</button></div>` + (list.length ? incidentList(list) : emptyState({ icon: 'shield-check', title: 'No incidents on record' }));
-      el.addEventListener('click', e => { const b = e.target.closest('[data-incident]'); if (!b) return; const x = list.find(i => i.id === b.dataset.incident); if (x?.form === 'referral') navigate(`/${ctx.slug}/referrals/${x.id}`); else openIncidentModal(ctx, x); });
+    } else if (tab === 'discipline') {
+      await disciplineTab(ctx, el, student, t);
     } else if (tab === 'family') {
       await familyTab(ctx, el, student);
     }
@@ -1175,7 +1172,7 @@ export async function viewFamilyHome(ctx) {
           <div class="space-y-5">
             <div class="grid grid-cols-2 gap-3">${statTile('Attendance', fmtPct(att.rate), escapeHtml(term?.name || ''))}${statTile('Absences', att.absent, `${att.T} tardies`)}</div>
             <div><h3 class="label">Due this week</h3>${due.length ? `<div class="space-y-1">${due.slice(0, 5).map(({ it, g }) => `<div class="flex items-center gap-2 text-sm"><span class="w-2 h-2 rounded-full shrink-0" style="background:${courseHex(g.course)}"></span><span class="text-gray-200 truncate flex-1">${escapeHtml(it.title)}</span><span class="text-[11px] ${tsMillis(it.data.dueDate) < now ? 'text-red-400' : 'text-gray-500'} shrink-0">${tsMillis(it.data.dueDate) < now ? 'Missing' : escapeHtml(formatDate(it.data.dueDate))}</span></div>`).join('')}</div>` : `<p class="text-sm text-gray-500">Nothing due.</p>`}</div>
-            <div class="flex flex-wrap gap-2"><a href="${base}/attendance" class="btn btn-ghost btn-sm">${ico('calendar-check', 'w-3.5 h-3.5')} Attendance</a><a href="${base}/reportcards" class="btn btn-ghost btn-sm">${ico('file-text', 'w-3.5 h-3.5')} Report cards</a><a href="${base}/schedule" class="btn btn-ghost btn-sm">${ico('calendar-range', 'w-3.5 h-3.5')} Schedule</a></div>
+            <div class="flex flex-wrap gap-2"><a href="${base}/attendance" class="btn btn-ghost btn-sm">${ico('calendar-check', 'w-3.5 h-3.5')} Attendance</a><a href="${base}/reportcards" class="btn btn-ghost btn-sm">${ico('file-text', 'w-3.5 h-3.5')} Report cards</a><a href="${base}/schedule" class="btn btn-ghost btn-sm">${ico('calendar-range', 'w-3.5 h-3.5')} Schedule</a><a href="${base}/discipline" class="btn btn-ghost btn-sm">${ico('shield', 'w-3.5 h-3.5')} Discipline</a></div>
           </div>
         </div></section>`;
     } catch (e) { return `<section class="card p-6">${errorBox(e)}</section>`; }
@@ -1898,64 +1895,129 @@ export async function viewDistrictSafety(dctx) {
 // ═══════════════════════════════════════════════════════════════
 // OFFICE HOME (the school office's front page — separate from courses and LMS admin)
 // ═══════════════════════════════════════════════════════════════
-export async function viewOfficeHome(ctx) {
-  const t = routeTokenNow();
-  setTitle('Office', ctx.tenant.name);
+// "Today" for the admin overview: live KPIs and a needs-attention list across attendance, discipline, services and staff requests.
+export async function officeToday(ctx) {
   const today = todayISO();
-  render(tenantPage(ctx, 'office-home', pageHeader({ eyebrow: 'Office', title: escapeHtml(ctx.tenant.name), subtitle: escapeHtml(new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })) }) + `
-    <div class="max-w-6xl"><div id="oh-kpis" class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">${Array.from({ length: 4 }, () => '<div class="skeleton h-28"></div>').join('')}</div>
-      <div class="grid lg:grid-cols-[minmax(0,1fr)_360px] gap-8">
-        <section><h2 class="label">Office tools</h2><div class="grid sm:grid-cols-2 gap-3">${officeMenu(ctx).filter(([k]) => k !== '§' && k !== 'office-home').map(([k, l, path]) => `
-          <a href="${buildUrl(`/${ctx.slug}${path}`)}" class="card card-hover p-4 flex items-start gap-3">${iconTile(OFFICE_TRAY[k][0], 'teal')}<span class="min-w-0"><span class="block text-sm text-white">${escapeHtml(l)}</span><span class="block text-xs text-gray-500 mt-0.5">${escapeHtml(OFFICE_TRAY[k][1])}</span></span></a>`).join('')}</div></section>
-        <section><h2 class="label">Needs attention</h2><div id="oh-todo">${skeletonRows(3)}</div></section>
-      </div></div>`));
   const settled = p => p.then(v => v, () => null);
-  const [settings, students, courses, sess, recs, inc, svc] = await Promise.all([
-    settled(getSettings(ctx)), settled(loadStudents(ctx)),
-    ctx.isAdmin ? settled(loadAllCourses(ctx)) : null,
-    ctx.isAdmin ? settled(getDocs(query(tcol(ctx, 'attendanceSessions'), where('date', '==', today)))) : null,
-    ctx.isAdmin ? settled(getDocs(query(tcol(ctx, 'attendance'), where('date', '==', today)))) : null,
+  const [settings, courses, sess, recs, inc, svc, reqs, pending] = await Promise.all([
+    settled(getSettings(ctx)), settled(loadAllCourses(ctx)),
+    settled(getDocs(query(tcol(ctx, 'attendanceSessions'), where('date', '==', today)))),
+    settled(getDocs(query(tcol(ctx, 'attendance'), where('date', '==', today)))),
     ctx.can('safety') ? settled(getDocs(tcol(ctx, 'incidents'))) : null,
     ctx.can('services') ? settled(getDocs(tcol(ctx, 'services'))) : null,
+    ctx.isAdmin ? settled(getDocs(tcol(ctx, 'requests'))) : null,
+    ctx.isAdmin ? settled(getDocs(query(tcol(ctx, 'students'), where('status', '==', 'pending')))) : null,
   ]);
-  if (!live(t)) return;
   const href = path => buildUrl(`/${ctx.slug}${path}`);
   const tiles = [], todo = [];
-  tiles.push(kpi('Students enrolled', (students || []).length.toLocaleString(), settings?.schoolYear ? escapeHtml(settings.schoolYear) : '', null, href('/sis')));
+  const weekend = [0, 6].includes(new Date().getDay());
   if (courses && sess && recs) {
     const scheduled = courses.filter(c => c.periodId), pool = scheduled.length ? scheduled : courses;
     const taken = new Set(sess.docs.map(d => d.data().courseId));
     const missing = pool.filter(c => !taken.has(c.id));
     const sum = summarize(recs.docs.map(d => d.data()));
-    const weekend = [0, 6].includes(new Date().getDay());
-    tiles.push(kpi('Attendance taken', `${pool.length - missing.length}<span class="text-gray-500 text-lg">/${pool.length}</span>`, weekend ? 'No school today' : missing.length ? `${plural(missing.length, 'class', 'classes')} still to take` : 'Every class is done', weekend ? null : missing.length ? 'warning' : 'good', href('/office/attendance')));
+    tiles.push(kpi('Attendance taken', `${pool.length - missing.length}<span class="text-gray-500 text-lg">/${pool.length}</span>`, weekend ? 'No school today' : missing.length ? `${plural(missing.length, 'class', 'classes')} still to take` : 'Every class is done', weekend || !pool.length ? null : missing.length ? 'warning' : 'good', href('/office/attendance')));
     tiles.push(kpi('Absent today', sum.absent.toLocaleString(), sum.total ? `${fmtPct(sum.rate)} attendance · ${sum.T} tardy` : 'Nothing recorded yet', null, href('/office/attendance')));
     if (!weekend && missing.length) todo.push({ level: 'warning', icon: 'calendar-check', text: `${plural(missing.length, 'class', 'classes')} ${missing.length === 1 ? "hasn't" : "haven't"} taken attendance today`, href: href('/office/attendance') });
   }
   if (inc) {
-    const open = inc.docs.map(d => d.data()).filter(i => i.status !== 'resolved' && i.status !== 'closed');
+    const open = inc.docs.map(d => d.data()).filter(i => !['resolved', 'closed'].includes((i.status || 'open').toLowerCase()));
     const serious = open.filter(i => i.severity === 'high' || i.severity === 'critical');
-    tiles.push(kpi('Open discipline cases', open.length.toLocaleString(), serious.length ? `${serious.length} high severity` : open.length ? 'Awaiting follow-up' : 'All resolved', serious.length ? 'serious' : open.length ? 'warning' : 'good', href('/office/discipline')));
-    if (serious.length) todo.push({ level: 'serious', icon: 'shield-alert', text: `${plural(serious.length, 'high-severity incident')} open`, href: href('/office/discipline') });
+    const fresh = open.filter(i => i.form === 'referral' && !i.office);
+    tiles.push(kpi('Open discipline', open.length.toLocaleString(), serious.length ? `${serious.length} high severity` : open.length ? 'Awaiting follow-up' : 'All resolved', serious.length ? 'serious' : open.length ? 'warning' : 'good', href('/office/discipline')));
+    if (fresh.length) todo.push({ level: 'serious', icon: 'flag', text: `${plural(fresh.length, 'new referral')} waiting for an office decision`, href: href('/office/discipline') });
+    if (serious.length) todo.push({ level: 'critical', icon: 'shield-alert', text: `${plural(serious.length, 'high-severity case')} open`, href: href('/office/discipline') });
     const concerns = open.filter(i => i.isConcern).length;
-    if (concerns) todo.push({ level: 'warning', icon: 'flag', text: `${plural(concerns, 'teacher concern')} to review`, href: href('/office/discipline') });
+    if (concerns) todo.push({ level: 'warning', icon: 'message-square-warning', text: `${plural(concerns, 'teacher concern')} to review`, href: href('/office/discipline') });
+  }
+  if (reqs) {
+    const open = reqs.docs.map(d => d.data()).filter(r => ['submitted', 'in_progress'].includes(r.status));
+    const cov = open.filter(r => r.type === 'coverage').length;
+    tiles.push(kpi('Staff requests', open.length.toLocaleString(), cov ? `${cov} need coverage now` : open.length ? 'Waiting for you' : 'All handled', cov ? 'serious' : open.length ? 'warning' : 'good', href('/office/requests')));
+    if (cov) todo.push({ level: 'critical', icon: 'hand', text: `${plural(cov, 'teacher')} waiting for classroom coverage`, href: href('/office/requests') });
+    const other = open.length - cov;
+    if (other) todo.push({ level: 'warning', icon: 'inbox', text: `${plural(other, 'staff request')} to answer`, href: href('/office/requests') });
   }
   if (svc) {
     const ieps = svc.docs.map(d => d.data()).filter(x => x.iep?.active);
     const overdue = ieps.filter(x => x.iep.annualReview && x.iep.annualReview < today).length;
     const soon = ieps.filter(x => { const d = x.iep.annualReview; return d && d >= today && (new Date(d + 'T12:00') - Date.now()) / 864e5 <= 30; }).length;
-    if (tiles.length < 4) tiles.push(kpi('Active IEPs', ieps.length.toLocaleString(), overdue ? `${overdue} reviews overdue` : soon ? `${soon} reviews due in 30 days` : 'Reviews up to date', overdue ? 'critical' : soon ? 'warning' : 'good', href('/office/services')));
     if (overdue) todo.push({ level: 'critical', icon: 'heart-handshake', text: `${plural(overdue, 'IEP annual review')} overdue`, href: href('/office/services') });
     if (soon) todo.push({ level: 'warning', icon: 'heart-handshake', text: `${plural(soon, 'IEP review')} due in the next 30 days`, href: href('/office/services') });
   }
-  if (settings && ctx.isAdmin && tiles.length < 4) {
+  if (pending?.size) todo.push({ level: 'warning', icon: 'user-plus', text: `${plural(pending.size, 'student sign-up')} waiting for approval`, href: href('/admin/students') });
+  if (settings && ctx.isAdmin) {
     const term = currentTerm(settings), pub = term && (settings.publishedTerms || []).includes(term.id);
-    tiles.push(kpi('Report cards', term ? escapeHtml(term.name) : '—', term ? (pub ? 'Published to families' : 'Not published yet') : 'Set up terms', term ? (pub ? 'good' : null) : 'warning', href('/office/reportcards')));
+    if (term && !pub && (new Date(term.end + 'T12:00') - Date.now()) / 864e5 <= 7) todo.push({ level: 'warning', icon: 'file-text', text: `${term.name} report cards aren't published yet`, href: href('/office/reportcards') });
   }
   const sev = { critical: 0, serious: 1, warning: 2 };
   todo.sort((a, b) => sev[a.level] - sev[b.level]);
-  $('#oh-kpis').innerHTML = tiles.join('');
-  $('#oh-todo').innerHTML = todo.length ? `<div class="card divide-y divide-white/[0.05] overflow-hidden">${todo.map(x => `<a href="${x.href}" class="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.03] transition-colors">${ico(STATUS[x.level][0], 'w-4 h-4 shrink-0 ' + STATUS[x.level][1])}<span class="flex-1 text-sm text-gray-200">${escapeHtml(x.text)}</span>${ico('chevron-right', 'w-4 h-4 text-gray-600')}</a>`).join('')}</div>`
-    : `<div class="card p-6 text-center">${ico('circle-check', 'w-7 h-7 st-good mx-auto mb-2')}<p class="text-sm text-gray-300">Nothing needs attention right now.</p></div>`;
-  refreshIcons();
+  return {
+    tiles: tiles.slice(0, 4).join(''),
+    todo: todo.length ? `<div class="card divide-y divide-white/[0.05] overflow-hidden">${todo.map(x => `<a href="${x.href}" class="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.03] transition-colors">${ico(STATUS[x.level][0], 'w-4 h-4 shrink-0 ' + STATUS[x.level][1])}<span class="flex-1 text-sm text-gray-200">${escapeHtml(x.text)}</span>${ico('chevron-right', 'w-4 h-4 text-gray-600')}</a>`).join('')}</div>`
+      : `<div class="card p-6 text-center">${ico('circle-check', 'w-7 h-7 st-good mx-auto mb-2')}<p class="text-sm text-gray-300">Nothing needs attention right now.</p></div>`,
+    count: todo.length,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DISCIPLINE HISTORY (student record tab)
+// Safety staff see every incident; other staff see referrals they wrote plus family-shared records;
+// students and parents see only family-shared records (disciplineRecords — no internal notes).
+// ═══════════════════════════════════════════════════════════════
+const DISC_STATUS = s => ['resolved', 'closed'].includes((s || 'open').toLowerCase()) ? ['good', 'Resolved'] : (s || '').toLowerCase() === 'under review' ? ['warning', 'Under review'] : ['warning', 'Open'];
+async function disciplineTab(ctx, el, student, t) {
+  const sid = student.uid, staff = ctx.isRealTeacher, full = ctx.can('safety');
+  const [inc, shared] = await Promise.all([
+    full ? getDocs(query(tcol(ctx, 'incidents'), where('studentUids', 'array-contains', sid))).then(sn => sn.docs.map(d => ({ id: d.id, ...d.data() })))
+      : staff ? getDocs(query(tcol(ctx, 'incidents'), where('reportedBy', '==', ctx.me.uid))).then(sn => sn.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => (x.studentUids || []).includes(sid))).catch(() => [])
+      : Promise.resolve([]),
+    getDocs(query(tcol(ctx, 'disciplineRecords'), where('studentUid', '==', sid))).then(sn => sn.docs.map(d => ({ id: d.id, ...d.data() }))).catch(() => []),
+  ]);
+  if (!live(t)) return;
+  const sharedIds = new Set(shared.map(x => x.incidentId));
+  if (staff) {
+    const list = [...inc].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const extra = full ? [] : shared.filter(x => !inc.some(i => i.id === x.incidentId));
+    const open = list.filter(x => DISC_STATUS(x.status)[1] !== 'Resolved').length;
+    const susp = list.reduce((a, x) => a + Number(x.office?.['officeActions|Out-of-school suspension|days'] || 0), 0);
+    const isss = list.reduce((a, x) => a + Number(x.office?.['officeActions|In-school suspension|days'] || 0), 0);
+    el.innerHTML = `<div class="flex flex-wrap items-center justify-between gap-3 mb-5"><p class="text-sm text-gray-400 max-w-2xl">${full ? 'Every referral, incident and concern involving this student.' : 'Referrals you wrote about this student, plus anything the office has shared with the family.'}</p>
+        <div class="flex gap-2"><a href="${buildUrl(`/${ctx.slug}/staff/new/referral?student=${sid}`)}" class="btn btn-primary">${ico('flag', 'w-4 h-4')} Write referral</a>${full ? `<button data-rec="concern" class="btn btn-secondary">${ico('plus', 'w-4 h-4')} Quick incident</button>` : ''}</div></div>
+      ${full ? `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">${statTile('Referrals & incidents', list.length)}${statTile('Open', open, open ? 'Needs follow-up' : 'All resolved', open ? 'warning' : 'good')}${statTile('Out-of-school suspension', `${susp}<span class="text-gray-500 text-lg"> days</span>`)}${statTile('In-school suspension', `${isss}<span class="text-gray-500 text-lg"> days</span>`)}</div>` : ''}
+      ${list.length ? `<div class="card overflow-hidden divide-y divide-white/[0.05]">${list.map(x => {
+        const [lvl, lbl] = DISC_STATUS(x.status), sev = SEVERITY[x.severity];
+        return `<button data-incident="${escapeHtml(x.id)}" class="w-full text-left flex flex-wrap sm:flex-nowrap items-center gap-3 px-5 py-3.5 hover:bg-white/[0.03]">
+          <div class="w-24 shrink-0 text-xs text-gray-400 tabular-nums">${escapeHtml(formatDate((x.date || '') + 'T12:00'))}</div>
+          <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(x.type || 'Incident')} ${x.form === 'referral' ? badge('Referral', 'red') : x.isConcern ? badge('Concern', 'blue') : badge('Incident', 'muted')} ${sharedIds.has(x.id) ? badge('Shared with family', 'violet') : ''}</div>
+            <div class="text-[11px] text-gray-500 truncate">${escapeHtml(x.location || '')}${x.reportedByName ? ' · by ' + escapeHtml(x.reportedByName) : ''}${x.office ? ' · ' + escapeHtml(officeActionsText(x.office)) : ''}</div></div>
+          ${sev ? statusChip(sev[1], sev[0]) : ''} ${statusChip(lvl, lbl)}</button>`;
+      }).join('')}</div>` : emptyState({ icon: 'shield-check', tone: 'green', title: 'No discipline records', text: full ? 'Nothing has been reported for this student.' : 'You haven’t written any referrals for this student.' })}
+      ${extra.length ? `<h3 class="label mt-8">Shared with the family</h3>${familyDisciplineHTML(extra)}` : ''}`;
+    el.onclick = e => {
+      const b = e.target.closest('[data-incident]'); if (!b) return;
+      const x = list.find(i => i.id === b.dataset.incident);
+      if (x?.form === 'referral') navigate(`/${ctx.slug}/referrals/${x.id}`); else if (full) openIncidentModal(ctx, x);
+    };
+    return;
+  }
+  el.innerHTML = `<p class="text-sm text-gray-400 mb-5 max-w-2xl">Discipline records the school has shared with ${ctx.isGuardian ? 'your family' : 'you'}. Questions? Contact the administrator listed on the record.</p>`
+    + (shared.length ? familyDisciplineHTML(shared) : emptyState({ icon: 'shield-check', tone: 'green', title: 'No discipline records', text: `${ctx.isGuardian ? escapeHtml(displayNameOf(student)) + ' has' : 'You have'} no discipline records on file.` }));
+}
+function officeActionsText(office) {
+  return (office.officeActions || []).map(a => {
+    const days = office[`officeActions|${a}|days`];
+    if (a === 'Out-of-school suspension') return `OSS ${days || '?'} day(s)${office['officeActions|Out-of-school suspension|returnOn'] ? ', return ' + formatDate(office['officeActions|Out-of-school suspension|returnOn'] + 'T12:00') : ''}`;
+    if (a === 'In-school suspension') return `ISS ${days || '?'} day(s)`;
+    if (a === 'Detention(s)') return `Detention${(office['officeActions|Detention(s)|dates'] || []).length > 1 ? 's' : ''}`;
+    return a;
+  }).join(', ');
+}
+function familyDisciplineHTML(list) {
+  return `<div class="space-y-3">${[...list].sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(x => { const [lvl, lbl] = DISC_STATUS(x.status); return `<article class="card p-5">
+    <div class="flex flex-wrap items-start justify-between gap-3"><div><div class="text-xs text-gray-500 mb-1">${escapeHtml(formatDate((x.date || '') + 'T12:00'))}${x.location ? ' · ' + escapeHtml(x.location) : ''}</div><h3 class="text-white font-medium">${escapeHtml(x.behavior || 'Behavior referral')}</h3></div>${statusChip(lvl, lbl)}</div>
+    ${(x.behaviors || []).length > 1 ? `<p class="text-xs text-gray-400 mt-2">Also noted: ${escapeHtml(x.behaviors.filter(b => b !== x.behavior).join(', '))}</p>` : ''}
+    ${x.actions ? `<div class="mt-3 p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]"><div class="text-[11px] uppercase tracking-wider text-gray-500 mb-1">Action taken</div><p class="text-sm text-gray-200">${escapeHtml(x.actions)}</p></div>` : ''}
+    ${x.summary ? `<p class="text-sm text-gray-300 mt-3 whitespace-pre-wrap">${escapeHtml(x.summary)}</p>` : ''}
+    <p class="text-xs text-gray-500 mt-3">${ico('user', 'w-3.5 h-3.5 inline -mt-0.5')} ${escapeHtml(x.adminName || 'School administration')}${x.adminPhone ? ` · <a class="text-[#F59E0B] hover:underline" href="tel:${escapeHtml(x.adminPhone.replace(/[^\d+]/g, ''))}">${escapeHtml(x.adminPhone)}</a>` : ''}</p></article>`; }).join('')}</div>`;
 }
