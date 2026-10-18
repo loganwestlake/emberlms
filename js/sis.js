@@ -4,14 +4,14 @@ import {
   doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, getDocs,
   serverTimestamp, arrayUnion, arrayRemove, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
-import {
+const {
   db, $, $$, ico, refreshIcons, escapeHtml, plural, displayNameOf, toDate, tsMillis, recency, formatDate, formatDateTime,
   timeAgo, toDateInput, render, setTitle, showError, iconTile, badge, avatar, skeletonRows, emptyState, errorBox, dataTable,
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
   GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, routeTokenNow, randInt, renderRoute, districtShell, getDistrictSchools,
-  officeMenu, OFFICE_TRAY
-} from './app.js';
+  officeMenu, OFFICE_TRAY, notify, officeStaffUids, guardianUidsOf, notifItems, notifRow, notifUnread, markNotifRead, markAllNotifsRead, NOTIF_KINDS
+} = globalThis.__ember; // helpers from app.js (see EMBER_API there)
 
 // ═══════════════════════════════════════════════════════════════
 // SETTINGS (bell schedule, terms, grade scale, report card template)
@@ -267,7 +267,7 @@ export async function viewRollCall(ctx, course) {
     subtitle: `${escapeHtml(periodName(settings, course.periodId))}${course.room ? ' · Room ' + escapeHtml(course.room) : ''}`,
     actions: `<label class="sr-only" for="rc-date">Date</label><input id="rc-date" type="date" class="input !py-2 !w-auto" value="${escapeHtml(date)}" max="${todayISO()}">`
   }) + `<div class="grid xl:grid-cols-[minmax(0,1fr)_300px] gap-8 max-w-6xl"><div id="rc-main" class="min-w-0">${skeletonRows(6)}</div><aside id="rc-side" class="space-y-6"></aside></div>`, course));
-  let roster = [], marks = {}, notes = {}, savedAt = null, flags = {};
+  let roster = [], marks = {}, notes = {}, savedAt = null, flags = {}, loadedMarks = {};
   const main = $('#rc-main');
   const load = async () => {
     main.innerHTML = skeletonRows(6);
@@ -282,6 +282,7 @@ export async function viewRollCall(ctx, course) {
       if (!live(t) || want !== date) return;
       roster = r; marks = {}; notes = {};
       recs.docs.forEach(d => { const x = d.data(); marks[x.studentUid] = x.code; if (x.note) notes[x.studentUid] = x.note; });
+      loadedMarks = { ...marks };
       savedAt = sess.exists() ? sess.data().takenAt : null;
       flags = Object.fromEntries(studs.map(s => [s.uid, s]));
       draw();
@@ -351,6 +352,11 @@ export async function viewRollCall(ctx, course) {
         });
         batch.set(tdoc(ctx, 'attendanceSessions', `${date}_${course.id}`), { date, courseId: course.id, courseTitle: course.title || '', periodId: course.periodId || null, teacherUid: course.ownerUid || ctx.me.uid, counts, total: roster.length, takenBy: ctx.me.uid, takenAt: serverTimestamp() });
         await batch.commit();
+        // Families hear about new absences/tardies once (not again on every re-save).
+        const changed = roster.filter(s => ['A', 'T'].includes(marks[s.uid]) && loadedMarks[s.uid] !== marks[s.uid]);
+        loadedMarks = { ...marks };
+        const when = new Date(date + 'T12:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+        changed.forEach(s => guardianUidsOf(ctx, [s.uid]).then(to => notify(ctx, { to, kind: 'attendance', title: `${s.name} was marked ${ATT_CODES[marks[s.uid]].label.toLowerCase()}`, body: `${course.title || 'Class'}${course.periodId ? ' · ' + periodName(settings, course.periodId) : ''} · ${when}`, link: `/${ctx.slug}/record/${s.uid}/attendance` })).catch(e => console.warn(e)));
         savedAt = new Date(); toast('Attendance saved'); draw(); drawSide();
       } catch (e) { console.error(e); toast(e.message || 'Could not save', 'error'); }
     });
@@ -823,7 +829,11 @@ export async function viewReportCards(ctx) {
         const on = !published;
         if (on && !await confirmDialog({ title: `Publish ${term.name} report cards?`, message: 'Students and families will be able to view them in Family Access right away.', confirmLabel: 'Publish' })) return;
         withBusy(btn, 'Saving…', async () => {
-          try { await setDoc(doc(db, 'tenants', ctx.slug, 'sis', 'settings'), { publishedTerms: on ? arrayUnion(termId) : arrayRemove(termId) }, { merge: true }); settings = await getSettings(ctx, { fresh: true }); toast(on ? 'Published to families' : 'Unpublished', on ? 'success' : 'info'); load(); }
+          try { await setDoc(doc(db, 'tenants', ctx.slug, 'sis', 'settings'), { publishedTerms: on ? arrayUnion(termId) : arrayRemove(termId) }, { merge: true }); settings = await getSettings(ctx, { fresh: true }); toast(on ? 'Published to families' : 'Unpublished', on ? 'success' : 'info'); load();
+            if (on) {
+              notify(ctx, { to: students.map(x => x.uid), kind: 'reportcard', title: `${term.name} report card is ready`, body: ctx.tenant.name, link: `/${ctx.slug}/record/me/reportcards` }).catch(e => console.warn(e));
+              getDocs(tcol(ctx, 'guardianLinks')).then(g => notify(ctx, { to: [...new Set(g.docs.map(d => d.data().guardianUid))], kind: 'reportcard', title: `${term.name} report cards are ready`, body: `View them in Family Access · ${ctx.tenant.name}`, link: `/${ctx.slug}` })).catch(e => console.warn(e));
+            } }
           catch (ex) { toast(ex.message, 'error'); }
         });
       });
@@ -1016,7 +1026,7 @@ export async function viewRecord(ctx, sidParam, tab = 'overview') {
       if (!live(t)) return;
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
       el.innerHTML = `<div class="flex justify-end mb-4"><button data-rec="concern" class="btn btn-primary">${ico('plus')} Incident</button></div>` + (list.length ? incidentList(list) : emptyState({ icon: 'shield-check', title: 'No incidents on record' }));
-      el.addEventListener('click', e => { const b = e.target.closest('[data-incident]'); if (b) openIncidentModal(ctx, list.find(x => x.id === b.dataset.incident)); });
+      el.addEventListener('click', e => { const b = e.target.closest('[data-incident]'); if (!b) return; const x = list.find(i => i.id === b.dataset.incident); if (x?.form === 'referral') navigate(`/${ctx.slug}/referrals/${x.id}`); else openIncidentModal(ctx, x); });
     } else if (tab === 'family') {
       await familyTab(ctx, el, student);
     }
@@ -1328,31 +1338,32 @@ const SEVERITY = { low: ['Low', 'good'], medium: ['Medium', 'warning'], high: ['
 function incidentList(list) {
   return `<div class="card overflow-hidden divide-y divide-white/[0.05]">${list.map(x => `<button data-incident="${x.id}" class="w-full text-left flex flex-wrap sm:flex-nowrap items-center gap-3 px-5 py-3.5 hover:bg-white/[0.03]">
     <div class="w-20 shrink-0 text-xs text-gray-400">${escapeHtml(formatDate((x.date || '') + 'T12:00'))}</div>
-    <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(x.type || 'Incident')}${x.isConcern ? ' <span class="badge badge-blue">Staff concern</span>' : ''}</div><div class="text-[11px] text-gray-500 truncate">${escapeHtml((x.studentNames || []).join(', '))}${x.location ? ' · ' + escapeHtml(x.location) : ''}</div></div>
+    <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(x.type || 'Incident')}${x.form === 'referral' ? ' <span class="badge badge-red">Referral</span>' : ''}${x.isConcern ? ' <span class="badge badge-blue">Staff concern</span>' : ''}</div><div class="text-[11px] text-gray-500 truncate">${escapeHtml((x.studentNames || []).join(', '))}${x.location ? ' · ' + escapeHtml(x.location) : ''}</div></div>
     ${statusChip(SEVERITY[x.severity]?.[1] || 'warning', SEVERITY[x.severity]?.[0] || 'Medium')}
-    ${x.status === 'closed' ? badge('Closed', 'muted') : badge('Open', 'amber')}</button>`).join('')}</div>`;
+    ${['closed', 'resolved'].includes((x.status || '').toLowerCase()) ? badge('Resolved', 'muted') : (x.status || '').toLowerCase() === 'under review' ? badge('Under review', 'blue') : badge('Open', 'amber')}</button>`).join('')}</div>`;
 }
 export async function viewIncidents(ctx) {
   if (!ctx.can('safety')) return navigate(`/${ctx.slug}`, { replace: true });
   const t = routeTokenNow();
   setTitle('Discipline & safety', ctx.tenant.name);
   let status = 'open', type = '', q = '';
-  render(tenantPage(ctx, 'sis-safety', pageHeader({ eyebrow: 'Office', title: 'Discipline & safety', subtitle: 'Referrals, incidents, safety concerns and follow-up. Teachers can report concerns; only admins and Safety staff can see this log.', actions: `<button id="inc-new" class="btn btn-primary">${ico('plus')} Incident</button>` }) + `
+  render(tenantPage(ctx, 'sis-safety', pageHeader({ eyebrow: 'Office', title: 'Discipline & safety', subtitle: 'Referrals, incidents, safety concerns and follow-up. Teachers can report concerns; only admins and Safety staff can see this log.', actions: `<div class="flex flex-wrap gap-2"><a href="${buildUrl(`/${ctx.slug}/staff/new/referral`)}" class="btn btn-primary">${ico('flag')} New referral</a><button id="inc-new" class="btn btn-secondary">${ico('plus')} Quick incident</button></div>` }) + `
     <div class="max-w-6xl"><div class="flex flex-wrap items-center gap-3 mb-4"><div class="segmented" role="group"><button data-status="open" aria-pressed="true">Open</button><button data-status="closed" aria-pressed="false">Closed</button><button data-status="" aria-pressed="false">All</button></div>
-      <select id="inc-type" class="input !py-2 !w-auto" aria-label="Type"><option value="">All types</option>${INCIDENT_TYPES.map(x => `<option>${x}</option>`).join('')}</select>${searchBox('inc-q', 'Search students…')}</div><div id="inc">${skeletonRows(5)}</div></div>`));
+      <select id="inc-type" class="input !py-2 !w-auto" aria-label="Type"><option value="">All types</option></select>${searchBox('inc-q', 'Search students…')}</div><div id="inc">${skeletonRows(5)}</div></div>`));
   let list = [];
   const el = $('#inc');
   const draw = () => {
     $$('[data-status]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.status === status)));
-    const shown = list.filter(x => (!status || (x.status || 'open') === status) && (!type || x.type === type) && (!q || (x.studentNames || []).join(' ').toLowerCase().includes(q)));
+    const isClosed = x => ['closed', 'resolved'].includes((x.status || 'open').toLowerCase());
+    const shown = list.filter(x => (!status || (status === 'closed' ? isClosed(x) : !isClosed(x))) && (!type || x.type === type) && (!q || (x.studentNames || []).join(' ').toLowerCase().includes(q)));
     el.innerHTML = shown.length ? incidentList(shown) : emptyState({ icon: 'shield-check', tone: 'green', title: status === 'open' ? 'No open incidents' : 'Nothing found' });
     refreshIcons();
   };
-  unsubs.push(onSnapshot(tcol(ctx, 'incidents'), snap => { list = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.date || '').localeCompare(a.date || '') || recency(b.createdAt) - recency(a.createdAt)); if (live(t)) draw(); }, e => { el.innerHTML = errorBox(e); refreshIcons(); }));
+  unsubs.push(onSnapshot(tcol(ctx, 'incidents'), snap => { list = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.date || '').localeCompare(a.date || '') || recency(b.createdAt) - recency(a.createdAt)); if (!live(t)) return; const ts = $('#inc-type'); if (ts) ts.innerHTML = `<option value="">All types</option>${[...new Set([...INCIDENT_TYPES, ...list.map(x => x.type).filter(Boolean)])].sort().map(x => `<option ${x === type ? 'selected' : ''}>${escapeHtml(x)}</option>`).join('')}`; draw(); }, e => { el.innerHTML = errorBox(e); refreshIcons(); }));
   $$('[data-status]').forEach(b => b.addEventListener('click', () => { status = b.dataset.status; draw(); }));
   $('#inc-type').addEventListener('change', e => { type = e.target.value; draw(); });
   $('#inc-q').addEventListener('input', e => { q = e.target.value.trim().toLowerCase(); draw(); });
-  el.addEventListener('click', e => { const b = e.target.closest('[data-incident]'); if (b) openIncidentModal(ctx, list.find(x => x.id === b.dataset.incident)); });
+  el.addEventListener('click', e => { const b = e.target.closest('[data-incident]'); if (!b) return; const x = list.find(i => i.id === b.dataset.incident); if (x?.form === 'referral') navigate(`/${ctx.slug}/referrals/${x.id}`); else openIncidentModal(ctx, x); });
   $('#inc-new').addEventListener('click', () => openIncidentModal(ctx));
 }
 export async function openIncidentModal(ctx, existing = null, preset = [], { concern = false } = {}) {
@@ -1388,7 +1399,10 @@ export async function openIncidentModal(ctx, existing = null, preset = [], { con
     withBusy(e.currentTarget.querySelector('button:not([data-close])'), 'Saving…', async () => {
       try {
         if (existing) await updateDoc(tdoc(ctx, 'incidents', existing.id), { ...data, updatedAt: serverTimestamp(), updatedBy: ctx.me.uid });
-        else await addDoc(tcol(ctx, 'incidents'), { ...data, status: data.status || 'open', isConcern: concern, reportedBy: ctx.me.uid, reportedByName: ctx.me.name, createdAt: serverTimestamp() });
+        else {
+          const ref = await addDoc(tcol(ctx, 'incidents'), { ...data, status: data.status || 'open', isConcern: concern, reportedBy: ctx.me.uid, reportedByName: ctx.me.name, createdAt: serverTimestamp() });
+          officeStaffUids(ctx, 'safety').then(to => notify(ctx, { to, kind: 'incident', title: `${concern ? 'New concern' : 'New incident'}: ${data.type}`, body: `${data.studentNames.join(', ') || 'No student named'} · reported by ${ctx.me.name}`, link: `/${ctx.slug}/referrals/${ref.id}` })).catch(e => console.warn(e));
+        }
         m.close(); toast(concern ? 'Concern sent to administrators' : 'Incident saved');
       } catch (ex) { showError(err, ex.message); }
     });

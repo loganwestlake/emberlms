@@ -17,6 +17,8 @@ import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL, de
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
+// Cache-busting: index.html loads app.js?v=…, and lazy modules are requested with the same version.
+const BUILD = new URL(import.meta.url).search;
 const BASE_PATH = '/emberlms';
 const APP_NAME = 'Ember LMS';
 const RESERVED = ['login', 'signup', 'picker', 'onboard', 'api', 'assets', 'district'];
@@ -456,7 +458,7 @@ function parseRoute() {
 // ═══════════════════════════════════════════════════════════════
 let currentUser = null;
 let authReady = false;
-let unsubs = [];
+const unsubs = [];
 let routeToken = 0;
 let viewAsStudent = ss('ember_view_as_student') === '1';
 let signupWizard = null;
@@ -464,7 +466,7 @@ let suppressAuthRouting = false;
 let redirectAfterSignOut = false;
 const live = t => t === routeToken; // false once the user has navigated elsewhere
 
-function clearSubs() { unsubs.forEach(u => { try { u(); } catch (e) {} }); unsubs = []; }
+function clearSubs() { unsubs.splice(0).forEach(u => { try { u(); } catch (e) {} }); } // emptied in place: lazy modules hold this array
 function setViewAsStudent(val) { viewAsStudent = val; ss('ember_view_as_student', val ? '1' : '0'); renderRoute(); }
 function closeSidebar() { document.body.classList.remove('sidebar-open'); }
 async function authFlow(fn) { suppressAuthRouting = true; try { return await fn(); } finally { suppressAuthRouting = false; } }
@@ -1094,7 +1096,7 @@ function renderWizard() {
       if (code.length !== 8) return showError(err, 'Family Access codes are 8 characters long.');
       withBusy(e.currentTarget.querySelector('[type=submit]'), 'Checking…', async () => {
         try {
-          const info = await (await import('./sis.js')).lookupFamilyCode(code);
+          const info = await (await import('./sis.js' + BUILD)).lookupFamilyCode(code);
           if (!info) return showError(err, "That code didn't match a student. Check it with the school office.");
           const school = await getTenant(info.tenantId).catch(() => null);
           Object.assign(w.data, { familyCode: code, family: info, schoolName: school?.name || info.tenantId });
@@ -1119,7 +1121,7 @@ function renderWizard() {
     nameEl.addEventListener('input', () => { w.data.guardianName = nameEl.value; });
     const finish = async user => {
       const name = nameEl.value.trim() || user.displayName || (user.email ? user.email.split('@')[0] : 'Parent');
-      await (await import('./sis.js')).linkGuardian(null, user, info, name);
+      await (await import('./sis.js' + BUILD)).linkGuardian(null, user, info, name);
       rememberTenant(user.uid, info.tenantId);
       signupWizard = null;
       toast(`Welcome! You're linked to ${info.studentName}.`);
@@ -1532,6 +1534,90 @@ function watchInbox(ctx) {
   }, () => {});
 }
 
+// ═══════════════════════════════════════════════════════════════
+// NOTIFICATIONS (top-level `notifications`: one doc per recipient, or per district for district admins)
+// ═══════════════════════════════════════════════════════════════
+const NOTIF_KINDS = {
+  referral: ['flag', 'red', 'Discipline'], incident: ['shield-alert', 'red', 'Discipline'], request: ['clipboard-list', 'teal', 'Staff requests'],
+  decision: ['circle-check', 'green', 'Staff requests'], coverage: ['hand', 'amber', 'Coverage'], plan: ['clipboard-check', 'violet', 'Lesson plans'],
+  grade: ['award', 'amber', 'Grades'], attendance: ['calendar-check', 'blue', 'Attendance'], reportcard: ['file-text', 'violet', 'Report cards'],
+  message: ['inbox', 'blue', 'Messages'], system: ['bell', 'muted', 'General'],
+};
+const notif = { key: null, unsubs: [], personal: [], district: [], ready: false, seen: new Set() };
+const notifUnread = n => n.toDistrict ? !(n.readBy || []).includes(currentUser?.uid) : !n.read;
+function notifItems() { return [...notif.personal, ...notif.district].sort((a, b) => tsMillis(b.createdAt) - tsMillis(a.createdAt)); }
+function stopNotifications() { notif.unsubs.splice(0).forEach(u => { try { u(); } catch (e) {} }); Object.assign(notif, { key: null, personal: [], district: [], ready: false }); notif.seen.clear(); paintNotifBadges(); }
+function paintNotifBadges() {
+  const n = notifItems().filter(notifUnread).length;
+  $$('[data-notif-badge]').forEach(b => { b.textContent = n > 99 ? '99+' : String(n); b.classList.toggle('hidden', !n); });
+  if (trayEl?.dataset.kind === 'notifications') { const body = trayEl.querySelector('[data-tray-body]'); if (body) { body.innerHTML = notifTrayHTML(); refreshIcons(); } }
+  document.dispatchEvent(new CustomEvent('ember:notifications'));
+}
+// Listens for the signed-in user's notifications (and their district's, for district admins) across every page.
+function watchNotifications() {
+  const uid = currentUser?.uid;
+  if (!uid) return stopNotifications();
+  const districtId = ls(`ember_district:${uid}`) || '';
+  const key = `${uid}|${districtId}`;
+  if (notif.key === key) return;
+  stopNotifications();
+  notif.key = key;
+  const onSnap = which => snap => {
+    const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (notif.ready) items.filter(n => !notif.seen.has(n.id) && notifUnread(n)).slice(0, 3).forEach(n => toast(n.title, 'info'));
+    items.forEach(n => notif.seen.add(n.id));
+    notif[which] = items;
+    paintNotifBadges();
+  };
+  notif.unsubs.push(onSnapshot(query(collection(db, 'notifications'), where('toUid', '==', uid)), onSnap('personal'), e => console.warn('notifications', e.code || e)));
+  if (districtId) notif.unsubs.push(onSnapshot(query(collection(db, 'notifications'), where('toDistrict', '==', districtId)), onSnap('district'), e => console.warn('district notifications', e.code || e)));
+  setTimeout(() => { if (notif.key === key) notif.ready = true; }, 2500);
+}
+async function markNotifRead(n) {
+  if (!notifUnread(n)) return;
+  const ref = doc(db, 'notifications', n.id);
+  try { await updateDoc(ref, n.toDistrict ? { readBy: arrayUnion(currentUser.uid) } : { read: true }); } catch (e) { console.warn(e); }
+}
+async function markAllNotifsRead() { await Promise.all(notifItems().filter(notifUnread).map(markNotifRead)); }
+function notifRow(n, { compact = false } = {}) {
+  const [icon, tone, label] = NOTIF_KINDS[n.kind] || NOTIF_KINDS.system;
+  const unread = notifUnread(n);
+  return `<a href="${n.link ? buildUrl(n.link) : '#'}" data-notif="${escapeHtml(n.id)}" class="notif-row ${unread ? 'is-unread' : ''} flex items-start gap-3 ${compact ? 'px-3 py-3 -mx-3' : 'px-5 py-4'} rounded-lg hover:bg-white/[0.04] transition-colors">
+    ${iconTile(icon, tone)}
+    <span class="flex-1 min-w-0"><span class="flex items-start gap-2"><span class="text-sm ${unread ? 'text-white font-medium' : 'text-gray-300'} ${compact ? 'line-clamp-2' : ''}">${escapeHtml(n.title || '')}</span>${unread ? '<span class="w-2 h-2 mt-1.5 rounded-full bg-[#F59E0B] shrink-0 ml-auto" aria-label="unread"></span>' : ''}</span>
+      ${n.body ? `<span class="block text-xs text-gray-400 mt-0.5 ${compact ? 'line-clamp-2' : ''}">${escapeHtml(n.body)}</span>` : ''}
+      <span class="block text-[11px] text-gray-500 mt-1">${escapeHtml(label)}${n.fromName ? ' · ' + escapeHtml(n.fromName) : ''} · ${escapeHtml(timeAgo(n.createdAt))}</span></span></a>`;
+}
+function notifCenterHref() {
+  const { ctx, district } = layoutState;
+  return ctx ? `/${ctx.slug}/notifications` : district ? `/district/${district.id}/notifications` : null;
+}
+function notifTrayHTML() {
+  const items = notifItems().slice(0, 12), unread = notifItems().filter(notifUnread).length, href = notifCenterHref();
+  return `<div class="flex items-center justify-between mb-3"><span class="text-xs text-gray-500">${unread ? `${unread} unread` : 'All caught up'}</span>${unread ? `<button data-notif-readall class="text-xs text-[#F59E0B] hover:underline">Mark all as read</button>` : ''}</div>
+    ${items.length ? `<div class="space-y-1">${items.map(n => notifRow(n, { compact: true })).join('')}</div>` : `<div class="text-center py-10">${ico('bell-off', 'w-8 h-8 text-gray-600 mx-auto mb-3')}<p class="text-sm text-gray-400">No notifications yet.</p><p class="text-xs text-gray-600 mt-1">Referrals, requests, grades and other updates will show up here.</p></div>`}
+    ${href ? `<a href="${buildUrl(href)}" class="btn btn-secondary btn-block mt-5">Open notification center</a>` : ''}`;
+}
+// Send one notification per recipient (never to yourself). `toDistrict` reaches every admin of a district.
+async function notify(ctx, { to = [], toDistrict = null, kind = 'system', title, body = '', link = '' }) {
+  const base = { tenantId: ctx.slug, kind, title: String(title).slice(0, 140), body: String(body || '').slice(0, 400), link, fromUid: currentUser.uid, fromName: ctx.me?.name || '', createdAt: serverTimestamp() };
+  const uids = [...new Set(to.filter(u => u && u !== currentUser.uid))];
+  const jobs = uids.map(u => addDoc(collection(db, 'notifications'), { ...base, toUid: u, read: false }));
+  if (toDistrict) jobs.push(addDoc(collection(db, 'notifications'), { ...base, toDistrict, readBy: [] }));
+  const res = await Promise.allSettled(jobs);
+  res.filter(r => r.status === 'rejected').forEach(r => console.warn('notify failed', r.reason));
+}
+// Recipient lookups
+async function officeStaffUids(ctx, cap = null) {
+  const snap = await getDocs(collection(db, 'tenants', ctx.slug, 'users'));
+  return snap.docs.filter(d => d.data().role === 'admin' || (cap && (d.data().caps || []).includes(cap))).map(d => d.id);
+}
+async function guardianUidsOf(ctx, sids) {
+  const out = new Set();
+  await Promise.all(sids.map(async sid => { try { (await getDocs(query(collection(db, 'tenants', ctx.slug, 'guardianLinks'), where('studentUid', '==', sid)))).docs.forEach(d => out.add(d.data().guardianUid)); } catch (e) {} }));
+  return [...out];
+}
+
 function globalNavHTML(active) {
   const { ctx, district } = layoutState;
   const accent = district ? 'violet' : 'amber';
@@ -1547,10 +1633,12 @@ function globalNavHTML(active) {
     ${hasOffice(ctx) ? tray('office', ico('building-2'), 'Office') : ''}
     ${link('dashboard', 'layout-dashboard', 'Dashboard', home)}
     ${ctx && !ctx.isGuardian ? tray('courses', ico('book-open'), 'Courses') : ''}
+    ${ctx?.isRealTeacher ? link('staff', 'clipboard-list', 'Staff Hub', `${home}/staff`) : ''}
     ${ctx?.isRealTeacher && !hasOffice(ctx) ? link('students', 'contact', 'Students', `${home}/sis`) : ''}
     ${ctx ? link('calendar', 'calendar-days', 'Calendar', `${home}/calendar`) : ''}
     ${ctx ? link('inbox', 'inbox', 'Inbox', `${home}/inbox`, `<span class="gnav-badge ${inbox.count ? '' : 'hidden'}" data-inbox-badge aria-label="unread conversations">${inbox.count > 99 ? '99+' : inbox.count}</span>`) : ''}
     ${ctx?.isRealTeacher ? link('commons', 'library', 'Commons', `${home}/commons`) : ''}
+    ${currentUser ? tray('notifications', `<span class="relative inline-flex">${ico('bell')}<span class="gnav-badge ${notifItems().some(notifUnread) ? '' : 'hidden'}" data-notif-badge aria-label="unread notifications">${notifItems().filter(notifUnread).length}</span></span>`, 'Alerts') : ''}
     ${tray('help', ico('circle-help'), 'Help')}
   </nav>`;
 }
@@ -1602,7 +1690,7 @@ async function openTray(kind) {
   const same = trayEl?.dataset.kind === kind;
   closeTray();
   if (same) return;
-  const titles = { account: 'Account', admin: 'Admin', courses: 'Courses', help: 'Help' };
+  const titles = { account: 'Account', admin: 'Admin', office: 'Office', staff: 'Staff Hub', courses: 'Courses', help: 'Help', notifications: 'Notifications' };
   const wrap = document.createElement('div');
   wrap.dataset.kind = kind;
   wrap.innerHTML = `<div class="tray-backdrop" data-tray-close></div>
@@ -1624,6 +1712,7 @@ async function openTray(kind) {
     if (kind === 'account') fill(await accountTrayHTML());
     else if (kind === 'admin') fill(adminTrayHTML());
     else if (kind === 'office') fill(officeTrayHTML());
+    else if (kind === 'notifications') fill(notifTrayHTML());
     else if (kind === 'courses') fill(await coursesTrayHTML());
     else if (kind === 'help') fill(helpTrayHTML());
   } catch (e) { console.error(e); fill(errorBox(e)); }
@@ -1688,7 +1777,7 @@ const OFFICE_TRAY = {
   'office-home': ['layout-grid', 'Today in the office'], 'sis-directory': ['contact', 'Search every student record'],
   'sis-attendance': ['calendar-check', 'Daily view, trends, chronic absence'], 'sis-schedule': ['calendar-range', 'Periods, rooms, conflicts'],
   'sis-reportcards': ['file-text', 'Grade entry, publish, print'], 'sis-services': ['heart-handshake', 'IEPs, 504 plans, English learners'],
-  'sis-safety': ['shield-alert', 'Incidents, referrals, concerns'], 'sis-activities': ['trophy', 'Clubs, teams, join requests'], 'sis-setup': ['settings-2', 'Bell schedule, terms, grade scale'],
+  'sis-safety': ['shield-alert', 'Incidents, referrals, concerns'], 'sis-activities': ['trophy', 'Clubs, teams, join requests'], 'staff-requests': ['clipboard-list', 'Call-outs, subs, coverage, work orders'], 'sis-setup': ['settings-2', 'Bell schedule, terms, grade scale'],
 };
 function officeTrayHTML() {
   const { ctx } = layoutState;
@@ -1760,22 +1849,24 @@ async function viewDistrict(districtId, segs = []) {
     return render(centeredMessage({ icon: 'lock', tone: 'red', title: 'Access denied', text: "You aren't a district administrator for this district.", actions: `<button data-signout class="btn btn-secondary">Switch account</button>` }));
   }
   ls(`ember_district:${currentUser.uid}`, districtId);
+  watchNotifications();
   const dctx = { districtId, district, t };
   const sub = segs[0] || 'overview';
   if (sub === 'schools') return viewDistrictSchools(dctx);
   if (sub === 'teachers') return viewDistrictTeachers(dctx);
   if (sub === 'planning') return viewDistrictPlanning(dctx);
-  const sis = await import('./sis.js');
+  const sis = await import('./sis.js' + BUILD);
   if (!live(t)) return;
   if (sub === 'attendance') return sis.viewDistrictAttendance(dctx);
   if (sub === 'students') return sis.viewDistrictStudents(dctx);
   if (sub === 'safety') return sis.viewDistrictSafety(dctx);
+  if (sub === 'notifications') return (await import('./staff.js' + BUILD)).viewDistrictNotifications(dctx);
   return sis.viewDistrictHome(dctx);
 }
 function districtShell({ districtId, district }, active, header, body) {
   layoutState = { ctx: null, district: { id: districtId, ...district }, course: null };
   const p = s => buildUrl(`/district/${districtId}${s}`);
-  const labels = { overview: 'Dashboard', schools: 'Schools', teachers: 'Teachers', planning: 'Lesson plans', attendance: 'Attendance', students: 'Students', safety: 'Safety' };
+  const labels = { overview: 'Dashboard', schools: 'Schools', teachers: 'Teachers', planning: 'Lesson plans', attendance: 'Attendance', students: 'Students', safety: 'Safety', notifications: 'Notifications' };
   const subnav = subnavHTML({
     accent: 'violet', eyebrow: 'District', title: district.name || districtId, items: [
       { href: p(''), label: 'Dashboard', active: active === 'overview' }, { href: p('/schools'), label: 'Schools', active: active === 'schools' },
@@ -1992,13 +2083,17 @@ async function viewTenant(slug, segs) {
   const teacherOnly = fn => ctx.isRealTeacher ? fn() : viewNotFound();
   const adminOnly = fn => ctx.isAdmin ? fn() : viewNotFound();
   // If the user navigates away while sis.js is still downloading, drop this render.
-  const sis = async () => { const m = await import('./sis.js'); if (!live(t)) throw Object.assign(new Error('stale'), { stale: true }); return m; };
-  if (ctx.isGuardian && !['dashboard', 'record', 'activities', 'inbox', 'calendar', 'announcements'].includes(sub || 'dashboard')) return navigate('/' + slug, { replace: true });
+  const sis = async () => { const m = await import('./sis.js' + BUILD); if (!live(t)) throw Object.assign(new Error('stale'), { stale: true }); return m; };
+  const staff = async () => { const m = await import('./staff.js' + BUILD); if (!live(t)) throw Object.assign(new Error('stale'), { stale: true }); return m; };
+  if (ctx.isGuardian && !['dashboard', 'record', 'activities', 'inbox', 'calendar', 'announcements', 'notifications'].includes(sub || 'dashboard')) return navigate('/' + slug, { replace: true });
   switch (sub || 'dashboard') {
     case 'dashboard': return ctx.isGuardian ? (await sis()).viewFamilyHome(ctx) : viewDashboard(ctx);
     case 'sis': return ctx.isRealTeacher ? (await sis()).viewDirectory(ctx) : viewNotFound();
     case 'record': return (await sis()).viewRecord(ctx, a || 'me', b || 'overview');
     case 'activities': return (await sis()).viewActivities(ctx, a || null);
+    case 'staff': return teacherOnly(async () => (await staff()).viewStaff(ctx, a, b));
+    case 'referrals': return teacherOnly(async () => (await staff()).viewReferral(ctx, a));
+    case 'notifications': return (await staff()).viewNotifications(ctx);
     case 'courses': return viewAllCourses(ctx);
     case 'calendar': return viewCalendar(ctx);
     case 'inbox': return viewInbox(ctx, a || null);
@@ -2029,6 +2124,7 @@ async function viewTenant(slug, segs) {
         case 'setup': return ctx.isAdmin ? (await sis()).viewSisSetup(ctx) : viewNotFound();
         case 'services': return ctx.can('services') ? (await sis()).viewServices(ctx) : viewNotFound();
         case 'discipline': return ctx.can('safety') ? (await sis()).viewIncidents(ctx) : viewNotFound();
+        case 'requests': return ctx.isAdmin ? (await staff()).viewRequestQueue(ctx) : viewNotFound();
         case undefined: return (await sis()).viewOfficeHome(ctx);
         default: return viewNotFound();
       }
@@ -2072,7 +2168,7 @@ function tenantPage(ctx, active, content, course = null, { crumbs: extra = [], s
       crumbs = [{ label: 'Office', href: buildUrl(base + '/office') }, ...(active === 'office-home' ? [] : [{ label: oHit[1] }])];
       gActive = 'office';
     } else {
-      gActive = { dashboard: 'dashboard', calendar: 'calendar', inbox: 'inbox', commons: 'commons', 'all-courses': 'courses', 'sis-directory': 'students' }[active] || 'account';
+      gActive = { dashboard: 'dashboard', calendar: 'calendar', inbox: 'inbox', commons: 'commons', 'all-courses': 'courses', 'sis-directory': 'students', notifications: 'notifications' }[active] || 'account';
     }
   }
   return appShell({ active: gActive, subnav, crumbs, banner: previewBanner(), content });
@@ -2109,6 +2205,8 @@ function officeMenu(ctx) {
     ['sis-services', 'Special ed · 504 · ELL', '/office/services', 'services'],
     ['sis-safety', 'Discipline & safety', '/office/discipline', 'safety'],
     ['sis-activities', 'Activities & clubs', '/activities'],
+    ['§', 'Staff'],
+    ['staff-requests', 'Staff requests', '/office/requests', 'admin'],
     ['§', 'Settings'],
     ['sis-setup', 'School setup', '/office/setup', 'admin'],
   ];
@@ -2136,8 +2234,8 @@ async function viewCourseSection(ctx, courseId, section, x, y) {
     case 'home': return viewCourseHome(ctx, course);
     case 'announcements': return viewCourseAnnouncements(ctx, course);
     case 'modules': return viewCourse(ctx, courseId);
-    case 'grades': if (x !== 'term') return viewGrades(ctx, courseId); { const m = await import('./sis.js'); return live(t) && m.viewTermGrades(ctx, course); }
-    case 'attendance': { const m = await import('./sis.js'); return live(t) && m.viewRollCall(ctx, course); }
+    case 'grades': if (x !== 'term') return viewGrades(ctx, courseId); { const m = await import('./sis.js' + BUILD); return live(t) && m.viewTermGrades(ctx, course); }
+    case 'attendance': { const m = await import('./sis.js' + BUILD); return live(t) && m.viewRollCall(ctx, course); }
     case 'collaborations': return viewCollaborations(ctx, course);
     case 'syllabus': return viewSyllabus(ctx, course);
     case 'assignments': return viewItemIndex(ctx, course, 'assignment');
@@ -2827,6 +2925,13 @@ function openGradeModal(ctx, courseId, item, sub, allSubs = []) {
     withBusy(e.submitter || m.$('[type=submit]'), 'Saving…', async () => {
       try {
         await updateDoc(doc(subsCol(ctx, courseId), sub.id), { grade, feedback: feedback || null, gradedBy: currentUser.uid, gradedAt: serverTimestamp() });
+        if (grade !== null || feedback) {
+          const what = grade !== null ? `${grade}/${itemPoints(item)}` : 'New feedback';
+          const cTitle = layoutState.course?.title || 'your course';
+          const mid = sub.moduleId || item.moduleId; const link = mid ? `/${ctx.slug}/course/${courseId}/item/${mid}/${item.id}` : `/${ctx.slug}/course/${courseId}/grades`;
+          notify(ctx, { to: [sub.studentId], kind: 'grade', title: `${item.title || 'Assignment'} was graded`, body: `${what} in ${cTitle}${feedback ? ' · “' + feedback.slice(0, 120) + '”' : ''}`, link }).catch(e => console.warn(e));
+          guardianUidsOf(ctx, [sub.studentId]).then(to => notify(ctx, { to, kind: 'grade', title: `${sub.studentName || 'Your student'}: ${item.title || 'assignment'} graded`, body: `${what} in ${cTitle}`, link: `/${ctx.slug}/record/${sub.studentId}/grades` })).catch(e => console.warn(e));
+        }
         toast('Grade saved');
         m.close();
         if (goNext && ungraded[0]) openGradeModal(ctx, courseId, item, ungraded[0], allSubs.map(s => s.id === sub.id ? { ...s, grade } : s));
@@ -3410,6 +3515,7 @@ function openPlanEditor(ctx, existing = null) {
       try {
         if (isEdit) await updateDoc(doc(db, 'tenants', ctx.slug, 'plans', plan.id), payload);
         else await addDoc(collection(db, 'tenants', ctx.slug, 'plans'), { ...payload, createdAt: serverTimestamp(), reviewComment: null, reviewedBy: null, reviewedAt: null });
+        if (submit) officeStaffUids(ctx).then(to => notify(ctx, { to, kind: 'plan', title: `${payload.teacherName} submitted a lesson plan`, body: `${title}${week ? ' · week of ' + week : ''}`, link: `/${ctx.slug}/admin/planning` })).catch(e => console.warn(e));
         m.close(); toast(submit ? 'Submitted for review' : 'Draft saved'); renderRoute();
       } catch (ex) { console.error(ex); showError(err, friendlyError(ex)); }
     });
@@ -3453,6 +3559,7 @@ function openPlanReviewModal(slug, plan, onDone) {
     withBusy(e.submitter, 'Saving…', async () => {
       try {
         await updateDoc(doc(db, 'tenants', slug, 'plans', plan.id), { reviewComment: comment || null, status, reviewedBy: currentUser.uid, reviewedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+        notify({ slug, me: { name: currentUser.displayName || currentUser.email || '' } }, { to: [plan.teacherUid], kind: 'plan', title: status === 'reviewed' ? `Lesson plan approved: ${plan.title || ''}` : `Changes requested: ${plan.title || ''}`, body: comment || '', link: `/${slug}/planning` }).catch(e => console.warn(e));
         m.close(); toast(status === 'reviewed' ? 'Plan approved' : 'Changes requested'); onDone?.();
       } catch (ex) { console.error(ex); showError(err, friendlyError(ex)); }
     });
@@ -5075,6 +5182,7 @@ function openHelp(kind) {
 // ═══════════════════════════════════════════════════════════════
 async function doSignOut() {
   redirectAfterSignOut = true;
+  stopNotifications();
   try { await signOut(auth); }
   catch (e) { redirectAfterSignOut = false; toast(friendlyError(e), 'error'); }
 }
@@ -5082,6 +5190,9 @@ document.addEventListener('click', async e => {
   const t = e.target;
   if (!(t instanceof Element)) return;
   if (t.closest('[data-signout]')) { e.preventDefault(); return doSignOut(); }
+  const nr = t.closest('[data-notif]');
+  if (nr) { const n = notifItems().find(x => x.id === nr.dataset.notif); if (n) markNotifRead(n); if (nr.getAttribute('href') === '#') e.preventDefault(); }
+  if (t.closest('[data-notif-readall]')) { markAllNotifsRead(); return; }
   if (t.closest('[data-sidebar-open]')) { document.body.classList.add('sidebar-open'); return; }
   if (t.closest('[data-sidebar-close]')) { closeSidebar(); return; }
   if (t.closest('[data-retry]')) { renderRoute(); return; }
@@ -5097,8 +5208,8 @@ document.addEventListener('click', async e => {
   if (trayBtn) { e.preventDefault(); return openTray(trayBtn.dataset.tray); }
   if (t.closest('[data-subnav-toggle]')) { const on = document.body.classList.toggle('subnav-collapsed'); ls('ember_subnav_collapsed', on ? '1' : '0'); return; }
   if (t.closest('[data-profile]')) { closeTray(); if (layoutState.ctx) openProfileModal(layoutState.ctx); return; }
-  if (t.closest('[data-add-child]')) { closeTray(); if (layoutState.ctx) (await import('./sis.js')).openAddStudentCode(layoutState.ctx); return; }
-  if (t.closest('[data-concern]')) { closeTray(); const c = layoutState.ctx; if (c) (await import('./sis.js')).openIncidentModal(c, null, [], { concern: !c.can('safety') }); return; }
+  if (t.closest('[data-add-child]')) { closeTray(); if (layoutState.ctx) (await import('./sis.js' + BUILD)).openAddStudentCode(layoutState.ctx); return; }
+  if (t.closest('[data-concern]')) { closeTray(); const c = layoutState.ctx; if (c) (await import('./sis.js' + BUILD)).openIncidentModal(c, null, [], { concern: !c.can('safety') }); return; }
   const hp = t.closest('[data-help]');
   if (hp) return openHelp(hp.dataset.help);
   const tp = t.closest('[data-toggle-pass]');
@@ -5152,6 +5263,7 @@ async function renderRoute() {
   currentUser = auth.currentUser; // source of truth, even mid sign-in while routing is suppressed
   const t = ++routeToken;
   clearSubs(); closeAllModals(); closeSidebar(); closeTray();
+  watchNotifications();
   contentCache.clear();
   layoutState = { ctx: null, district: null, course: null };
   const route = parseRoute();
@@ -5198,8 +5310,19 @@ onAuthStateChanged(auth, async user => {
 
 // ── Shared with ./sis.js (loaded on demand) ─────────────────────
 const routeTokenNow = () => routeToken;
+// Lazy modules (sis.js, staff.js) read helpers from here instead of importing app.js, so a versioned
+// app.js URL never loads a second copy of the app.
+const EMBER_API = {
+  notify, officeStaffUids, guardianUidsOf, notifItems, notifRow, notifUnread, markNotifRead, markAllNotifsRead, NOTIF_KINDS, hasOffice, officeMenu, OFFICE_TRAY, districtShell, getDistrictSchools,
+  db, $, $$, ico, refreshIcons, escapeHtml, plural, displayNameOf, toDate, tsMillis, recency, formatDate, formatDateTime,
+  timeAgo, toDateInput, render, setTitle, showError, iconTile, badge, avatar, skeletonRows, emptyState, errorBox, dataTable,
+  toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
+  pageHeader, tenantPage, previewToggle, courseCol, cHref, myCourses, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
+  GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute
+};
+globalThis.__ember = EMBER_API;
 export {
-  hasOffice, officeMenu, OFFICE_TRAY, districtShell, getDistrictSchools,
+  notify, officeStaffUids, guardianUidsOf, notifItems, notifRow, notifUnread, markNotifRead, markAllNotifsRead, NOTIF_KINDS, hasOffice, officeMenu, OFFICE_TRAY, districtShell, getDistrictSchools,
   db, $, $$, ico, refreshIcons, escapeHtml, plural, displayNameOf, toDate, tsMillis, recency, formatDate, formatDateTime,
   timeAgo, toDateInput, render, setTitle, showError, iconTile, badge, avatar, skeletonRows, emptyState, errorBox, dataTable,
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,

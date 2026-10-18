@@ -235,6 +235,44 @@ service cloud.firestore {
       }
     }
 
+    // ── Notifications ───────────────────────────────────────────────────
+    // One doc per recipient (toUid), or one per district (toDistrict) that every district admin reads.
+    // Anyone who belongs to a school can notify people; recipients can only mark read or delete.
+    function isDistrictAdminOf(d) { return signedIn() && me() in get(/databases/$(database)/documents/districts/$(d)).data.get('adminUids', []); }
+    match /notifications/{n} {
+      allow read: if signedIn() && (resource.data.get('toUid', '') == me()
+        || (resource.data.get('toDistrict', null) != null && isDistrictAdminOf(resource.data.toDistrict)));
+      allow create: if signedIn()
+        && request.resource.data.fromUid == me()
+        && request.resource.data.tenantId is string && isMember(request.resource.data.tenantId)
+        && request.resource.data.title is string && request.resource.data.title.size() <= 140
+        && request.resource.data.get('body', '').size() <= 400
+        && request.resource.data.keys().hasOnly(['toUid', 'toDistrict', 'tenantId', 'kind', 'title', 'body', 'link', 'fromUid', 'fromName', 'createdAt', 'read', 'readBy'])
+        && (
+          (request.resource.data.get('toUid', null) is string && !request.resource.data.keys().hasAny(['toDistrict']) && request.resource.data.read == false)
+          || (request.resource.data.get('toDistrict', null) is string && !request.resource.data.keys().hasAny(['toUid'])
+              && tenant(request.resource.data.tenantId).get('districtId', null) == request.resource.data.toDistrict
+              && request.resource.data.readBy.size() == 0)
+        );
+      allow update: if signedIn() && (
+        (resource.data.get('toUid', '') == me() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']))
+        || (resource.data.get('toDistrict', null) != null && isDistrictAdminOf(resource.data.toDistrict)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
+            && request.resource.data.readBy.toSet().difference(resource.data.readBy.toSet()) == [me()].toSet()));
+      allow delete: if signedIn() && resource.data.get('toUid', '') == me();
+    }
+
+    // ── Staff Hub requests (call-outs, subs, coverage, work orders, field trips, parent contact logs)
+    match /tenants/{t}/requests/{r} {
+      allow read: if isAdmin(t) || isDistrictAdmin(t) || (isStaff(t) && resource.data.submittedBy == me());
+      allow create: if isStaff(t) && request.resource.data.submittedBy == me()
+        && request.resource.data.status in ['submitted', 'logged'];
+      allow update: if isAdmin(t)
+        || (isStaff(t) && resource.data.submittedBy == me() && request.resource.data.status == 'cancelled'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']));
+      allow delete: if isAdmin(t);
+    }
+
     // ── SIS ─────────────────────────────────────────────────────────────
     match /tenants/{t}/sis/{docId} {
       allow read: if isMember(t);
