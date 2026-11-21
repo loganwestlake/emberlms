@@ -390,3 +390,15 @@ body.sidebar-open .drawer-backdrop { opacity: 1; pointer-events: auto; }
 .ui-opt.is-selected .ui-opt-dot { background: #F59E0B; }
 .ui-pop-empty { padding: .8rem; font-size: .8rem; color: #777; text-align: center; }
 .ff.has-error .ui-select-btn { border-color: rgba(208,59,59,0.7); }
+/* Student ID card (Student Info) */
+.id-card { position: relative; overflow: hidden; padding: 1.25rem 1.5rem; border-radius: 1rem; border: 1px solid rgba(245,158,11,0.3); background: linear-gradient(135deg, rgba(245,158,11,0.12), rgba(20,20,20,0.92) 60%); }
+.id-card::after { content: ''; position: absolute; right: -40px; top: -40px; width: 140px; height: 140px; border-radius: 999px; background: radial-gradient(circle, rgba(245,158,11,0.18), transparent 70%); pointer-events: none; }
+/* Kiosk ID keypad */
+.kp-display { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1.9rem; letter-spacing: .15em; text-align: center; padding: .7rem; border-radius: .8rem; border: 1px solid rgba(255,255,255,0.12); background: #0d0d0d; color: #fff; min-height: 3.6rem; }
+.kp-display.is-wrong { border-color: rgba(208,59,59,0.7); animation: kp-shake .35s; }
+@keyframes kp-shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+.kp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem; margin-top: 1rem; }
+.kp-key { padding: .95rem 0; font-size: 1.35rem; border-radius: .8rem; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); color: #fff; transition: background .1s; }
+.kp-key:hover { background: rgba(255,255,255,0.07); }
+.kp-key:active { background: rgba(245,158,11,0.2); }
+.kiosk-tile.is-locked { opacity: .5; }

@@ -128,6 +128,8 @@ service cloud.firestore {
           signedIn() && me() == sid
           && request.resource.data.status == 'pending'
           && request.resource.data.get('enrolledCourseIds', []).size() == 0
+          // student IDs are handed out by staff, never chosen by the student
+          && !('studentNumber' in request.resource.data) && !('gradYear' in request.resource.data)
           && request.resource.data.email == request.auth.token.email
           && request.auth.token.email.matches('^[^@]+@' + t + '[.]emberlms[.]local$')
         );
@@ -322,6 +324,10 @@ service cloud.firestore {
             || (resource.data.status == 'pending' && request.resource.data.status == 'cancelled' && resource.data.get('type', 'standard') != 'appointment')
             || (resource.data.status == 'scheduled' && request.resource.data.status == 'active')));
       allow delete: if isAdmin(t);
+    }
+    // Running numbers for student IDs (2030-0001 …). Staff reserve the next number in a transaction.
+    match /tenants/{t}/counters/{c} {
+      allow read, write: if isStaff(t);
     }
     // Older keep-apart list (still read so nothing is lost); new groups live in passKeepApart.
     match /tenants/{t}/passPrivate/{d} {

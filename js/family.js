@@ -5,7 +5,7 @@ import {
   doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, getDocs, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 const {
-  db, ico, refreshIcons, escapeHtml, plural, displayNameOf, toDate, formatDate, toDateInput, iconTile, badge,
+  db, ico, refreshIcons, escapeHtml, plural, displayNameOf, toDate, formatDate, toDateInput, iconTile, badge, avatar,
   emptyState, toast, confirmDialog, buildUrl, live, loadAllItems, hasGrade, itemPoints, typeMeta, GRADED_TYPES, courseHex, subsCol, friendlyError
 } = globalThis.__ember;
 const BUILD = new URL(import.meta.url).search;
@@ -82,8 +82,9 @@ const INFO_FIELDS = [
 async function infoTab(ctx, el, student, t, { rerender }) {
   const canEdit = ctx.isAdmin || ctx.can('records');
   const contacts = student.contacts || [];
-  el.innerHTML = section('Student', canEdit ? btn('data-info-edit', 'Edit', 'pencil') : '', dl([
-    ['Legal name', [student.firstName, student.lastName].filter(Boolean).join(' ') || displayNameOf(student)], ['Preferred name', student.preferredName], ['Student ID', student.studentNumber],
+  const idCard = student.studentNumber ? `<section class="id-card mb-6" aria-label="Student ID card"><div class="flex items-center gap-4">${avatar(displayNameOf(student), student.photoURL, 'w-14 h-14', 'text-lg')}<div class="flex-1 min-w-0"><div class="text-[11px] uppercase tracking-[0.18em] text-[#F59E0B]">${escapeHtml(ctx.tenant.name)}</div><div class="font-serif text-2xl text-white truncate">${escapeHtml(displayNameOf(student))}</div><div class="text-xs text-gray-400">${escapeHtml([student.gradeLevel ? (student.gradeLevel === 'K' ? 'Kindergarten' : `Grade ${student.gradeLevel}`) : '', student.gradYear ? `Class of ${student.gradYear}` : ''].filter(Boolean).join(' · '))}</div></div><div class="text-right"><div class="text-[10px] uppercase tracking-wider text-gray-500">Student ID</div><div class="font-mono text-2xl sm:text-3xl text-white tracking-wider" data-student-id>${escapeHtml(student.studentNumber)}</div></div></div>${ctx.isStudent ? `<p class="text-[11px] text-gray-500 mt-3">${ico('lock', 'w-3 h-3 inline -mt-0.5')} You'll type this ID on your class's Ember Pass kiosk. Keep it to yourself.</p>` : ''}</section>` : '';
+  el.innerHTML = idCard + section('Student', canEdit ? btn('data-info-edit', 'Edit', 'pencil') : '', dl([
+    ['Legal name', [student.firstName, student.lastName].filter(Boolean).join(' ') || displayNameOf(student)], ['Preferred name', student.preferredName], ['Student ID', student.studentNumber], ['Graduation year', student.gradYear ? String(student.gradYear) : ''],
     ['Grade', student.gradeLevel ? (student.gradeLevel === 'K' ? 'Kindergarten' : `Grade ${student.gradeLevel}`) : ''], ['Date of birth', fmtISO(student.dob)], ['Gender', student.gender],
     ['Homeroom / advisory', student.homeroom], ['Counselor', student.counselor], ['Enrollment date', fmtISO(student.enrolledOn)],
     ['Home language', student.language], ['Meal status', ctx.isRealTeacher || ctx.isGuardian ? student.lunch : ''], ['Locker', student.locker],

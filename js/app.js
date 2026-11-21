@@ -10,7 +10,7 @@ import {
   getFirestore, doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc,
   collection, collectionGroup, query, where, orderBy, limit,
   onSnapshot, getDocs, serverTimestamp, arrayUnion, arrayRemove,
-  writeBatch, getCountFromServer, deleteField, increment
+  writeBatch, getCountFromServer, deleteField, increment, runTransaction
 } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
 // ═══════════════════════════════════════════════════════════════
@@ -1443,6 +1443,8 @@ function renderWizard() {
           <div><label for="wz-first" class="label">First name</label><input id="wz-first" type="text" autocomplete="given-name" class="input" /></div>
           <div><label for="wz-last" class="label">Last name</label><input id="wz-last" type="text" autocomplete="family-name" class="input" /></div>
         </div>
+        <label for="wz-grade" class="label">Grade</label>
+        ${gradeSelect('wz-grade', 'mb-4')}
         <label for="wz-user" class="label">Username</label>
         <input id="wz-user" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="auto-generated" class="input font-mono text-sm" />
         <p class="hint mb-4">3–20 characters. You'll use this to sign in — write it down!</p>
@@ -1485,7 +1487,8 @@ function renderWizard() {
           }
           await setDoc(doc(db, 'tenants', school.slug, 'students', user.uid), {
             username, firstName: first, lastName: last, displayName: `${first} ${last}`.trim(),
-            email: fakeEmail, role: 'student', status: 'pending', enrolledCourseIds: [], createdAt: serverTimestamp()
+            email: fakeEmail, role: 'student', status: 'pending', enrolledCourseIds: [], createdAt: serverTimestamp(),
+            ...($('#wz-grade')?.value ? { gradeLevel: $('#wz-grade').value } : {})
           });
           signupWizard = null;
           navigate(`/${school.slug}/pending`, { replace: true });
@@ -3226,26 +3229,72 @@ async function openEnrollModal(ctx, courseId) {
 // ═══════════════════════════════════════════════════════════════
 // STUDENTS
 // ═══════════════════════════════════════════════════════════════
-const loginText = (ctx, username, password) =>
-  `${APP_NAME} login\nWebsite: ${location.origin}${buildUrl(`/login?school=${ctx.slug}&as=student`)}\nSchool: ${ctx.tenant.name}\nUsername: ${username}\nPassword: ${password || '(ask your teacher)'}`;
+const loginText = (ctx, username, password, studentNumber = '') =>
+  `${APP_NAME} login\nWebsite: ${location.origin}${buildUrl(`/login?school=${ctx.slug}&as=student`)}\nSchool: ${ctx.tenant.name}\nUsername: ${username}\nPassword: ${password || '(ask your teacher)'}${studentNumber ? `\nStudent ID: ${studentNumber}` : ''}`;
 // Create a Firebase Auth login for someone else (admins, parents) without signing the current user out.
 async function createLogin(email, password) {
   const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
   await signOut(secondaryAuth);
   return cred.user.uid;
 }
-async function createStudentAccount(slug, { firstName, lastName, username, password }) {
+// ── Student IDs: graduation year + a per-school running number, e.g. 2030-0001 ──
+const GRADE_OPTIONS = ['K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
+const gradeName = g => g === 'K' ? 'Kindergarten' : `Grade ${g}`;
+// The school year ends in the spring: Aug 2026 – Jun 2027 is "2027".
+function schoolYearEnd(d = new Date()) { return d.getMonth() >= 6 ? d.getFullYear() + 1 : d.getFullYear(); }
+function gradYearFor(grade) {
+  if (grade === null || grade === undefined || String(grade) === '') return null;
+  const g = grade === 'K' ? 0 : Number(grade);
+  return Number.isFinite(g) ? schoolYearEnd() + (12 - g) : null;
+}
+// Reserves the next number for that graduation year (a transaction, so two teachers never get the same one).
+async function nextStudentId(slug, gradYear) {
+  const ref = doc(db, 'tenants', slug, 'counters', 'studentIds');
+  const n = await runTransaction(db, async tx => {
+    const snap = await tx.get(ref);
+    const next = ((snap.exists() ? snap.data()[`y${gradYear}`] : 0) || 0) + 1;
+    tx.set(ref, { [`y${gradYear}`]: next }, { merge: true });
+    return next;
+  });
+  return `${gradYear}-${String(n).padStart(4, '0')}`;
+}
+// Gives a student an ID if they have a grade but no ID yet. Returns the ID (or null).
+async function ensureStudentId(slug, uid, student) {
+  if (student.studentNumber) return student.studentNumber;
+  const gy = student.gradYear || gradYearFor(student.gradeLevel);
+  if (!gy) return null;
+  const id = await nextStudentId(slug, gy);
+  await updateDoc(doc(db, 'tenants', slug, 'students', uid), { studentNumber: id, gradYear: gy });
+  student.studentNumber = id; student.gradYear = gy;
+  return id;
+}
+// IDs are handed out one at a time (in a queue) so numbers never collide.
+const idBackfill = new Set();
+let idQueue = Promise.resolve();
+const queueStudentId = (slug, uid, s) => (idQueue = idQueue.then(() => ensureStudentId(slug, uid, s)));
+function backfillStudentIds(slug, students) {
+  students.filter(s => (s.status || 'approved') === 'approved' && !s.studentNumber && gradYearFor(s.gradeLevel) && !idBackfill.has(s.id || s.uid)).forEach(s => {
+    const uid = s.id || s.uid; idBackfill.add(uid);
+    queueStudentId(slug, uid, s).catch(e => { console.warn('student id', e); idBackfill.delete(uid); });
+  });
+}
+const gradeSelect = (id, cls = '') => `<select id="${id}" class="input ${cls}" data-icon="graduation-cap"><option value="">Choose a grade…</option>${GRADE_OPTIONS.map(g => `<option value="${g}">${gradeName(g)} · class of ${gradYearFor(g)}</option>`).join('')}</select>`;
+
+async function createStudentAccount(slug, { firstName, lastName, username, password, gradeLevel = '' }) {
   const fakeEmail = `${username}@${slug}.emberlms.local`;
   const cred = await createUserWithEmailAndPassword(secondaryAuth, fakeEmail, password);
   await signOut(secondaryAuth);
+  const gradYear = gradYearFor(gradeLevel);
+  const studentNumber = gradYear ? await (idQueue = idQueue.catch(() => {}).then(() => nextStudentId(slug, gradYear))) : '';
   await setDoc(doc(db, 'tenants', slug, 'students', cred.user.uid), {
     username, firstName, lastName, displayName: `${firstName} ${lastName}`.trim(),
+    ...(gradYear ? { gradeLevel, gradYear, studentNumber } : {}),
     email: fakeEmail, role: 'student', status: 'approved',
     // NOTE: stored so teachers can re-share logins. Lock this field down in your security rules.
     tempPassword: password, enrolledCourseIds: [],
     approvedBy: currentUser.uid, approvedAt: serverTimestamp(), createdAt: serverTimestamp()
   });
-  return cred.user.uid;
+  return { uid: cred.user.uid, studentNumber };
 }
 
 function viewStudents(ctx) {
@@ -3295,7 +3344,7 @@ function viewStudents(ctx) {
         return {
           cells: [
             `<div class="flex items-center gap-3">${avatar(displayNameOf(s))}<span class="text-sm text-white truncate">${escapeHtml(displayNameOf(s))}</span></div>`,
-            `<span class="text-sm text-gray-400 font-mono truncate block">${escapeHtml(s.username || '')}</span>`,
+            `<span class="text-sm text-gray-400 font-mono truncate block">${escapeHtml(s.username || '')}</span><span class="text-[11px] font-mono truncate block ${s.studentNumber ? 'text-[#F59E0B]' : 'text-gray-600'}">${s.studentNumber ? 'ID ' + escapeHtml(s.studentNumber) : 'No ID — set a grade'}</span>`,
             st === 'approved' ? badge('Active', 'green') : badge(escapeHtml(st), 'red'),
             `<span class="text-xs text-gray-500">${(s.enrolledCourseIds || []).length}</span>`,
             `<div class="row-actions">
@@ -3311,12 +3360,17 @@ function viewStudents(ctx) {
   unsubs.push(onSnapshot(query(collection(db, 'tenants', slug, 'students'), orderBy('createdAt', 'desc')), snap => {
     students = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => s.status !== 'pending');
     draw();
+    backfillStudentIds(slug, students);
   }, e => { console.error(e); list.innerHTML = errorBox(e); refreshIcons(); }));
   $('#student-filter').addEventListener('input', e => { filter = e.target.value.trim().toLowerCase(); draw(); });
 
   $('#main').addEventListener('click', async e => {
     const t = e.target;
-    const setStatus = (id, status) => updateDoc(doc(db, 'tenants', slug, 'students', id), { status, approvedBy: currentUser.uid, approvedAt: serverTimestamp() });
+    const setStatus = async (id, status) => {
+      await updateDoc(doc(db, 'tenants', slug, 'students', id), { status, approvedBy: currentUser.uid, approvedAt: serverTimestamp() });
+      const s = [...pending, ...students].find(x => x.id === id);
+      if (status === 'approved' && s) await queueStudentId(slug, id, s).catch(e => console.warn(e));
+    };
     try {
       if (t.closest('[data-empty-bulk]')) return openBulkStudentsModal(ctx);
       let b = t.closest('[data-approve]');
@@ -3324,7 +3378,9 @@ function viewStudents(ctx) {
       if (t.closest('[data-approve-all]')) {
         const b2 = writeBatch(db);
         pending.forEach(s => b2.update(doc(db, 'tenants', slug, 'students', s.id), { status: 'approved', approvedBy: currentUser.uid, approvedAt: serverTimestamp() }));
-        await b2.commit(); return toast(`Approved ${plural(pending.length, 'student')}`);
+        await b2.commit();
+        for (const s of pending) await queueStudentId(slug, s.id, s).catch(e => console.warn(e));
+        return toast(`Approved ${plural(pending.length, 'student')}`);
       }
       b = t.closest('[data-reject]');
       if (b) {
@@ -3333,7 +3389,7 @@ function viewStudents(ctx) {
         return;
       }
       b = t.closest('[data-copy-login]');
-      if (b) { const s = students.find(x => x.id === b.dataset.copyLogin); return copyText(loginText(ctx, s.username, s.tempPassword), 'Login details copied'); }
+      if (b) { const s = students.find(x => x.id === b.dataset.copyLogin); return copyText(loginText(ctx, s.username, s.tempPassword, s.studentNumber), 'Login details copied'); }
       b = t.closest('[data-delete-student]');
       if (b) {
         const s = students.find(x => x.id === b.dataset.deleteStudent);
@@ -3355,6 +3411,9 @@ function openCreateStudentModal(ctx) {
           <div><label for="student-first" class="label">First name</label><input id="student-first" type="text" autocomplete="off" class="input" /></div>
           <div><label for="student-last" class="label">Last name</label><input id="student-last" type="text" autocomplete="off" class="input" /></div>
         </div>
+        <label for="student-grade" class="label">Grade</label>
+        ${gradeSelect('student-grade', 'mb-1')}
+        <p class="hint mb-4">Their student ID starts with their graduation year, e.g. ${gradYearFor('9')}-0001.</p>
         <label for="student-user" class="label">Username</label>
         <input id="student-user" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="auto-generated" class="input mb-4 font-mono text-sm" />
         <label for="student-pass" class="label">Password</label>
@@ -3381,15 +3440,17 @@ function openCreateStudentModal(ctx) {
     const firstName = firstEl.value.trim(), lastName = lastEl.value.trim();
     const username = userEl.value.trim().toLowerCase(), password = passEl.value;
     const err = m.$('#student-error'); showError(err, '');
+    const gradeLevel = m.$('#student-grade').value;
     if (!firstName) return showError(err, 'Enter a first name.');
+    if (!gradeLevel) return showError(err, 'Choose their grade — it sets their student ID.');
     if (!/^[a-z0-9_.-]{3,20}$/.test(username)) return showError(err, 'Username must be 3–20 characters: lowercase letters, numbers, dots, dashes, underscores.');
     if (password.length < 6) return showError(err, 'Password must be at least 6 characters.');
     withBusy(e.currentTarget.querySelector('[type=submit]'), 'Creating…', async () => {
       try {
-        await createStudentAccount(ctx.slug, { firstName, lastName, username, password });
-        const text = loginText(ctx, username, password);
+        const { studentNumber } = await createStudentAccount(ctx.slug, { firstName, lastName, username, password, gradeLevel });
+        const text = loginText(ctx, username, password, studentNumber);
         m.$('#cs-body').innerHTML = modalBody(`
-          <div class="text-center mb-5">${iconTile('circle-check', 'green', 'tile-lg mx-auto mb-3')}<p class="text-white font-medium">${escapeHtml(`${firstName} ${lastName}`.trim())} is ready to go</p><p class="text-xs text-gray-500">Share these details with them.</p></div>
+          <div class="text-center mb-5">${iconTile('circle-check', 'green', 'tile-lg mx-auto mb-3')}<p class="text-white font-medium">${escapeHtml(`${firstName} ${lastName}`.trim())} is ready to go</p>${studentNumber ? `<p class="mt-2"><span class="text-xs text-gray-500">Student ID</span> <span class="font-mono text-[#F59E0B] text-lg" data-new-id>${escapeHtml(studentNumber)}</span></p>` : ''}<p class="text-xs text-gray-500">Share these details with them.</p></div>
           <pre class="bg-[#0A0A0A] border border-white/[0.08] rounded-lg p-4 text-xs text-gray-300 font-mono whitespace-pre-wrap break-all">${escapeHtml(text)}</pre>`) +
           modalFooter(`<button data-another class="btn btn-secondary flex-1">Add another</button><button data-copy class="btn btn-primary flex-1">${ico('copy')} Copy & close</button>`);
         refreshIcons();
@@ -3411,6 +3472,8 @@ function openBulkStudentsModal(ctx) {
         <label for="bulk-names" class="label">Student names</label>
         <textarea id="bulk-names" rows="9" class="input font-mono text-sm" placeholder="Ada Lovelace&#10;Alan Turing&#10;Grace Hopper"></textarea>
         <p class="hint">One student per line, “First Last”. You can paste straight from a spreadsheet column.</p>
+        <label for="bulk-grade" class="label mt-4">Grade</label>${gradeSelect('bulk-grade')}
+        <p class="hint">Everyone in the list gets a student ID that starts with their graduation year.</p>
         <p id="bulk-count" class="text-xs text-gray-400 mt-3"></p>
         <p id="bulk-error" class="form-error mt-3 hidden" role="alert"></p>`)}
       ${modalFooter(`<button type="button" data-close class="btn btn-secondary flex-1">Cancel</button><button id="bulk-go" class="btn btn-primary flex-1" disabled>Create accounts</button>`)}
@@ -3422,6 +3485,8 @@ function openBulkStudentsModal(ctx) {
   go.addEventListener('click', async () => {
     if (go.dataset.running) return;
     const names = parse();
+    const gradeLevel = m.$('#bulk-grade').value;
+    if (!gradeLevel) return showError(m.$('#bulk-error'), 'Choose the grade — it sets their student IDs.');
     if (names.length > 200) return showError(m.$('#bulk-error'), 'Add at most 200 students at a time.');
     m.dismissible = false; go.dataset.running = '1'; go.disabled = true;
     let existing = [];
@@ -3437,9 +3502,9 @@ function openBulkStudentsModal(ctx) {
       const password = genPassword();
       $('#bulk-progress') && ($('#bulk-progress').textContent = `Creating ${i + 1} of ${names.length}…`);
       try {
-        await createStudentAccount(ctx.slug, { firstName, lastName, username, password });
+        const { studentNumber } = await createStudentAccount(ctx.slug, { firstName, lastName, username, password, gradeLevel });
         existing.push(username);
-        results.push({ name: names[i], username, password, ok: true });
+        results.push({ name: names[i], username, password, studentNumber, ok: true });
       } catch (e) {
         if (e.code === 'auth/email-already-in-use') existing.push(username);
         results.push({ name: names[i], ok: false, error: friendlyError(e) });
@@ -3447,11 +3512,11 @@ function openBulkStudentsModal(ctx) {
       $('#bulk-bar') && ($('#bulk-bar').style.width = `${Math.round((i + 1) / names.length * 100)}%`);
     }
     const ok = results.filter(r => r.ok);
-    const tsv = 'Name\tUsername\tPassword\n' + ok.map(r => `${r.name}\t${r.username}\t${r.password}`).join('\n');
+    const tsv = 'Name\tStudent ID\tUsername\tPassword\n' + ok.map(r => `${r.name}\t${r.studentNumber || ''}\t${r.username}\t${r.password}`).join('\n');
     body.innerHTML = modalBody(`
       <div class="flex items-center gap-3 mb-4">${iconTile(ok.length === results.length ? 'circle-check' : 'triangle-alert', ok.length === results.length ? 'green' : 'amber')}<div><p class="text-white text-sm font-medium">${plural(ok.length, 'account')} created</p>${ok.length < results.length ? `<p class="text-xs text-red-400">${results.length - ok.length} failed — see below.</p>` : '<p class="text-xs text-gray-500">Copy these now and share them with your students.</p>'}</div></div>
-      <div class="card overflow-hidden max-h-[45vh] overflow-y-auto"><table class="w-full text-sm"><thead class="text-[10px] uppercase tracking-wider text-gray-500 text-left"><tr class="border-b border-white/[0.06]"><th class="px-4 py-2 font-medium">Name</th><th class="px-4 py-2 font-medium">Username</th><th class="px-4 py-2 font-medium">Password</th></tr></thead>
-      <tbody class="divide-y divide-white/[0.04]">${results.map(r => `<tr><td class="px-4 py-2 text-white">${escapeHtml(r.name)}</td>${r.ok ? `<td class="px-4 py-2 font-mono text-gray-300">${escapeHtml(r.username)}</td><td class="px-4 py-2 font-mono text-gray-300">${escapeHtml(r.password)}</td>` : `<td colspan="2" class="px-4 py-2 text-xs text-red-400">${escapeHtml(r.error)}</td>`}</tr>`).join('')}</tbody></table></div>`) +
+      <div class="card overflow-hidden max-h-[45vh] overflow-y-auto"><table class="w-full text-sm"><thead class="text-[10px] uppercase tracking-wider text-gray-500 text-left"><tr class="border-b border-white/[0.06]"><th class="px-4 py-2 font-medium">Name</th><th class="px-4 py-2 font-medium">Student ID</th><th class="px-4 py-2 font-medium">Username</th><th class="px-4 py-2 font-medium">Password</th></tr></thead>
+      <tbody class="divide-y divide-white/[0.04]">${results.map(r => `<tr><td class="px-4 py-2 text-white">${escapeHtml(r.name)}</td>${r.ok ? `<td class="px-4 py-2 font-mono text-[#F59E0B]">${escapeHtml(r.studentNumber || '')}</td><td class="px-4 py-2 font-mono text-gray-300">${escapeHtml(r.username)}</td><td class="px-4 py-2 font-mono text-gray-300">${escapeHtml(r.password)}</td>` : `<td colspan="3" class="px-4 py-2 text-xs text-red-400">${escapeHtml(r.error)}</td>`}</tr>`).join('')}</tbody></table></div>`) +
       modalFooter(`<button data-close-final class="btn btn-secondary flex-1">Done</button>${ok.length ? `<button data-copy-csv class="btn btn-primary flex-1">${ico('copy')} Copy as spreadsheet</button>` : ''}`);
     refreshIcons();
     m.dismissible = true;
@@ -5532,7 +5597,8 @@ const EMBER_API = {
   timeAgo, toDateInput, render, setTitle, showError, iconTile, badge, avatar, skeletonRows, emptyState, errorBox, dataTable,
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, myCourses, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
-  GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute
+  GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute,
+  ensureStudentId, backfillStudentIds, gradYearFor
 };
 globalThis.__ember = EMBER_API;
 export {
@@ -5541,5 +5607,6 @@ export {
   timeAgo, toDateInput, render, setTitle, showError, iconTile, badge, avatar, skeletonRows, emptyState, errorBox, dataTable,
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, myCourses, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
-  GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute
+  GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute,
+  ensureStudentId, backfillStudentIds, gradYearFor
 };

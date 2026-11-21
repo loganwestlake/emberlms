@@ -933,7 +933,7 @@ export async function viewDirectory(ctx) {
   $('#dir-q').addEventListener('input', e => { q = e.target.value.trim().toLowerCase(); draw(); });
   $('#dir-grade').addEventListener('change', e => { grade = e.target.value; draw(); });
   $$('[data-flag]').forEach(b => b.addEventListener('click', () => { flag = b.dataset.flag; draw(); }));
-  try { list = await loadStudents(ctx); if (live(t)) draw(); } catch (e) { if (live(t)) { el.innerHTML = errorBox(e); refreshIcons(); } }
+  try { list = await loadStudents(ctx); if (live(t)) draw(); globalThis.__ember.backfillStudentIds(ctx.slug, list); } catch (e) { if (live(t)) { el.innerHTML = errorBox(e); refreshIcons(); } }
 }
 
 // Family Access menu (the same for students, parents and staff); [key, label, icon, permission?].
@@ -1090,7 +1090,12 @@ function openRecordEditor(ctx, student) {
     if (!first) return showError(m.$('#er-err'), 'First name is required.');
     const data = { firstName: first, lastName: last, displayName: `${first} ${last}`.trim(), gradeLevel: m.$('#er-grade').value || null, studentNumber: m.$('#er-num').value.trim(), dob: m.$('#er-dob').value, homeroom: m.$('#er-home').value.trim(), contacts: contacts.filter(c => c.name || c.phone || c.email), alerts: alerts.filter(a => a.text.trim()) };
     withBusy(e.currentTarget.querySelector('button:not([data-close])'), 'Saving…', async () => {
-      try { await updateDoc(tdoc(ctx, 'students', student.uid), data); m.close(); toast('Record updated'); renderRoute(); }
+      try {
+        await updateDoc(tdoc(ctx, 'students', student.uid), data);
+        // A new grade with no ID yet → give them one (e.g. 2030-0001).
+        if (!data.studentNumber && data.gradeLevel) await globalThis.__ember.ensureStudentId(ctx.slug, student.uid, { ...data, studentNumber: '' }).catch(() => {});
+        m.close(); toast('Record updated'); renderRoute();
+      }
       catch (ex) { showError(m.$('#er-err'), ex.message); }
     });
   });
