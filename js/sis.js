@@ -974,15 +974,16 @@ export async function viewRecord(ctx, sidParam, tab = 'overview') {
       ${avatar(name, null, 'w-16 h-16', 'text-xl')}
       <div class="flex-1 min-w-0"><p class="text-[11px] text-[#F59E0B] uppercase tracking-[0.18em] mb-1">${escapeHtml(label)}</p><h1 class="font-serif text-3xl sm:text-4xl text-white leading-tight">${escapeHtml(name)}</h1>
         <p class="text-sm text-gray-500 mt-1 flex flex-wrap items-center gap-2">${escapeHtml(gradeLabel(student.gradeLevel))}${student.studentNumber ? ` · ID <span class="font-mono">${escapeHtml(student.studentNumber)}</span>` : ''}${staff ? ' ' + flagBadges(student) : ''}</p></div>
-      ${staff ? `<div class="flex flex-wrap gap-2">${ctx.isAdmin ? `<button data-rec="edit" class="btn btn-secondary">${ico('pencil', 'w-3.5 h-3.5')} Edit record</button>` : ''}<a href="${buildUrl(`/${ctx.slug}/staff/new/referral?student=${sid}`)}" class="btn btn-secondary">${ico('flag', 'w-3.5 h-3.5')} Write referral</a><button data-rec="concern" class="btn btn-ghost">${ico('message-square-warning', 'w-3.5 h-3.5')} Quick concern</button></div>` : ''}
+      ${staff ? `<div class="flex flex-wrap gap-2">${ctx.isAdmin ? `<button data-rec="edit" class="btn btn-secondary">${ico('pencil', 'w-3.5 h-3.5')} Edit record</button>` : ''}<a href="${buildUrl(`/${ctx.slug}/staff/new/referral?student=${sid}`)}" class="btn btn-secondary">${ico('flag', 'w-3.5 h-3.5')} Write referral</a><button data-rec="notes" class="btn btn-ghost">${ico('message-square-text', 'w-3.5 h-3.5')} Comments<span class="pass-dot hidden" data-notes-count></span></button></div>` : ''}
     </header>
     ${staff && (student.alerts || []).length ? `<div class="max-w-6xl mb-6 space-y-2">${student.alerts.map(a => `<div class="card px-4 py-3 flex items-start gap-3 border-[#fab219]/30">${ico('triangle-alert', 'w-4 h-4 st-warning shrink-0 mt-0.5')}<div><span class="text-xs uppercase tracking-wider text-gray-400">${escapeHtml(a.type || 'Alert')}</span><p class="text-sm text-white">${escapeHtml(a.text)}</p></div></div>`).join('')}</div>` : ''}`;
   render(tenantPage(ctx, 'record', header + `<div id="rec" class="max-w-6xl">${skeletonRows(4, 'h-24')}</div>`, null, { subnav, gActive: staff ? 'school' : 'access', crumbs: [...(staff ? [{ label: 'Students', href: buildUrl(`/${ctx.slug}/sis`) }] : []), { label: name, href: buildUrl(base) }, ...(tab !== 'overview' ? [{ label }] : [])] }));
   const el = $('#rec');
+  if (staff) staffNotesCount(ctx, sid).then(n => { const dot = document.querySelector('[data-notes-count]'); if (dot && n) { dot.textContent = n; dot.classList.remove('hidden'); } });
   $('#main').addEventListener('click', e => {
     const r = e.target.closest('[data-rec]'); if (!r) return;
     if (r.dataset.rec === 'edit') openRecordEditor(ctx, student);
-    if (r.dataset.rec === 'concern') openIncidentModal(ctx, null, [{ uid: sid, name }], { concern: !ctx.can('safety') });
+    if (r.dataset.rec === 'notes') openStaffNotes(ctx, sid, name);
   });
   const term = currentTerm(settings);
   try {
@@ -2085,4 +2086,55 @@ function familyDisciplineHTML(list) {
     ${x.actions ? `<div class="mt-3 p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]"><div class="text-[11px] uppercase tracking-wider text-gray-500 mb-1">Action taken</div><p class="text-sm text-gray-200">${escapeHtml(x.actions)}</p></div>` : ''}
     ${x.summary ? `<p class="text-sm text-gray-300 mt-3 whitespace-pre-wrap">${escapeHtml(x.summary)}</p>` : ''}
     <p class="text-xs text-gray-500 mt-3">${ico('user', 'w-3.5 h-3.5 inline -mt-0.5')} ${escapeHtml(x.adminName || 'School administration')}${x.adminPhone ? ` · <a class="text-[#F59E0B] hover:underline" href="tel:${escapeHtml(x.adminPhone.replace(/[^\d+]/g, ''))}">${escapeHtml(x.adminPhone)}</a>` : ''}</p></article>`; }).join('')}</div>`;
+}
+
+// ── Staff comments on a student: internal notes only staff can see ("great with electronics",
+// "struggles with paper-and-pencil work"). Never shown to the student or family.
+const notesCol = ctx => tcol(ctx, 'staffNotes');
+export async function staffNotesCount(ctx, sid) {
+  try { return (await getDocs(query(notesCol(ctx), where('studentUid', '==', sid)))).size; } catch (e) { return 0; }
+}
+export function openStaffNotes(ctx, sid, name) {
+  const TAGS = [['strength', 'Strength', 'sparkles', 'green'], ['works-best', 'Works best with', 'lightbulb', 'amber'], ['challenge', 'Challenge', 'triangle-alert', 'red'], ['note', 'Note', 'sticky-note', 'muted']];
+  const m = openModal({ size: 'lg', align: 'top', html: modalHeader({ title: `Comments · ${escapeHtml(name)}`, subtitle: 'Internal notes for staff only. Students and families never see these.', icon: 'message-square-text' }) + modalBody(`
+    <form id="sn-form" novalidate class="mb-5"><div class="flex flex-wrap gap-1.5 mb-2" role="radiogroup" aria-label="Kind">${TAGS.map(([k, l], i) => `<label class="pill"><input type="radio" name="sn-tag" value="${k}" class="sr-only" ${i === 3 ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
+      <textarea id="sn-text" rows="3" class="input" maxlength="1000" placeholder="e.g. Very good with electronics · Doesn't work well with paper and pencil"></textarea>
+      <div class="flex items-center justify-between gap-3 mt-2"><p class="hint">${ico('lock', 'w-3 h-3 inline -mt-0.5')} Visible to staff at ${escapeHtml(ctx.tenant.name)} only.</p><button class="btn btn-primary btn-sm" type="submit">${ico('plus', 'w-3.5 h-3.5')} Add comment</button></div><p class="form-error hidden mt-2" id="sn-err"></p></form>
+    <div id="sn-list">${skeletonRows(2)}</div>`) });
+  let list = [];
+  const draw = () => {
+    const el = m.$('#sn-list'); if (!el) return;
+    el.innerHTML = list.length ? `<div class="space-y-2">${list.map(n => { const tg = TAGS.find(x => x[0] === n.tag) || TAGS[3]; const mine = n.by === ctx.me.uid; return `<div class="card p-4"><div class="flex items-start gap-3">${iconTile(tg[2], tg[3])}<div class="flex-1 min-w-0"><div class="text-[11px] text-gray-500 mb-1">${badge(tg[1], tg[3])} · ${escapeHtml(n.byName || 'Staff')} · ${escapeHtml(n.createdAt ? formatDate(n.createdAt) : 'just now')}${n.edited ? ' · edited' : ''}</div><p class="text-sm text-gray-200 whitespace-pre-wrap break-words" data-sn-text="${escapeHtml(n.id)}">${escapeHtml(n.text)}</p></div>${mine || ctx.isAdmin ? `<div class="flex gap-1">${mine ? `<button class="btn-icon" data-sn-edit="${escapeHtml(n.id)}" aria-label="Edit comment">${ico('pencil', 'w-4 h-4')}</button>` : ''}<button class="btn-icon danger" data-sn-del="${escapeHtml(n.id)}" aria-label="Delete comment">${ico('trash-2', 'w-4 h-4')}</button></div>` : ''}</div></div>`; }).join('')}</div>` : `<p class="text-sm text-gray-500">No comments yet.</p>`;
+    refreshIcons();
+  };
+  const load = async () => {
+    try { list = (await getDocs(query(notesCol(ctx), where('studentUid', '==', sid)))).docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => tsMillis(b.createdAt) - tsMillis(a.createdAt)); draw(); }
+    catch (e) { m.$('#sn-list').innerHTML = errorBox(e); refreshIcons(); }
+    const dot = document.querySelector('[data-notes-count]'); if (dot) { dot.textContent = list.length; dot.classList.toggle('hidden', !list.length); }
+  };
+  m.$('#sn-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const text = m.$('#sn-text').value.trim(), tag = m.$('[name=sn-tag]:checked')?.value || 'note';
+    if (!text) return showError(m.$('#sn-err'), 'Write a comment first.');
+    showError(m.$('#sn-err'), '');
+    withBusy(e.submitter || m.$('#sn-form [type=submit]'), 'Saving…', async () => {
+      try { await addDoc(notesCol(ctx), { studentUid: sid, studentName: name, text, tag, by: ctx.me.uid, byName: ctx.me.name, createdAt: serverTimestamp() }); m.$('#sn-text').value = ''; toast('Comment added'); await load(); }
+      catch (ex) { showError(m.$('#sn-err'), globalThis.__ember.friendlyError(ex)); }
+    });
+  });
+  m.el.addEventListener('click', async e => {
+    const del = e.target.closest('[data-sn-del]');
+    if (del) { if (!await confirmDialog({ title: 'Delete this comment?', confirmLabel: 'Delete', danger: true })) return; try { await deleteDoc(tdoc(ctx, 'staffNotes', del.dataset.snDel)); toast('Comment deleted'); load(); } catch (ex) { toast(globalThis.__ember.friendlyError(ex), 'error'); } return; }
+    const ed = e.target.closest('[data-sn-edit]');
+    if (ed) {
+      const n = list.find(x => x.id === ed.dataset.snEdit), p = m.$(`[data-sn-text="${n.id}"]`);
+      p.outerHTML = `<div data-sn-editing="${escapeHtml(n.id)}"><textarea class="input" rows="3" maxlength="1000">${escapeHtml(n.text)}</textarea><div class="flex justify-end gap-2 mt-2"><button class="btn btn-secondary btn-sm" data-sn-cancel>Cancel</button><button class="btn btn-primary btn-sm" data-sn-save="${escapeHtml(n.id)}">Save</button></div></div>`;
+      return;
+    }
+    if (e.target.closest('[data-sn-cancel]')) return draw();
+    const sv = e.target.closest('[data-sn-save]');
+    if (sv) { const text = sv.closest('[data-sn-editing]').querySelector('textarea').value.trim(); if (!text) return; try { await updateDoc(tdoc(ctx, 'staffNotes', sv.dataset.snSave), { text, edited: true, updatedAt: serverTimestamp() }); toast('Comment saved'); load(); } catch (ex) { toast(globalThis.__ember.friendlyError(ex), 'error'); } }
+  });
+  load();
+  return m;
 }

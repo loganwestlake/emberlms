@@ -825,7 +825,7 @@ async function runKiosk(k, t) {
   const verify = (s, p) => new Promise(resolve => {
     let entry = '', tries = 0, done = false, busy = false;
     const m = openModal({ size: 'sm', html: modalHeader({ title: `${p ? 'Welcome back' : 'Hi'}, ${escapeHtml(s.name.split(' ')[0])}`, subtitle: `Type your student ID to ${p ? 'end your pass' : 'get a pass'}.`, icon: 'id-card' }) + modalBody(`
-      <div class="kp-display" id="kp-show" aria-live="polite" aria-label="Student ID entered">&nbsp;</div><input id="kp-in" class="sr-only" inputmode="numeric" autocomplete="off" aria-label="Student ID">
+      <div class="kp-display" id="kp-show" aria-live="polite" aria-label="Student ID entered">&nbsp;</div>
       <p class="text-xs text-center mt-2 min-h-[1.1rem]" id="kp-msg"></p>
       <div class="kp-grid">${['1', '2', '3', '4', '5', '6', '7', '8', '9', 'del', '0', 'ok'].map(x => `<button type="button" class="kp-key ${x === 'ok' ? '!bg-[#F59E0B] !text-black font-semibold' : ''}" data-kp="${x}" aria-label="${x === 'del' ? 'Delete' : x === 'ok' ? 'Enter' : x}">${x === 'del' ? ico('delete', 'w-5 h-5 mx-auto') : x === 'ok' ? ico('check', 'w-5 h-5 mx-auto') : x}</button>`).join('')}</div>
       <p class="text-[11px] text-gray-500 text-center mt-3">Don't have a student ID yet? Ask your teacher for a pass.</p>`) });
@@ -852,7 +852,10 @@ async function runKiosk(k, t) {
     m.el.addEventListener('click', e => { const b = e.target.closest('[data-kp]'); if (b) press(b.dataset.kp); });
     m.el.addEventListener('keydown', e => { if (/^\d$/.test(e.key)) { e.preventDefault(); press(e.key); } else if (e.key === 'Backspace') { e.preventDefault(); press('del'); } else if (e.key === 'Enter') { e.preventDefault(); press('ok'); } });
     const obs = new MutationObserver(() => { if (!m.el.isConnected) { obs.disconnect(); if (!done) { done = true; clearTimeout(idle); resolve(null); } } }); obs.observe(document.body, { childList: true, subtree: true });
-    refreshIcons(); setTimeout(() => m.$('#kp-in')?.focus(), 50);
+    // No text box on the keypad, so tablets never pop up their own keyboard; the dialog itself takes focus
+    // (a physical keyboard still works through the keydown handler).
+    const box = m.el.querySelector('[role=dialog]') || m.el; box.setAttribute('tabindex', '-1');
+    refreshIcons(); setTimeout(() => { document.activeElement?.blur?.(); box.focus({ preventScroll: true }); }, 50);
   });
   $('#k-grid').addEventListener('click', async e => {
     const tile = e.target.closest('[data-k]'); if (!tile) return;

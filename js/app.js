@@ -18,6 +18,8 @@ import {
 // ═══════════════════════════════════════════════════════════════
 // Cache-busting: index.html loads app.js?v=…, and lazy modules are requested with the same version.
 const BUILD = new URL(import.meta.url).search;
+// Shown in Help. Comes from the ?v= build stamp in index.html, e.g. 20261121e → 2026.11.21e.
+const APP_VERSION = (() => { const v = new URLSearchParams(BUILD).get('v') || ''; const m = /^(\d{4})(\d{2})(\d{2})(\w*)$/.exec(v); return m ? `${m[1]}.${m[2]}.${m[3]}${m[4]}` : (v || 'dev'); })();
 const BASE_PATH = '/emberlms';
 const APP_NAME = 'Ember LMS';
 const RESERVED = ['login', 'signup', 'picker', 'onboard', 'api', 'assets', 'district', 'kiosk'];
@@ -1908,7 +1910,8 @@ function helpTrayHTML() {
     ${trayButton('data-help="shortcuts"', 'keyboard', 'Keyboard shortcuts')}
     ${ctx ? trayButton('data-help="report"', 'bug', 'Report a problem') : ''}
   </div>
-  <p class="hint mt-8">${APP_NAME} · press <kbd class="kbd">?</kbd> anywhere to open this menu.</p>`;
+  <p class="hint mt-8">${APP_NAME} · press <kbd class="kbd">?</kbd> anywhere to open this menu.</p>
+  <p class="hint mt-2" data-app-version>${ico('tag', 'w-3.5 h-3.5 inline -mt-0.5')} Version ${escapeHtml(APP_VERSION)}</p>`;
 }
 function pageHeader({ eyebrow = '', title, subtitle = '', actions = '', back = null, lead = '', accent = 'amber' }) {
   const ac = accent === 'violet' ? 'text-[#8B5CF6]' : 'text-[#F59E0B]';

@@ -372,6 +372,13 @@ service cloud.firestore {
     match /tenants/{t}/counters/{c} {
       allow read, write: if isStaff(t);
     }
+    // Staff comments on a student (internal notes). Staff only — never students or families.
+    match /tenants/{t}/staffNotes/{n} {
+      allow read: if isStaff(t);
+      allow create: if isStaff(t) && request.resource.data.by == me() && request.resource.data.text is string && request.resource.data.text.size() <= 1000;
+      allow update: if isStaff(t) && resource.data.by == me() && request.resource.data.by == me() && request.resource.data.studentUid == resource.data.studentUid;
+      allow delete: if isAdmin(t) || (isStaff(t) && resource.data.by == me());
+    }
     // Older keep-apart list (still read so nothing is lost); new groups live in passKeepApart.
     match /tenants/{t}/passPrivate/{d} {
       allow read: if isStaff(t);
