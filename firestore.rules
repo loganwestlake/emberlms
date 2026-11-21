@@ -30,6 +30,10 @@ service cloud.firestore {
     }
     function isEnrolled(t, c) { return isStudent(t) && c in studentDoc(t).data.get('enrolledCourseIds', []); }
     function canManage(t) { return isStaff(t) || isDistrictAdmin(t); }
+    // Ember Pass kiosk devices sign in with their own kiosk-only login (kiosks/{uid}), tied to one teacher.
+    function kioskDoc() { return get(/databases/$(database)/documents/kiosks/$(me())).data; }
+    function isKiosk(t) { return signedIn() && exists(/databases/$(database)/documents/kiosks/$(me())) && kioskDoc().slug == t; }
+    function kioskTeacher() { return kioskDoc().teacherUid; }
     function canReadCourse(t, c) { return canManage(t) || isEnrolled(t, c); }
     // SIS: staff capabilities, parents/guardians
     function hasCap(t, cap) {
@@ -59,6 +63,17 @@ service cloud.firestore {
         allow read: if signedIn();
         allow write: if signedIn() && me() in get(/databases/$(database)/documents/districts/$(d)).data.get('adminUids', []);
       }
+    }
+
+    // ── Ember Pass kiosk devices. The teacher creates one per device; deleting it switches that device off.
+    match /kiosks/{k} {
+      allow get: if signedIn() && (me() == k || resource.data.teacherUid == me() || isAdmin(resource.data.slug));
+      allow list: if signedIn() && resource.data.teacherUid == me();
+      allow create: if signedIn() && request.resource.data.teacherUid == me() && isStaff(request.resource.data.slug)
+        && k != me() && !exists(/databases/$(database)/documents/tenants/$(request.resource.data.slug)/students/$(k))
+        && !exists(/databases/$(database)/documents/tenants/$(request.resource.data.slug)/users/$(k));
+      allow delete: if signedIn() && (resource.data.teacherUid == me() || isAdmin(resource.data.slug));
+      allow update: if false;
     }
 
     // ── Per-user routing index (lets the app find your school without collection-group queries)
@@ -158,7 +173,7 @@ service cloud.firestore {
       }
 
       match /courses/{c} {
-        allow read: if canReadCourseContent(t, c);
+        allow read: if canReadCourseContent(t, c) || (isKiosk(t) && resource.data.ownerUid == kioskTeacher());
         allow create: if isStaff(t) && request.resource.data.ownerUid == me();
         allow update, delete: if isAdmin(t) || (isStaff(t) && resource.data.ownerUid == me());
 
@@ -173,7 +188,8 @@ service cloud.firestore {
 
         // Classmates can see each other (People page, Inbox recipients), as in Canvas.
         match /enrollments/{sid} {
-          allow read: if canReadCourse(t, c);
+          allow read: if canReadCourse(t, c)
+            || (isKiosk(t) && get(/databases/$(database)/documents/tenants/$(t)/courses/$(c)).data.ownerUid == kioskTeacher());
           allow write: if isStaff(t);
         }
 
@@ -308,9 +324,29 @@ service cloud.firestore {
             && (!hasPassSettings(t) || passSettings(t).get('allowTeacherInstant', true) != false)
             && p.destId in teacherPassRules(t, p.fromTeacherUid).get('instant', []));
     }
+    // A kiosk proves a student typed their own ID by writing a check; the rule compares it with the student
+    // record (which the kiosk can't read). Checks are write-once and nobody but admins can read them.
+    function kioskCheckOk(t, id, sid) {
+      let c = get(/databases/$(database)/documents/tenants/$(t)/kioskChecks/$(id)).data;
+      return c.studentUid == sid && c.kiosk == me() && request.time < c.at + duration.value(10, 'm');
+    }
+    match /tenants/{t}/kioskChecks/{c} {
+      allow create: if isKiosk(t) && request.resource.data.kiosk == me() && request.resource.data.at == request.time
+        && request.resource.data.code is string && request.resource.data.code.size() >= 4
+        && get(/databases/$(database)/documents/tenants/$(t)/students/$(request.resource.data.studentUid)).data.get('studentNumber', '').replace('[^0-9]', '') == request.resource.data.code;
+      allow read: if isAdmin(t);
+    }
     match /tenants/{t}/passes/{p} {
-      allow read: if isStaff(t) || isDistrictAdmin(t) || (signedIn() && resource.data.studentUid == me()) || isGuardianOf(t, resource.data.studentUid);
+      allow read: if isStaff(t) || isDistrictAdmin(t) || isKiosk(t) || (signedIn() && resource.data.studentUid == me()) || isGuardianOf(t, resource.data.studentUid);
       allow create: if (isStaff(t) && request.resource.data.createdBy == me())
+        // Kiosk: only for the teacher's own classes, only after the student proved their ID (kioskChecks/{this pass id}).
+        || (isKiosk(t) && request.resource.data.createdBy == me() && request.resource.data.createdByRole == 'kiosk'
+            && request.resource.data.type == 'kiosk' && request.resource.data.status == 'active'
+            && request.resource.data.fromTeacherUid == kioskTeacher()
+            && kioskCheckOk(t, p, request.resource.data.studentUid)
+            && !schoolPassesFrozen(t)
+            && get(/databases/$(database)/documents/tenants/$(t)/courses/$(request.resource.data.fromCourseId)).data.ownerUid == kioskTeacher()
+            && exists(/databases/$(database)/documents/tenants/$(t)/courses/$(request.resource.data.fromCourseId)/enrollments/$(request.resource.data.studentUid)))
         || (isStudent(t) && request.resource.data.studentUid == me() && request.resource.data.createdBy == me()
             && request.resource.data.createdByRole == 'student'
             && request.resource.data.get('type', 'standard') in ['standard', 'return']
@@ -318,7 +354,14 @@ service cloud.firestore {
             && !teacherPaused(t, request.resource.data.get('fromTeacherUid', ''))
             && (request.resource.data.status == 'pending'
                 || (request.resource.data.status == 'active' && instantOk(t, request.resource.data))));
-      allow update: if isStaff(t) || (signedIn() && resource.data.studentUid == me()
+      allow update: if isStaff(t)
+        || (isKiosk(t) && resource.data.fromTeacherUid == kioskTeacher() && resource.data.status == 'active'
+            && request.resource.data.status == 'ended'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'endAt', 'endedBy', 'updatedAt', 'endCheck'])
+            && request.resource.data.endCheck is string
+            && kioskCheckOk(t, request.resource.data.endCheck, resource.data.studentUid)
+            && get(/databases/$(database)/documents/tenants/$(t)/kioskChecks/$(request.resource.data.endCheck)).data.pass == p)
+        || (signedIn() && resource.data.studentUid == me()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'endAt', 'endedBy', 'startAt', 'updatedAt'])
         && ((resource.data.status == 'active' && request.resource.data.status == 'ended')
             || (resource.data.status == 'pending' && request.resource.data.status == 'cancelled' && resource.data.get('type', 'standard') != 'appointment')
@@ -337,7 +380,7 @@ service cloud.firestore {
     // Rules for one teacher's classes. Everyone in the school reads them (students' screens check them).
     // Admins write any; a teacher writes their own unless an admin locked them or the school turned it off.
     match /tenants/{t}/passRules/{uid} {
-      allow read: if isMember(t) || isDistrictAdmin(t);
+      allow read: if isMember(t) || isDistrictAdmin(t) || isKiosk(t);
       allow write: if isAdmin(t)
         || (isStaff(t) && uid == me()
             && (!hasPassSettings(t) || passSettings(t).get('allowTeacherRules', true) != false)
@@ -346,14 +389,14 @@ service cloud.firestore {
     }
     // Per-student restrictions: staff manage; the student can read their own (so their screen explains it).
     match /tenants/{t}/passRestrictions/{r} {
-      allow read: if isStaff(t) || (signedIn() && resource.data.studentUid == me());
+      allow read: if isStaff(t) || isKiosk(t) || (signedIn() && resource.data.studentUid == me());
       allow create: if isStaff(t) && request.resource.data.createdBy == me();
       allow update: if isAdmin(t) || (isStaff(t) && resource.data.createdBy == me());
       allow delete: if isAdmin(t) || (isStaff(t) && resource.data.createdBy == me());
     }
     // Keep-apart groups: staff only (students never see them). Teachers may add groups if the school allows.
     match /tenants/{t}/passKeepApart/{g} {
-      allow read: if isStaff(t);
+      allow read: if isStaff(t) || isKiosk(t);
       allow create: if isStaff(t) && request.resource.data.createdBy == me()
         && (isAdmin(t) || !hasPassSettings(t) || passSettings(t).get('allowTeacherKeepApart', true) != false);
       allow update, delete: if isAdmin(t) || (isStaff(t) && resource.data.createdBy == me());
@@ -367,7 +410,7 @@ service cloud.firestore {
 
     // ── SIS ─────────────────────────────────────────────────────────────
     match /tenants/{t}/sis/{docId} {
-      allow read: if isMember(t);
+      allow read: if isMember(t) || (isKiosk(t) && docId in ['passes', 'settings']);
       allow write: if isAdmin(t);
     }
     // One record per student per class session; families only ever see their own student's rows.

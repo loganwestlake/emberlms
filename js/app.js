@@ -20,7 +20,9 @@ import {
 const BUILD = new URL(import.meta.url).search;
 const BASE_PATH = '/emberlms';
 const APP_NAME = 'Ember LMS';
-const RESERVED = ['login', 'signup', 'picker', 'onboard', 'api', 'assets', 'district'];
+const RESERVED = ['login', 'signup', 'picker', 'onboard', 'api', 'assets', 'district', 'kiosk'];
+// Ember Pass kiosk devices sign in with their own kiosk-only login and can only ever see /kiosk.
+const isKioskUser = u => /@kiosk\.emberlms\.local$/i.test(u?.email || '');
 const GRADIENTS = ['grad-amber', 'grad-violet', 'grad-teal', 'grad-rose', 'grad-blue', 'grad-emerald'];
 const ITEM_TYPES = [
   { type: 'page',       label: 'Page',       icon: 'file-text',      desc: 'Rich text content — readings, notes, instructions' },
@@ -46,6 +48,7 @@ const db = getFirestore(app);
 // A second auth instance lets teachers create student logins without being signed out themselves.
 const secondaryApp = initializeApp(firebaseConfig, 'Secondary');
 const secondaryAuth = getAuth(secondaryApp);
+const secondaryDb = getFirestore(secondaryApp); // reads as whoever is signed in on secondaryAuth
 
 // ═══════════════════════════════════════════════════════════════
 // UTILITIES
@@ -664,6 +667,7 @@ async function destinationIn(slug, uid) {
 }
 async function resolveDestinationForUser(user) {
   if (!user) return null;
+  if (isKioskUser(user)) return '/kiosk';
   const uid = user.uid;
   try {
     const dSnap = await getDocs(query(collection(db, 'districts'), where('adminUids', 'array-contains', uid), limit(1)));
@@ -5546,8 +5550,10 @@ async function renderRoute() {
   contentCache.clear();
   layoutState = { ctx: null, district: null, course: null };
   const route = parseRoute();
+  if (isKioskUser(currentUser) && route.type !== 'kiosk') return navigate('/kiosk', { replace: true });
   try {
     switch (route.type) {
+      case 'kiosk': return await (await import('./pass.js' + BUILD)).viewKiosk();
       case 'landing': return viewLanding();
       case 'login': return viewLogin();
       case 'signup': return await viewSignup();
@@ -5598,7 +5604,7 @@ const EMBER_API = {
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, myCourses, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
   GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute,
-  ensureStudentId, backfillStudentIds, gradYearFor
+  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser
 };
 globalThis.__ember = EMBER_API;
 export {
@@ -5608,5 +5614,5 @@ export {
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, myCourses, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
   GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute,
-  ensureStudentId, backfillStudentIds, gradYearFor
+  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser
 };

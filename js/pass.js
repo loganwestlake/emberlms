@@ -193,7 +193,7 @@ const passCol = ctx => collection(db, 'tenants', ctx.slug, 'passes');
 
 export async function viewPass(ctx, tab) {
   if (ctx.isStudent) return studentView(ctx);
-  if (ctx.isRealTeacher) return tab === 'kiosk' ? kioskView(ctx) : staffView(ctx, tab || 'room');
+  if (ctx.isRealTeacher) return tab === 'kiosk' ? navigate(`/kiosk?school=${encodeURIComponent(ctx.slug)}`, { replace: true }) : staffView(ctx, tab || 'room');
   return navigate(`/${ctx.slug}`, { replace: true });
 }
 
@@ -334,7 +334,7 @@ async function staffView(ctx, tab) {
   const sound = () => ls(`ember_pass_sound:${ctx.me.uid}`) !== 'off';
   render(tenantPage(ctx, 'pass', pageHeader({ eyebrow: escapeHtml(ctx.tenant.name), title: 'Ember Pass', subtitle: 'Hall passes for your classes and the whole building.',
       actions: `<div class="flex flex-wrap gap-2"><button id="pf-sound" class="btn-icon" title="Sound and desktop alerts for new requests" aria-label="Toggle request alerts">${ico(sound() ? 'bell-ring' : 'bell-off', 'w-4 h-4')}</button>
-        <a href="${buildUrl(`/${ctx.slug}/pass/kiosk`)}" class="btn btn-secondary">${ico('tablet-smartphone', 'w-4 h-4')} Kiosk</a>
+        <button id="pf-kiosk" class="btn btn-secondary">${ico('tablet-smartphone', 'w-4 h-4')} Kiosk</button>
         <button id="pf-pause" class="btn btn-secondary">${ico('pause', 'w-4 h-4')} <span>Pause my room</span></button>
         ${ctx.isAdmin ? `<button id="pf-freeze" class="btn btn-secondary">${ico('snowflake', 'w-4 h-4')} <span>Pause school</span></button>` : ''}
         <button id="pf-new" class="btn btn-primary">${ico('ticket', 'w-4 h-4')} New pass</button></div>` })
@@ -360,6 +360,7 @@ async function staffView(ctx, tab) {
   };
   drawBanner();
   $('#pf-new').addEventListener('click', () => newPassModal(ctx, env));
+  $('#pf-kiosk').addEventListener('click', () => kioskModal(ctx));
   $('#pf-sound').addEventListener('click', async e => {
     const on = !sound(); ls(`ember_pass_sound:${ctx.me.uid}`, on ? 'on' : 'off');
     if (on && window.Notification && Notification.permission === 'default') await Notification.requestPermission().catch(() => {});
@@ -642,99 +643,274 @@ async function newPassModal(ctx, env) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// KIOSK — a classroom device: tap your name, pick where you're going.
+// KIOSK — /emberlms/kiosk on a classroom device.
+// The device signs in with its own kiosk-only login (kiosks/{uid}), never the teacher's account, so a
+// student who leaves the kiosk screen can't reach anything else: every other page sends a kiosk login
+// back here, and the security rules only let it read that teacher's rosters and start/end passes after
+// the student's ID is checked on the server. Leaving the kiosk needs the teacher's password.
 // ═══════════════════════════════════════════════════════════════
-async function kioskView(ctx) {
+const KIOSK_DEV = 'ember_kiosk_device';
+const readDev = () => { try { return JSON.parse(ls(KIOSK_DEV) || 'null'); } catch { return null; } };
+const isKioskEmail = e => /@kiosk\.emberlms\.local$/i.test(e || '');
+const randStr = (n, set = 'abcdefghjkmnpqrstuvwxyz23456789') => Array.from(crypto.getRandomValues(new Uint32Array(n)), x => set[x % set.length]).join('');
+const goFullscreen = () => { try { if (!document.fullscreenElement && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {}); } catch (e) {} };
+const leaveFullscreen = () => { try { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch (e) {} };
+const deviceLabel = () => { const u = navigator.userAgent; const kind = /CrOS/.test(u) ? 'Chromebook' : /iPad/.test(u) ? 'iPad' : /Android/.test(u) ? 'Android tablet' : /Mac/.test(u) ? 'Mac' : /Windows/.test(u) ? 'Windows PC' : 'Device'; return `${kind} · set up ${new Date().toLocaleDateString()}`; };
+const kioskCard = (inner) => `<div class="kiosk kiosk-center"><div class="kiosk-card"><div class="flex items-center gap-3 mb-6">${ico('flame', 'w-8 h-8 text-[#F59E0B]')}<div><div class="text-[11px] uppercase tracking-[0.18em] text-[#F59E0B]">Ember Pass</div><div class="text-white text-lg">Kiosk</div></div></div>${inner}</div></div>`;
+// The schools where this signed-in person is staff.
+async function staffSchools(user) {
+  const set = new Set([new URLSearchParams(location.search).get('school'), ls(`ember_last_tenant:${user.uid}`)].filter(Boolean));
+  try { ((await getDoc(doc(db, 'userIndex', user.uid))).data()?.tenants || []).forEach(x => set.add(x)); } catch (e) {}
+  const out = [];
+  for (const slug of set) {
+    try { const u = await getDoc(doc(db, 'tenants', slug, 'users', user.uid)); if (u.exists()) { const tn = await globalThis.__ember.getTenant(slug).catch(() => null); out.push({ slug, name: tn?.name || slug, me: u.data() }); } } catch (e) {}
+  }
+  return out;
+}
+
+export async function viewKiosk() {
   const t = routeTokenNow();
-  setTitle('Kiosk · Ember Pass', ctx.tenant.name);
-  const [pol, courses, settings, myRules, restrictions, keepApart] = await Promise.all([loadPolicy(ctx), myCourses(ctx).catch(() => []), (await sis()).getSettings(ctx).catch(() => null), teacherRules(ctx, ctx.me.uid), loadRestrictions(ctx), loadKeepApart(ctx)]);
+  const E = globalThis.__ember, user = E.auth.currentUser, dev = readDev(), params = new URLSearchParams(location.search);
+  setTitle('Ember Pass kiosk');
+  document.body.classList.remove('kiosk-on');
+  // 1. Signed in as a kiosk device → run it.
+  if (user && isKioskEmail(user.email)) {
+    const k = await getDoc(doc(db, 'kiosks', user.uid)).catch(() => null);
+    if (!live(t)) return;
+    if (!k?.exists()) {
+      render(kioskCard(`<h1 class="font-serif text-3xl text-white mb-2">This kiosk was turned off</h1><p class="text-sm text-gray-400 mb-6">The teacher removed this device. A teacher can set it up again.</p><button class="btn btn-primary btn-block py-3" id="kz-reset">${ico('rotate-ccw', 'w-4 h-4')} Set up again</button>`));
+      refreshIcons();
+      $('#kz-reset').addEventListener('click', async () => { ls(KIOSK_DEV, ''); await E.signOut(E.auth); navigate('/kiosk', { replace: true }); });
+      return;
+    }
+    return runKiosk({ ...k.data(), kioskId: user.uid }, t);
+  }
+  // 2. A teacher just left the kiosk with their password → back to Ember Pass.
+  const exitTo = sessionStorage.getItem('ember_kiosk_exit');
+  if (user && exitTo) { sessionStorage.removeItem('ember_kiosk_exit'); return navigate(`/${exitTo}/pass`, { replace: true }); }
+  // 3. This device is already a kiosk → sign it in (automatically, or with one tap when a teacher is signed in).
+  if (dev && (!user || params.get('start') === '1')) return startKiosk(dev, t);
+  if (dev && user) {
+    render(kioskCard(`<h1 class="font-serif text-3xl text-white mb-2">${escapeHtml(dev.teacherName || 'Teacher')}’s kiosk</h1><p class="text-sm text-gray-400 mb-6">This device is set up as an Ember Pass kiosk. Starting it signs you out here — to leave the kiosk later, tap <b>Teacher</b> and enter your password.</p>
+      <button class="btn btn-primary btn-block py-3" id="kz-start">${ico('play', 'w-4 h-4')} Start kiosk</button><button class="btn btn-ghost btn-block mt-2" id="kz-forget">${ico('trash-2', 'w-4 h-4')} Stop using this device as a kiosk</button>`));
+    refreshIcons();
+    $('#kz-start').addEventListener('click', () => { goFullscreen(); startKiosk(dev, t); });
+    $('#kz-forget').addEventListener('click', async () => {
+      if (!await confirmDialog({ title: 'Stop using this device as a kiosk?', confirmLabel: 'Remove', danger: true })) return;
+      await deleteDoc(doc(db, 'kiosks', dev.kioskId)).catch(() => {}); ls(KIOSK_DEV, ''); toast('Kiosk removed from this device'); viewKiosk();
+    });
+    return;
+  }
+  // 4. Not set up yet: a teacher signs in and turns this device into their kiosk.
+  if (!user) {
+    render(kioskCard(`<h1 class="font-serif text-3xl text-white mb-2">Set up a kiosk</h1><p class="text-sm text-gray-400 mb-6">Students tap their name and type their student ID to get a hall pass. A teacher signs in once to set this device up — after that it opens straight into the kiosk, and students can't get into the teacher's account.</p>
+      <button class="btn btn-primary btn-block py-3" id="kz-login">${ico('log-in', 'w-4 h-4')} Sign in as the teacher</button>`));
+    refreshIcons();
+    $('#kz-login').addEventListener('click', () => navigate(`/login?as=staff&next=${encodeURIComponent('/kiosk')}`));
+    return;
+  }
+  render(kioskCard(skeletonRows(2, 'h-12')));
+  const schools = await staffSchools(user);
   if (!live(t)) return;
+  if (!schools.length) {
+    render(kioskCard(`<h1 class="font-serif text-3xl text-white mb-2">Teachers only</h1><p class="text-sm text-gray-400 mb-6">Only a teacher can set up an Ember Pass kiosk. Sign in with a teacher account.</p><button class="btn btn-secondary btn-block" id="kz-out">${ico('log-out', 'w-4 h-4')} Switch account</button>`));
+    refreshIcons(); $('#kz-out').addEventListener('click', async () => { await E.signOut(E.auth); navigate('/kiosk'); }); return;
+  }
+  const name = displayNameOf(schools[0].me) || user.displayName || 'Teacher';
+  render(kioskCard(`<h1 class="font-serif text-3xl text-white mb-2">Make this device your kiosk</h1>
+    <p class="text-sm text-gray-400 mb-5">This device gets its own kiosk login for <b class="text-white">${escapeHtml(name)}</b>'s classes. It can only show your class lists and start or end passes after a student types their ID. You'll be signed out here; to leave the kiosk, tap <b>Teacher</b> and enter your password.</p>
+    ${schools.length > 1 ? `<label class="label" for="kz-school">School</label><select id="kz-school" class="input mb-5" data-icon="school">${schools.map(x => `<option value="${escapeHtml(x.slug)}">${escapeHtml(x.name)}</option>`).join('')}</select>` : `<p class="text-xs text-gray-500 mb-5">${ico('school', 'w-3.5 h-3.5 inline -mt-0.5')} ${escapeHtml(schools[0].name)}</p>`}
+    <button class="btn btn-primary btn-block py-3" id="kz-setup">${ico('tablet-smartphone', 'w-4 h-4')} Start kiosk on this device</button><p class="form-error mt-3 hidden" id="kz-err"></p>`));
+  refreshIcons();
+  $('#kz-setup').addEventListener('click', e => {
+    goFullscreen(); // needs the tap, so do it first
+    const slug = $('#kz-school')?.value || schools[0].slug, sch = schools.find(x => x.slug === slug);
+    withBusy(e.currentTarget, 'Setting up…', async () => {
+      try {
+        const email = `k${randStr(12)}@kiosk.emberlms.local`, password = randStr(28, 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789');
+        const kioskId = await E.createLogin(email, password);
+        const teacherName = displayNameOf(sch.me) || name;
+        await setDoc(doc(db, 'kiosks', kioskId), { slug, teacherUid: user.uid, teacherName, teacherEmail: user.email || '', label: deviceLabel(), createdAt: serverTimestamp() });
+        const d = { slug, email, password, kioskId, teacherName, teacherEmail: user.email || '' };
+        ls(KIOSK_DEV, JSON.stringify(d));
+        await startKiosk(d, t);
+      } catch (ex) { console.error(ex); showError($('#kz-err'), friendlyError(ex)); }
+    });
+  });
+}
+async function startKiosk(dev, t) {
+  const E = globalThis.__ember;
+  render(kioskCard(`<div class="text-center py-6">${ico('loader-circle', 'w-7 h-7 animate-spin mx-auto text-[#F59E0B]')}<p class="text-sm text-gray-400 mt-3">Starting the kiosk…</p></div>`)); refreshIcons();
+  try { await E.signInWithEmailAndPassword(E.auth, dev.email, dev.password); if (live(t)) E.renderRoute(); } // the auth change re-renders /kiosk as the kiosk
+  catch (ex) {
+    console.error(ex);
+    render(kioskCard(`<h1 class="font-serif text-3xl text-white mb-2">Couldn't start the kiosk</h1><p class="text-sm text-gray-400 mb-6">${escapeHtml(friendlyError(ex))} A teacher can set this device up again.</p><button class="btn btn-primary btn-block" id="kz-reset">${ico('rotate-ccw', 'w-4 h-4')} Set up again</button>`));
+    refreshIcons(); $('#kz-reset').addEventListener('click', () => { ls(KIOSK_DEV, ''); viewKiosk(); });
+  }
+}
+
+async function runKiosk(k, t) {
+  const E = globalThis.__ember;
+  const tenant = await E.getTenant(k.slug).catch(() => null);
+  if (!live(t)) return;
+  const ctx = { slug: k.slug, tenant: tenant || { name: '' }, me: { uid: k.kioskId, name: `${k.teacherName} (kiosk)` }, isKiosk: true, isAdmin: false };
+  const [pol, courses, settings, myRules, restrictions, keepApart] = await Promise.all([
+    loadPolicy(ctx), getDocs(query(collection(db, 'tenants', k.slug, 'courses'), where('ownerUid', '==', k.teacherUid))).then(s => s.docs.map(d => ({ id: d.id, ...d.data() }))).catch(() => []),
+    (await sis()).getSettings(ctx).catch(() => null), teacherRules(ctx, k.teacherUid), loadRestrictions(ctx), loadKeepApart(ctx)]);
+  if (!live(t)) return;
+  setTitle(`Kiosk · ${k.teacherName}`, ctx.tenant.name);
+  document.body.classList.add('kiosk-on');
+  unsubs.push(() => document.body.classList.remove('kiosk-on'));
   const periods = settings?.periods || [];
   let course = currentCourse(courses, periods) || courses[0], roster = [], passes = [];
-  render(`<div class="kiosk"><header class="kiosk-head"><div class="flex items-center gap-3">${ico('flame', 'w-8 h-8 text-[#F59E0B]')}<div><div class="text-[11px] uppercase tracking-[0.18em] text-[#F59E0B]">Ember Pass kiosk</div><div class="text-white text-lg">${escapeHtml(ctx.tenant.name)}</div></div></div>
-      <div class="flex items-center gap-2"><select id="k-course" class="input !py-2 !w-auto" aria-label="Class" data-icon="book-open">${courses.map(c => `<option value="${escapeHtml(c.id)}" ${c.id === course?.id ? 'selected' : ''}>${escapeHtml(c.title || 'Class')}</option>`).join('')}</select><button class="btn btn-secondary" id="k-exit">${ico('log-out', 'w-4 h-4')} Exit kiosk</button></div></header>
-    <div class="kiosk-body"><p class="text-center text-gray-400 mb-6">Tap your name and type your student ID to get a pass. Do the same when you’re back.</p><div id="k-grid" class="kiosk-grid">${skeletonRows(4, 'h-20')}</div></div></div>`);
-  // Each student proves who they are with their student ID before a pass starts or ends, so nobody can
-  // tap through the class list and sign everyone out. Three wrong tries locks that name for 2 minutes.
-  const ids = new Map();
-  const LOCK_KEY = `ember_kiosk_locks:${ctx.slug}`;
+  render(`<div class="kiosk"><header class="kiosk-head"><div class="flex items-center gap-3">${ico('flame', 'w-8 h-8 text-[#F59E0B]')}<div><div class="text-[11px] uppercase tracking-[0.18em] text-[#F59E0B]">Ember Pass kiosk</div><div class="text-white text-lg">${escapeHtml(k.teacherName)}${ctx.tenant.name ? ` · <span class="text-gray-400">${escapeHtml(ctx.tenant.name)}</span>` : ''}</div></div></div>
+      <div class="flex items-center gap-2">${courses.length > 1 ? `<select id="k-course" class="input !py-2 !w-auto" aria-label="Class" data-icon="book-open">${courses.map(c => `<option value="${escapeHtml(c.id)}" ${c.id === course?.id ? 'selected' : ''}>${escapeHtml(c.title || 'Class')}</option>`).join('')}</select>` : `<span class="text-sm text-gray-300">${escapeHtml(course?.title || '')}</span>`}<button class="btn btn-ghost" id="k-teacher" title="Teacher">${ico('lock', 'w-4 h-4')} Teacher</button></div></header>
+    <div class="kiosk-body"><div id="k-banner"></div><p class="text-center text-gray-400 mb-6">Tap your name and type your student ID to get a pass. Do the same when you’re back.</p><div id="k-grid" class="kiosk-grid">${skeletonRows(4, 'h-20')}</div></div>
+    <button id="k-fs" class="kiosk-fs ${document.fullscreenElement ? 'hidden' : ''}" type="button">${ico('maximize', 'w-10 h-10 text-[#F59E0B] mx-auto mb-4')}<span class="block font-serif text-3xl text-white">Tap to start</span><span class="block text-sm text-gray-400 mt-2">Ember Pass kiosk · ${escapeHtml(k.teacherName)}</span></button></div>`);
+  // Full screen: needs a tap, and comes back whenever someone presses Esc.
+  const fs = $('#k-fs');
+  fs.addEventListener('click', () => { goFullscreen(); fs.classList.add('hidden'); });
+  const onFs = () => { if (!document.fullscreenElement && fs.isConnected) fs.classList.remove('hidden'); };
+  document.addEventListener('fullscreenchange', onFs); unsubs.push(() => document.removeEventListener('fullscreenchange', onFs));
+  const noMenu = e => e.preventDefault(); document.addEventListener('contextmenu', noMenu); unsubs.push(() => document.removeEventListener('contextmenu', noMenu));
+  const banner = () => { const msg = pol.eff.frozen ? (pol.eff.freezeMessage || 'Passes are paused school-wide.') : myRules?.paused ? (myRules.pausedMessage || 'Passes are paused for this class.') : ''; $('#k-banner').innerHTML = msg ? `<div class="pass-banner is-paused mb-6">${ico('pause', 'w-5 h-5 shrink-0')}<div class="text-white">${escapeHtml(msg)}</div></div>` : ''; };
+  banner();
+  // Lockout after three wrong IDs (remembered on this device).
+  const LOCK_KEY = `ember_kiosk_locks:${k.slug}`;
   const locks = (() => { try { return JSON.parse(ls(LOCK_KEY) || '{}'); } catch { return {}; } })();
   const lockedFor = uid => Math.max(0, (locks[uid] || 0) - Date.now());
   const saveLocks = () => ls(LOCK_KEY, JSON.stringify(Object.fromEntries(Object.entries(locks).filter(([, v]) => v > Date.now()))));
-  const digits = v => String(v || '').replace(/\D/g, '');
   const loadRoster = async () => {
-    roster = course ? (await getDocs(collection(db, 'tenants', ctx.slug, 'courses', course.id, 'enrollments'))).docs.map(d => ({ uid: d.id, name: d.data().studentName || d.data().username || 'Student' })).sort((a, b) => a.name.localeCompare(b.name)) : [];
-    await Promise.all(roster.filter(x => !ids.has(x.uid)).map(x => getDoc(doc(db, 'tenants', ctx.slug, 'students', x.uid)).then(d => ids.set(x.uid, d.exists() ? d.data().studentNumber || '' : '')).catch(() => ids.set(x.uid, ''))));
+    roster = course ? (await getDocs(collection(db, 'tenants', k.slug, 'courses', course.id, 'enrollments')).catch(() => ({ docs: [] }))).docs.map(d => ({ uid: d.id, name: d.data().studentName || d.data().username || 'Student' })).sort((a, b) => a.name.localeCompare(b.name)) : [];
     draw();
   };
   const draw = () => {
     const g = $('#k-grid'); if (!g) return;
     g.innerHTML = roster.length ? roster.map(s => { const p = passes.find(x => x.studentUid === s.uid && x.status === 'active'), lock = lockedFor(s.uid); return `<button class="kiosk-tile ${p ? 'is-out' : ''} ${p && isOverdue(p) ? 'is-late' : ''} ${lock ? 'is-locked' : ''}" data-k="${escapeHtml(s.uid)}">${avatar(s.name, null, 'w-12 h-12', 'text-base')}<span class="text-white text-base mt-2 text-center leading-tight">${escapeHtml(s.name)}</span>${lock ? `<span class="text-xs text-[#f08a8a] mt-1 flex items-center gap-1">${ico('lock', 'w-3.5 h-3.5')} Locked · ask your teacher</span>` : p ? `<span class="text-xs mt-1 flex items-center gap-1">${ico(destOf(pol, p.destId).icon, 'w-3.5 h-3.5')} ${escapeHtml(toLabel(p))} · ${timerHTML(p)}</span>` : `<span class="text-xs text-gray-500 mt-1">In class</span>`}</button>`; }).join('')
-      : emptyState({ icon: 'users', title: 'No students in this class' });
+      : emptyState({ icon: 'users', title: courses.length ? 'No students in this class' : 'No classes yet', text: courses.length ? '' : `${k.teacherName} doesn't have any classes in Ember yet.` });
     refreshIcons();
   };
-  unsubs.push(onSnapshot(query(passCol(ctx), where('date', '==', todayISO())), snap => { passes = snap.docs.map(d => ({ id: d.id, ...d.data() })); if (live(t)) draw(); }));
+  unsubs.push(onSnapshot(query(passCol(ctx), where('date', '==', todayISO())), snap => { passes = snap.docs.map(d => ({ id: d.id, ...d.data() })); if (live(t)) draw(); }, e => console.warn(e)));
   startTicker();
   const lockTick = setInterval(() => { if (Object.values(locks).some(v => v && v <= Date.now() + 1500)) draw(); }, 5000); unsubs.push(() => clearInterval(lockTick));
-  $('#k-course').addEventListener('change', e => { course = courses.find(c => c.id === e.target.value); loadRoster(); });
-  $('#k-exit').addEventListener('click', async () => { if (await confirmDialog({ title: 'Exit kiosk?', message: 'Only the teacher should do this.', confirmLabel: 'Exit' })) navigate(`/${ctx.slug}/pass`); });
-  // Keypad: asks for the student ID, resolves true when it matches.
+  $('#k-course')?.addEventListener('change', e => { course = courses.find(c => c.id === e.target.value); loadRoster(); });
+  // Teacher: password to leave the kiosk (or to switch it off).
+  $('#k-teacher').addEventListener('click', () => {
+    const m = openModal({ size: 'sm', html: modalHeader({ title: 'Teacher', subtitle: 'Enter your password to leave the kiosk.', icon: 'lock' }) + `<form novalidate>${modalBody(`
+      <label class="label" for="kt-email">Email</label><input id="kt-email" type="email" class="input mb-4" autocomplete="off" value="${escapeHtml(k.teacherEmail || '')}">
+      <label class="label" for="kt-pass">Password</label><input id="kt-pass" type="password" class="input" autocomplete="off"><p class="form-error mt-3 hidden" id="kt-err"></p>`)}
+      ${modalFooter(`<button type="button" data-close class="btn btn-secondary flex-1">Cancel</button><button type="submit" class="btn btn-primary flex-1">Leave kiosk</button>`)}</form>` });
+    const idle = setTimeout(() => m.close(), 60000);
+    setTimeout(() => (k.teacherEmail ? m.$('#kt-pass') : m.$('#kt-email')).focus(), 50);
+    m.$('form').addEventListener('submit', e => {
+      e.preventDefault();
+      const email = m.$('#kt-email').value.trim(), pw = m.$('#kt-pass').value, err = m.$('#kt-err');
+      if (!email || !pw) return showError(err, 'Enter your email and password.');
+      withBusy(e.submitter || m.$('[type=submit]'), 'Checking…', async () => {
+        try {
+          // Check the password on a separate sign-in first, so the kiosk session is only replaced by a teacher.
+          const cred = await E.signInWithEmailAndPassword(E.secondaryAuth, email, pw);
+          const staff = await getDoc(doc(E.secondaryDb, 'tenants', k.slug, 'users', cred.user.uid)).catch(() => null);
+          await E.signOut(E.secondaryAuth).catch(() => {});
+          if (!staff?.exists()) return showError(err, 'Only a teacher at this school can leave the kiosk.');
+          clearTimeout(idle); leaveFullscreen();
+          sessionStorage.setItem('ember_kiosk_exit', k.slug);
+          await E.signInWithEmailAndPassword(E.auth, email, pw); // the auth change sends the teacher to Ember Pass
+        } catch (ex) { sessionStorage.removeItem('ember_kiosk_exit'); showError(err, ['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found'].includes(ex.code) ? 'That email or password isn’t right.' : friendlyError(ex)); }
+      });
+    });
+    refreshIcons();
+  });
+  // Keypad. The server checks the ID (kioskChecks) — this device never sees anyone's student ID.
   const verify = (s, p) => new Promise(resolve => {
-    const want = digits(ids.get(s.uid));
-    if (!want) {
-      const m0 = openModal({ size: 'sm', html: modalHeader({ title: `Hi ${escapeHtml(s.name.split(' ')[0])}`, icon: 'id-card' }) + modalBody(`<p class="text-sm text-gray-300">You don't have a student ID yet, so you can't use the kiosk. Ask your teacher for a pass.</p>`) + modalFooter(`<button data-close class="btn btn-primary flex-1">OK</button>`) });
-      m0.$('[data-close]').addEventListener('click', () => m0.close()); refreshIcons();
-      return resolve(false);
-    }
-    let entry = '', tries = 0, done = false;
+    let entry = '', tries = 0, done = false, busy = false;
     const m = openModal({ size: 'sm', html: modalHeader({ title: `${p ? 'Welcome back' : 'Hi'}, ${escapeHtml(s.name.split(' ')[0])}`, subtitle: `Type your student ID to ${p ? 'end your pass' : 'get a pass'}.`, icon: 'id-card' }) + modalBody(`
       <div class="kp-display" id="kp-show" aria-live="polite" aria-label="Student ID entered">&nbsp;</div><input id="kp-in" class="sr-only" inputmode="numeric" autocomplete="off" aria-label="Student ID">
       <p class="text-xs text-center mt-2 min-h-[1.1rem]" id="kp-msg"></p>
-      <div class="kp-grid">${['1', '2', '3', '4', '5', '6', '7', '8', '9', 'del', '0', 'ok'].map(k => `<button type="button" class="kp-key ${k === 'ok' ? '!bg-[#F59E0B] !text-black font-semibold' : ''}" data-kp="${k}" aria-label="${k === 'del' ? 'Delete' : k === 'ok' ? 'Enter' : k}">${k === 'del' ? ico('delete', 'w-5 h-5 mx-auto') : k === 'ok' ? ico('check', 'w-5 h-5 mx-auto') : k}</button>`).join('')}</div>`) });
-    const show = () => { const d = entry; m.$('#kp-show').textContent = d ? (d.length > 4 ? `${d.slice(0, 4)}-${d.slice(4)}` : d) : ' '; };
+      <div class="kp-grid">${['1', '2', '3', '4', '5', '6', '7', '8', '9', 'del', '0', 'ok'].map(x => `<button type="button" class="kp-key ${x === 'ok' ? '!bg-[#F59E0B] !text-black font-semibold' : ''}" data-kp="${x}" aria-label="${x === 'del' ? 'Delete' : x === 'ok' ? 'Enter' : x}">${x === 'del' ? ico('delete', 'w-5 h-5 mx-auto') : x === 'ok' ? ico('check', 'w-5 h-5 mx-auto') : x}</button>`).join('')}</div>
+      <p class="text-[11px] text-gray-500 text-center mt-3">Don't have a student ID yet? Ask your teacher for a pass.</p>`) });
+    const show = () => { m.$('#kp-show').textContent = entry ? (entry.length > 4 ? `${entry.slice(0, 4)}-${entry.slice(4)}` : entry) : ' '; };
     const finish = ok => { if (done) return; done = true; clearTimeout(idle); m.close(); resolve(ok); };
-    let idle = setTimeout(() => finish(false), 45000);
-    const submit = () => {
-      if (!entry) return;
-      if (entry === want) return finish(true);
+    let idle = setTimeout(() => finish(null), 45000);
+    const submit = async () => {
+      if (!entry || busy) return;
+      busy = true; m.$('#kp-msg').textContent = 'Checking…';
+      const checkId = p ? `${p.id}_e${randStr(6)}` : doc(passCol(ctx)).id;
+      try {
+        await setDoc(doc(db, 'tenants', k.slug, 'kioskChecks', checkId), { studentUid: s.uid, code: entry, kiosk: k.kioskId, at: serverTimestamp(), ...(p ? { pass: p.id } : {}) });
+        return finish(checkId);
+      } catch (ex) {
+        busy = false;
+        if (ex.code !== 'permission-denied') { m.$('#kp-msg').innerHTML = `<span class="text-[#f08a8a]">${escapeHtml(friendlyError(ex))}</span>`; return; }
+      }
       tries++; entry = ''; show();
       const box = m.$('#kp-show'); box.classList.remove('is-wrong'); void box.offsetWidth; box.classList.add('is-wrong');
-      if (tries >= 3) { locks[s.uid] = Date.now() + 2 * 60000; saveLocks(); draw(); toast(`${s.name.split(' ')[0]} is locked for 2 minutes`, 'error'); return finish(false); }
+      if (tries >= 3) { locks[s.uid] = Date.now() + 2 * 60000; saveLocks(); draw(); toast(`${s.name.split(' ')[0]} is locked for 2 minutes`, 'error'); return finish(null); }
       m.$('#kp-msg').innerHTML = `<span class="text-[#f08a8a]">That's not your ID. ${3 - tries} ${3 - tries === 1 ? 'try' : 'tries'} left.</span>`;
     };
-    const press = k => { clearTimeout(idle); idle = setTimeout(() => finish(false), 45000); if (k === 'del') entry = entry.slice(0, -1); else if (k === 'ok') return submit(); else if (entry.length < 12) entry += k; show(); };
+    const press = x => { clearTimeout(idle); idle = setTimeout(() => finish(null), 45000); if (busy) return; if (x === 'del') entry = entry.slice(0, -1); else if (x === 'ok') return submit(); else if (entry.length < 12) entry += x; show(); };
     m.el.addEventListener('click', e => { const b = e.target.closest('[data-kp]'); if (b) press(b.dataset.kp); });
     m.el.addEventListener('keydown', e => { if (/^\d$/.test(e.key)) { e.preventDefault(); press(e.key); } else if (e.key === 'Backspace') { e.preventDefault(); press('del'); } else if (e.key === 'Enter') { e.preventDefault(); press('ok'); } });
-    const obs = new MutationObserver(() => { if (!m.el.isConnected) { obs.disconnect(); if (!done) { done = true; clearTimeout(idle); resolve(false); } } }); obs.observe(document.body, { childList: true, subtree: true });
+    const obs = new MutationObserver(() => { if (!m.el.isConnected) { obs.disconnect(); if (!done) { done = true; clearTimeout(idle); resolve(null); } } }); obs.observe(document.body, { childList: true, subtree: true });
     refreshIcons(); setTimeout(() => m.$('#kp-in')?.focus(), 50);
   });
   $('#k-grid').addEventListener('click', async e => {
     const tile = e.target.closest('[data-k]'); if (!tile) return;
+    if (!document.fullscreenElement) goFullscreen();
     const s = roster.find(x => x.uid === tile.dataset.k);
     if (lockedFor(s.uid)) return toast(`Too many wrong tries. Try again in ${Math.ceil(lockedFor(s.uid) / 60000)} min or ask your teacher.`, 'error');
     const p0 = passes.find(x => x.studentUid === s.uid && x.status === 'active');
-    if (!await verify(s, p0)) return;
-    const p = passes.find(x => x.studentUid === s.uid && x.status === 'active');
-    if (p) { await updateDoc(passRef(ctx, p.id), { status: 'ended', endAt: serverTimestamp(), endedBy: ctx.me.uid, kioskVerified: true, updatedAt: serverTimestamp() }); toast(`Welcome back, ${s.name.split(' ')[0]}`); return; }
+    const checkId = await verify(s, p0);
+    if (!checkId) return;
+    if (p0) {
+      try { await updateDoc(passRef(ctx, p0.id), { status: 'ended', endAt: serverTimestamp(), endedBy: k.kioskId, endCheck: checkId, updatedAt: serverTimestamp() }); toast(`Welcome back, ${s.name.split(' ')[0]}`); }
+      catch (ex) { toast(friendlyError(ex), 'error'); }
+      return;
+    }
     const mine = passes.filter(x => x.studentUid === s.uid);
     const m = openModal({ size: 'lg', html: modalHeader({ title: `Hi ${escapeHtml(s.name.split(' ')[0])} — where are you going?`, icon: 'ticket' }) + modalBody(`<div class="grid grid-cols-2 sm:grid-cols-3 gap-3">${enabledDests(pol).filter(d => d.kind !== 'room' && d.kind !== 'other').map(d => {
-        const ev = evaluate({ pol: { ...pol, eff: { ...pol.eff, frozen: false, blackouts: [] } }, rules: { ...(myRules || {}), paused: false, blockFirstMin: 0, blockLastMin: 0 }, restrictions, mine, dest: d, periods: [], studentUid: s.uid, teacherName: ctx.me.name });
-        const warn = staffChecks({ pol, rules: myRules, keepApart, passes, studentUid: s.uid, studentName: s.name, dest: d, fromTeacherUid: ctx.me.uid });
-        const blocked = ev.blocks.length || warn.length;
-        return `<button class="pass-dest card ${blocked ? "is-blocked" : "card-hover"} p-4 text-left" data-kd="${d.id}" ${blocked ? `disabled title="${escapeHtml([...ev.blocks, ...warn][0])}"` : ""}>${iconTile(d.icon, blocked ? 'muted' : 'green')}<div class="text-white mt-3">${escapeHtml(d.name)}</div><div class="text-[11px] text-gray-500 mt-0.5">${blocked ? 'Ask your teacher' : `${ev.minutes} min`}</div></button>`; }).join('')}</div>`) });
+        const ev = evaluate({ pol, rules: myRules, restrictions, mine, dest: d, periods, studentUid: s.uid, teacherName: k.teacherName });
+        const warn = staffChecks({ pol, rules: myRules, keepApart, passes, studentUid: s.uid, studentName: s.name, dest: d, fromTeacherUid: k.teacherUid });
+        const why = [...ev.blocks, ...warn.filter(w => !w.startsWith('Keep apart'))][0] || (warn.length ? 'Not right now — ask your teacher.' : '');
+        const blocked = !!(ev.blocks.length || warn.length);
+        return `<button class="pass-dest card ${blocked ? 'is-blocked' : 'card-hover'} p-4 text-left" data-kd="${d.id}" ${blocked ? `disabled title="${escapeHtml(why)}"` : ''}>${iconTile(d.icon, blocked ? 'muted' : 'green')}<div class="text-white mt-3">${escapeHtml(d.name)}</div><div class="text-[11px] text-gray-500 mt-0.5">${blocked ? escapeHtml(why.length > 60 ? 'Ask your teacher' : why) : `${ev.minutes} min`}</div></button>`; }).join('')}</div>`) });
     const idle = setTimeout(() => m.close(), 45000);
     m.el.addEventListener('click', async ev2 => {
       const b = ev2.target.closest('[data-kd]'); if (!b || b.disabled) return;
       clearTimeout(idle);
       const d = destOf(pol, b.dataset.kd);
-      await addDoc(passCol(ctx), { studentUid: s.uid, studentName: s.name, date: todayISO(), createdBy: ctx.me.uid, createdByName: ctx.me.name, createdByRole: 'staff', type: 'kiosk', kioskVerified: true,
-        fromCourseId: course?.id || '', fromTitle: course?.title || '', fromTeacherUid: ctx.me.uid, fromTeacherName: ctx.me.name, fromRoom: course?.room || '', destId: d.id, destName: d.name, destKind: '', destTeacherUid: '', destTeacherName: '', destOther: '',
-        note: '', minutes: (myRules?.minutes || {})[d.id] || d.minutes || 5, status: 'active', startAt: serverTimestamp(), approvedBy: ctx.me.uid, approvedByName: ctx.me.name, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-      m.close(); toast(`${s.name.split(' ')[0]} → ${d.name}`);
+      try {
+        await setDoc(doc(passCol(ctx), checkId), { studentUid: s.uid, studentName: s.name, date: todayISO(), createdBy: k.kioskId, createdByName: `${k.teacherName} (kiosk)`, createdByRole: 'kiosk', type: 'kiosk', kioskVerified: true,
+          fromCourseId: course?.id || '', fromTitle: course?.title || '', fromTeacherUid: k.teacherUid, fromTeacherName: k.teacherName, fromRoom: course?.room || '', destId: d.id, destName: d.name, destKind: '', destTeacherUid: '', destTeacherName: '', destOther: '',
+          note: '', minutes: (myRules?.minutes || {})[d.id] || d.minutes || 5, status: 'active', startAt: serverTimestamp(), approvedByName: 'Kiosk', createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+        m.close(); toast(`${s.name.split(' ')[0]} → ${d.name}`);
+      } catch (ex) { m.close(); toast(ex.code === 'permission-denied' ? 'Passes aren’t available right now. Ask your teacher.' : friendlyError(ex), 'error'); }
     });
     refreshIcons();
   });
   loadRoster();
+}
+// Teacher side: open the kiosk on this device, copy its address, and manage kiosk devices.
+async function kioskModal(ctx) {
+  const url = location.origin + buildUrl('/kiosk');
+  const m = openModal({ html: modalHeader({ title: 'Ember Pass kiosk', subtitle: 'Turn a classroom device into a sign-out station.', icon: 'tablet-smartphone' }) + modalBody(`
+    <div class="space-y-3 text-sm text-gray-300">
+      <div class="flex gap-3">${ico('shield-check', 'w-4 h-4 text-[#6ee06e] shrink-0 mt-0.5')}<span>The device gets its own kiosk login — not your account. Even if a student leaves the kiosk screen, they can't open your account or settings.</span></div>
+      <div class="flex gap-3">${ico('id-card', 'w-4 h-4 text-[#F59E0B] shrink-0 mt-0.5')}<span>Students tap their name and type their student ID. The ID is checked by the server; the kiosk never shows anyone's ID.</span></div>
+      <div class="flex gap-3">${ico('lock', 'w-4 h-4 text-gray-400 shrink-0 mt-0.5')}<span>To leave the kiosk, tap <b>Teacher</b> and enter your password.</span></div>
+    </div>
+    <label class="label mt-5">Kiosk address (open it on any device)</label><div class="flex gap-2"><input class="input font-mono text-sm" readonly value="${escapeHtml(url)}" id="km-url"><button class="btn btn-secondary" id="km-copy" type="button">${ico('copy', 'w-4 h-4')}</button></div>
+    <div class="mt-5"><h3 class="label">Your kiosk devices</h3><div id="km-list">${skeletonRows(1)}</div></div>`) + modalFooter(`<button data-close class="btn btn-secondary flex-1">Close</button><button class="btn btn-primary flex-1" id="km-start">${ico('play', 'w-4 h-4')} Start kiosk on this device</button>`) });
+  m.$('[data-close]').addEventListener('click', () => m.close());
+  m.$('#km-copy').addEventListener('click', () => globalThis.__ember.copyText(url, 'Kiosk address copied'));
+  m.$('#km-start').addEventListener('click', () => { m.close(); navigate(`/kiosk?school=${encodeURIComponent(ctx.slug)}&start=1`); });
+  const load = async () => {
+    const list = await getDocs(query(collection(db, 'kiosks'), where('teacherUid', '==', ctx.me.uid))).then(s => s.docs.map(d => ({ id: d.id, ...d.data() }))).catch(() => []);
+    m.$('#km-list').innerHTML = list.length ? `<div class="card divide-y divide-white/[0.05]">${list.map(x => `<div class="flex items-center gap-3 px-4 py-2.5">${ico('tablet-smartphone', 'w-4 h-4 text-gray-500')}<span class="flex-1 text-sm text-white">${escapeHtml(x.label || 'Kiosk')}</span><button class="btn btn-ghost btn-sm" data-km-del="${escapeHtml(x.id)}">${ico('power', 'w-3.5 h-3.5')} Turn off</button></div>`).join('')}</div>` : `<p class="text-sm text-gray-500">None yet.</p>`;
+    refreshIcons();
+  };
+  m.el.addEventListener('click', async e => { const b = e.target.closest('[data-km-del]'); if (!b) return; await deleteDoc(doc(db, 'kiosks', b.dataset.kmDel)).catch(ex => toast(friendlyError(ex), 'error')); toast('Kiosk turned off'); load(); });
+  refreshIcons(); load();
 }
 
 // ── History (staff) with filters ───────────────────────────────────
