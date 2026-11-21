@@ -1545,7 +1545,7 @@ const NOTIF_KINDS = {
   referral: ['flag', 'red', 'Discipline'], incident: ['shield-alert', 'red', 'Discipline'], request: ['clipboard-list', 'teal', 'Staff requests'],
   decision: ['circle-check', 'green', 'Staff requests'], coverage: ['hand', 'amber', 'Coverage'], plan: ['clipboard-check', 'violet', 'Lesson plans'],
   grade: ['award', 'amber', 'Grades'], attendance: ['calendar-check', 'blue', 'Attendance'], reportcard: ['file-text', 'violet', 'Report cards'],
-  message: ['inbox', 'blue', 'Messages'], system: ['bell', 'muted', 'General'],
+  message: ['inbox', 'blue', 'Messages'], pass: ['ticket', 'amber', 'Ember Pass'], system: ['bell', 'muted', 'General'],
 };
 const notif = { key: null, unsubs: [], personal: [], district: [], ready: false, seen: new Set() };
 const notifUnread = n => n.toDistrict ? !(n.readBy || []).includes(currentUser?.uid) : !n.read;
@@ -1639,6 +1639,7 @@ function globalNavHTML(active) {
     ${ctx?.isStudent ? link('access', 'id-card', 'My Info', `${home}/record/me`) : ''}
     ${ctx?.isGuardian && (ctx.children || []).length ? link('access', 'id-card', 'Family Access', `${home}/record/${ctx.children[0].uid}`) : ''}
     ${ctx && !ctx.isGuardian ? tray('courses', ico('book-open'), 'Courses') : ''}
+    ${ctx && (ctx.isStudent || ctx.isRealTeacher) && !ctx.isPersonal ? link('pass', 'ticket', 'Ember Pass', `${home}/pass`) : ''}
     ${ctx ? link('calendar', 'calendar-days', 'Calendar', `${home}/calendar`) : ''}
     ${ctx ? link('inbox', 'inbox', 'Inbox', `${home}/inbox`, `<span class="gnav-badge ${inbox.count ? '' : 'hidden'}" data-inbox-badge aria-label="unread conversations">${inbox.count > 99 ? '99+' : inbox.count}</span>`) : ''}
     ${ctx?.isRealTeacher ? link('commons', 'library', 'Commons', `${home}/commons`) : ''}
@@ -2076,6 +2077,7 @@ async function viewTenant(slug, segs) {
     case 'staff': return teacherOnly(async () => (await staff()).viewStaff(ctx, a, b));
     case 'referrals': return teacherOnly(async () => (await staff()).viewReferral(ctx, a));
     case 'notifications': return (await staff()).viewNotifications(ctx);
+    case 'pass': return ctx.isStudent || ctx.isRealTeacher ? (await import('./pass.js' + BUILD)).viewPass(ctx, a || null) : viewNotFound();
     case 'courses': return viewAllCourses(ctx);
     case 'calendar': return viewCalendar(ctx);
     case 'inbox': return viewInbox(ctx, a || null);
@@ -2148,7 +2150,7 @@ function tenantPage(ctx, active, content, course = null, { crumbs: extra = [], s
       crumbs = [{ label: home.label, href: buildUrl(base + home.path) }, ...(hit.path === home.path ? [] : [{ label: hit.label, href: buildUrl(base + hit.path) }]), ...extra];
       gActive = 'school';
     } else {
-      gActive = { dashboard: 'dashboard', calendar: 'calendar', inbox: 'inbox', commons: 'commons', 'all-courses': 'courses', notifications: 'notifications' }[active] || 'account';
+      gActive = { dashboard: 'dashboard', calendar: 'calendar', inbox: 'inbox', commons: 'commons', 'all-courses': 'courses', notifications: 'notifications', pass: 'pass' }[active] || 'account';
     }
   }
   return appShell({ active: gActive, subnav, crumbs, banner: previewBanner(), content });

@@ -277,6 +277,35 @@ service cloud.firestore {
       allow delete: if isAdmin(t);
     }
 
+    // ── Ember Pass (hall passes) ────────────────────────────────────────
+    // Settings live in sis/passes (members read, admins write). Students can ask for a pass, start an
+    // "instant" one (a destination listed in autoApprove) unless passes are paused, end their own pass,
+    // cancel a request, or start a pass staff scheduled for them. Staff do everything else.
+    function passSettings(t) { return get(/databases/$(database)/documents/tenants/$(t)/sis/passes).data; }
+    match /tenants/{t}/passes/{p} {
+      allow read: if isStaff(t) || isDistrictAdmin(t) || (signedIn() && resource.data.studentUid == me()) || isGuardianOf(t, resource.data.studentUid);
+      allow create: if (isStaff(t) && request.resource.data.createdBy == me())
+        || (isStudent(t) && request.resource.data.studentUid == me() && request.resource.data.createdBy == me()
+            && request.resource.data.createdByRole == 'student'
+            && (!exists(/databases/$(database)/documents/tenants/$(t)/sis/passes) || passSettings(t).get('frozen', false) != true)
+            && (request.resource.data.status == 'pending'
+                || (request.resource.data.status == 'active'
+                    && exists(/databases/$(database)/documents/tenants/$(t)/sis/passes)
+                    && passSettings(t).get('frozen', false) != true
+                    && request.resource.data.destId in passSettings(t).get('autoApprove', []))));
+      allow update: if isStaff(t) || (signedIn() && resource.data.studentUid == me()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'endAt', 'endedBy', 'startAt', 'updatedAt'])
+        && ((resource.data.status == 'active' && request.resource.data.status == 'ended')
+            || (resource.data.status == 'pending' && request.resource.data.status == 'cancelled')
+            || (resource.data.status == 'scheduled' && request.resource.data.status == 'active')));
+      allow delete: if isAdmin(t);
+    }
+    // Who must be kept apart in the hallway: staff read it (to warn before approving), admins edit it.
+    match /tenants/{t}/passPrivate/{d} {
+      allow read: if isStaff(t);
+      allow write: if isAdmin(t);
+    }
+
     // ── SIS ─────────────────────────────────────────────────────────────
     match /tenants/{t}/sis/{docId} {
       allow read: if isMember(t);
