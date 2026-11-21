@@ -55,6 +55,120 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const ico = (name, cls = 'w-4 h-4') => `<i data-lucide="${name}" class="${cls}" aria-hidden="true"></i>`;
 function refreshIcons() { try { window.lucide?.createIcons(); } catch (e) { /* icons are decorative */ } }
 
+// ═══════════════════════════════════════════════════════════════
+// CUSTOM DROPDOWNS — every <select> gets a themed, searchable menu with icons instead of the browser's
+// popup. The native select stays in the DOM (visually hidden) so values, forms and 'change' listeners
+// keep working; we only draw the button and the menu. Opt out with data-native.
+// ═══════════════════════════════════════════════════════════════
+const SELECT_ICON_HINTS = [
+  [/grade/i, 'graduation-cap'], [/school|classroom/i, 'building-2'], [/range|date|term|year|when|day/i, 'calendar-range'], [/period|time/i, 'clock'],
+  [/teacher|staff|advisor|administrator|counselor|who/i, 'user'], [/student/i, 'user-round'], [/parent|relationship|guardian/i, 'users'], [/bus|transport/i, 'bus'],
+  [/destination|going|location|where|room/i, 'map-pin'], [/subject|course|class/i, 'book-open'], [/status|result|level/i, 'circle-dot'], [/severity|priority/i, 'triangle-alert'],
+  [/test/i, 'chart-column'], [/meal|lunch/i, 'utensils'], [/type|category|kind|form/i, 'list'], [/title|role/i, 'badge-check'], [/program|flag/i, 'flag'], [/icon/i, 'shapes'],
+];
+function selectIconFor(sel) {
+  if (sel.dataset.icon) return sel.dataset.icon;
+  const lbl = sel.getAttribute('aria-label') || (sel.id && document.querySelector(`label[for="${CSS.escape(sel.id)}"]`)?.textContent) || sel.closest('[data-field]')?.querySelector('.label')?.textContent || '';
+  return SELECT_ICON_HINTS.find(([re]) => re.test(lbl))?.[1] || '';
+}
+let uiPop = null;
+function closeSelectPop() { if (!uiPop) return; const btn = uiPop._btn; uiPop.remove(); uiPop = null; btn?.setAttribute('aria-expanded', 'false'); }
+function syncSelect(sel) {
+  const wrap = sel._ui; if (!wrap) return;
+  const btn = wrap.querySelector('.ui-select-btn'), opt = sel.options[sel.selectedIndex];
+  const icon = opt?.dataset.icon || sel._icon;
+  btn.innerHTML = `${icon ? ico(icon, 'w-4 h-4 shrink-0 text-gray-400') : ''}<span class="ui-select-label ${!opt || opt.value === '' ? 'is-placeholder' : ''}">${escapeHtml(opt ? opt.textContent : '')}</span>${ico('chevron-down', 'w-4 h-4 shrink-0 text-gray-500 ml-auto')}`;
+  btn.disabled = sel.disabled;
+  queueIcons();
+}
+let iconsQueued = false;
+function queueIcons() { if (iconsQueued) return; iconsQueued = true; requestAnimationFrame(() => { iconsQueued = false; refreshIcons(); }); }
+function enhanceSelect(sel) {
+  if (sel._ui || sel.multiple || sel.hasAttribute('data-native') || !sel.isConnected) return;
+  const wrap = document.createElement('span');
+  wrap.className = 'ui-select' + (/!w-auto|\bw-\d/.test(sel.className) ? ' is-inline' : '');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = sel.className.replace(/\bui-native\b/, '') + ' ui-select-btn';
+  btn.setAttribute('aria-haspopup', 'listbox'); btn.setAttribute('aria-expanded', 'false');
+  const lbl = sel.getAttribute('aria-label') || (sel.id && document.querySelector(`label[for="${CSS.escape(sel.id)}"]`)?.textContent.trim());
+  if (lbl) btn.setAttribute('aria-label', lbl);
+  sel.parentNode.insertBefore(wrap, sel);
+  wrap.append(sel, btn);
+  sel.classList.add('ui-native'); sel.tabIndex = -1; sel.setAttribute('aria-hidden', 'true');
+  sel._ui = wrap; sel._icon = selectIconFor(sel);
+  syncSelect(sel);
+  sel.addEventListener('change', () => syncSelect(sel));
+  sel.addEventListener('focus', () => btn.focus());
+  new MutationObserver(() => syncSelect(sel)).observe(sel, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'selected'] });
+  btn.addEventListener('click', () => (uiPop?._sel === sel ? closeSelectPop() : openSelectPop(sel)));
+  btn.addEventListener('keydown', e => { if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(e.key)) { e.preventDefault(); openSelectPop(sel); } });
+}
+function openSelectPop(sel) {
+  closeSelectPop();
+  const btn = sel._ui.querySelector('.ui-select-btn');
+  const items = [];
+  [...sel.children].forEach(ch => {
+    if (ch.tagName === 'OPTGROUP') { items.push({ group: ch.label }); [...ch.children].forEach(o => items.push({ o })); } else items.push({ o: ch });
+  });
+  const opts = items.filter(x => x.o);
+  const pop = document.createElement('div');
+  pop.className = 'ui-pop'; pop.setAttribute('role', 'listbox'); pop._sel = sel; pop._btn = btn;
+  const search = opts.length > 8;
+  pop.innerHTML = `${search ? `<div class="ui-pop-search">${ico('search', 'w-3.5 h-3.5 text-gray-500')}<input type="text" placeholder="Search…" aria-label="Search options"></div>` : ''}<div class="ui-pop-list"></div>`;
+  document.body.appendChild(pop); uiPop = pop;
+  btn.setAttribute('aria-expanded', 'true');
+  const list = pop.querySelector('.ui-pop-list');
+  let active = Math.max(0, opts.findIndex(x => x.o.selected)), q = '';
+  const shown = () => opts.filter(x => !q || x.o.textContent.toLowerCase().includes(q));
+  const draw = () => {
+    const vis = shown();
+    active = Math.min(active, vis.length - 1);
+    list.innerHTML = vis.length ? items.filter(x => x.group ? !q : vis.includes(x)).map(x => x.group ? `<div class="ui-pop-group">${escapeHtml(x.group)}</div>`
+      : `<div role="option" class="ui-opt ${x.o.selected ? 'is-selected' : ''} ${vis.indexOf(x) === active ? 'is-active' : ''} ${x.o.disabled ? 'is-disabled' : ''} ${x.o.value === '' ? 'is-placeholder' : ''}" aria-selected="${x.o.selected}" data-i="${opts.indexOf(x)}">${x.o.dataset.icon ? ico(x.o.dataset.icon, 'w-4 h-4 shrink-0 opacity-80') : sel._icon && x.o.value !== '' ? `<span class="ui-opt-dot"></span>` : ''}<span class="flex-1 min-w-0">${escapeHtml(x.o.textContent)}</span>${x.o.selected ? ico('check', 'w-4 h-4 text-[#F59E0B] shrink-0') : ''}</div>`).join('')
+      : `<div class="ui-pop-empty">No matches</div>`;
+    refreshIcons();
+    list.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' });
+  };
+  const place = () => {
+    const r = btn.getBoundingClientRect(), h = Math.min(320, window.innerHeight - 24);
+    pop.style.minWidth = `${Math.max(r.width, 180)}px`; pop.style.maxWidth = `${Math.max(r.width, 360)}px`;
+    pop.style.left = `${Math.min(r.left, window.innerWidth - Math.max(r.width, 180) - 8)}px`;
+    const below = window.innerHeight - r.bottom, up = below < 220 && r.top > below;
+    pop.style.maxHeight = `${Math.min(h, (up ? r.top : below) - 12)}px`;
+    pop.style.top = up ? '' : `${r.bottom + 6}px`; pop.style.bottom = up ? `${window.innerHeight - r.top + 6}px` : '';
+  };
+  const choose = o => {
+    if (!o || o.disabled) return;
+    if (sel.value !== o.value) { sel.value = o.value; sel.dispatchEvent(new Event('input', { bubbles: true })); sel.dispatchEvent(new Event('change', { bubbles: true })); }
+    closeSelectPop(); btn.focus();
+  };
+  draw(); place();
+  pop._place = () => { const r = btn.getBoundingClientRect(); if (r.bottom < 0 || r.top > window.innerHeight) return closeSelectPop(); place(); };
+  const input = pop.querySelector('input');
+  (input || pop).focus?.();
+  if (input) { input.focus(); input.addEventListener('input', () => { q = input.value.trim().toLowerCase(); active = 0; draw(); }); }
+  pop.tabIndex = -1; if (!input) pop.focus();
+  pop.addEventListener('mousedown', e => e.preventDefault());
+  pop.addEventListener('click', e => { const it = e.target.closest('[data-i]'); if (it) choose(opts[+it.dataset.i].o); });
+  pop.addEventListener('keydown', e => {
+    const vis = shown();
+    if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(vis.length - 1, active + 1); draw(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, active - 1); draw(); }
+    else if (e.key === 'Enter') { e.preventDefault(); choose(vis[active]?.o); }
+    else if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); closeSelectPop(); btn.focus(); }
+    else if (!input && e.key.length === 1) { const i = vis.findIndex(x => x.o.textContent.toLowerCase().startsWith(e.key.toLowerCase())); if (i >= 0) { active = i; draw(); } }
+  });
+}
+document.addEventListener('mousedown', e => { if (uiPop && !uiPop.contains(e.target) && !uiPop._btn.contains(e.target)) closeSelectPop(); });
+window.addEventListener('resize', closeSelectPop);
+document.addEventListener('scroll', e => { if (uiPop && !uiPop.contains(e.target)) uiPop._place?.(); }, true); // follow the button as the page scrolls
+// Programmatic value changes (select.value = x) also update the button.
+{ const d = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value'); Object.defineProperty(HTMLSelectElement.prototype, 'value', { ...d, set(v) { d.set.call(this, v); if (this._ui) syncSelect(this); } });
+  const di = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'selectedIndex'); Object.defineProperty(HTMLSelectElement.prototype, 'selectedIndex', { ...di, set(v) { di.set.call(this, v); if (this._ui) syncSelect(this); } }); }
+new MutationObserver(muts => { for (const m of muts) for (const n of m.addedNodes) { if (n.nodeType !== 1) continue; if (n.tagName === 'SELECT') enhanceSelect(n); else n.querySelectorAll?.('select').forEach(enhanceSelect); } })
+  .observe(document.documentElement, { childList: true, subtree: true });
+
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -1844,18 +1958,19 @@ async function viewDistrict(districtId, segs = []) {
   if (sub === 'students') return sis.viewDistrictStudents(dctx);
   if (sub === 'safety') return sis.viewDistrictSafety(dctx);
   if (sub === 'notifications') return (await import('./staff.js' + BUILD)).viewDistrictNotifications(dctx);
+  if (sub === 'passes') return (await import('./pass.js' + BUILD)).viewDistrictPassPolicy(dctx);
   return sis.viewDistrictHome(dctx);
 }
 function districtShell({ districtId, district }, active, header, body) {
   layoutState = { ctx: null, district: { id: districtId, ...district }, course: null };
   const p = s => buildUrl(`/district/${districtId}${s}`);
-  const labels = { overview: 'Dashboard', schools: 'Schools', teachers: 'Teachers', planning: 'Lesson plans', attendance: 'Attendance', students: 'Students', safety: 'Safety', notifications: 'Notifications' };
+  const labels = { overview: 'Dashboard', schools: 'Schools', teachers: 'Teachers', planning: 'Lesson plans', attendance: 'Attendance', students: 'Students', safety: 'Safety', notifications: 'Notifications', passes: 'Ember Pass policy' };
   const subnav = subnavHTML({
     accent: 'violet', eyebrow: 'District', title: district.name || districtId, items: [
       { href: p(''), label: 'Dashboard', active: active === 'overview' }, { href: p('/schools'), label: 'Schools', active: active === 'schools' },
       { section: 'Student information' },
       { href: p('/students'), label: 'Students', active: active === 'students' }, { href: p('/attendance'), label: 'Attendance', active: active === 'attendance' },
-      { href: p('/safety'), label: 'Safety', active: active === 'safety' },
+      { href: p('/safety'), label: 'Safety', active: active === 'safety' }, { href: p('/passes'), label: 'Ember Pass policy', active: active === 'passes' },
       { section: 'Staff' },
       { href: p('/teachers'), label: 'Teachers', active: active === 'teachers' }, { href: p('/planning'), label: 'Lesson plans', active: active === 'planning' },
     ]

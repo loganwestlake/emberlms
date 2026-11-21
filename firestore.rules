@@ -54,6 +54,11 @@ service cloud.firestore {
     match /districts/{d} {
       allow read: if signedIn() && me() in resource.data.get('adminUids', []);
       allow write: if false; // managed from the Firebase console
+      // District-wide policies (e.g. Ember Pass). Anyone signed in reads them (schools apply them); district admins edit.
+      match /policy/{p} {
+        allow read: if signedIn();
+        allow write: if signedIn() && me() in get(/databases/$(database)/documents/districts/$(d)).data.get('adminUids', []);
+      }
     }
 
     // ── Per-user routing index (lets the app find your school without collection-group queries)
@@ -282,28 +287,76 @@ service cloud.firestore {
     // "instant" one (a destination listed in autoApprove) unless passes are paused, end their own pass,
     // cancel a request, or start a pass staff scheduled for them. Staff do everything else.
     function passSettings(t) { return get(/databases/$(database)/documents/tenants/$(t)/sis/passes).data; }
+    function hasPassSettings(t) { return exists(/databases/$(database)/documents/tenants/$(t)/sis/passes); }
+    function schoolPassesFrozen(t) { return hasPassSettings(t) && passSettings(t).get('frozen', false) == true; }
+    function districtPassesFrozen(t) {
+      let d = tenant(t).get('districtId', null);
+      return d != null && exists(/databases/$(database)/documents/districts/$(d)/policy/passes)
+        && get(/databases/$(database)/documents/districts/$(d)/policy/passes).data.get('frozen', false) == true;
+    }
+    function teacherPassRules(t, uid) { return get(/databases/$(database)/documents/tenants/$(t)/passRules/$(uid)).data; }
+    function hasTeacherPassRules(t, uid) { return uid is string && uid != '' && exists(/databases/$(database)/documents/tenants/$(t)/passRules/$(uid)); }
+    function teacherPaused(t, uid) { return hasTeacherPassRules(t, uid) && teacherPassRules(t, uid).get('paused', false) == true; }
+    // An instant (no-approval) pass: the school's autoApprove list, a destination the student's teacher made
+    // instant for their room (if the school allows that), or a return trip back to class.
+    function instantOk(t, p) {
+      return p.get('type', 'standard') == 'return'
+        || (hasPassSettings(t) && p.destId in passSettings(t).get('autoApprove', []))
+        || (hasTeacherPassRules(t, p.get('fromTeacherUid', ''))
+            && (!hasPassSettings(t) || passSettings(t).get('allowTeacherInstant', true) != false)
+            && p.destId in teacherPassRules(t, p.fromTeacherUid).get('instant', []));
+    }
     match /tenants/{t}/passes/{p} {
       allow read: if isStaff(t) || isDistrictAdmin(t) || (signedIn() && resource.data.studentUid == me()) || isGuardianOf(t, resource.data.studentUid);
       allow create: if (isStaff(t) && request.resource.data.createdBy == me())
         || (isStudent(t) && request.resource.data.studentUid == me() && request.resource.data.createdBy == me()
             && request.resource.data.createdByRole == 'student'
-            && (!exists(/databases/$(database)/documents/tenants/$(t)/sis/passes) || passSettings(t).get('frozen', false) != true)
+            && request.resource.data.get('type', 'standard') in ['standard', 'return']
+            && !schoolPassesFrozen(t) && !districtPassesFrozen(t)
+            && !teacherPaused(t, request.resource.data.get('fromTeacherUid', ''))
             && (request.resource.data.status == 'pending'
-                || (request.resource.data.status == 'active'
-                    && exists(/databases/$(database)/documents/tenants/$(t)/sis/passes)
-                    && passSettings(t).get('frozen', false) != true
-                    && request.resource.data.destId in passSettings(t).get('autoApprove', []))));
+                || (request.resource.data.status == 'active' && instantOk(t, request.resource.data))));
       allow update: if isStaff(t) || (signedIn() && resource.data.studentUid == me()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'endAt', 'endedBy', 'startAt', 'updatedAt'])
         && ((resource.data.status == 'active' && request.resource.data.status == 'ended')
-            || (resource.data.status == 'pending' && request.resource.data.status == 'cancelled')
+            || (resource.data.status == 'pending' && request.resource.data.status == 'cancelled' && resource.data.get('type', 'standard') != 'appointment')
             || (resource.data.status == 'scheduled' && request.resource.data.status == 'active')));
       allow delete: if isAdmin(t);
     }
-    // Who must be kept apart in the hallway: staff read it (to warn before approving), admins edit it.
+    // Older keep-apart list (still read so nothing is lost); new groups live in passKeepApart.
     match /tenants/{t}/passPrivate/{d} {
       allow read: if isStaff(t);
       allow write: if isAdmin(t);
+    }
+    // Rules for one teacher's classes. Everyone in the school reads them (students' screens check them).
+    // Admins write any; a teacher writes their own unless an admin locked them or the school turned it off.
+    match /tenants/{t}/passRules/{uid} {
+      allow read: if isMember(t) || isDistrictAdmin(t);
+      allow write: if isAdmin(t)
+        || (isStaff(t) && uid == me()
+            && (!hasPassSettings(t) || passSettings(t).get('allowTeacherRules', true) != false)
+            && (resource == null || resource.data.get('locked', false) != true)
+            && request.resource.data.get('locked', false) == (resource == null ? false : resource.data.get('locked', false)));
+    }
+    // Per-student restrictions: staff manage; the student can read their own (so their screen explains it).
+    match /tenants/{t}/passRestrictions/{r} {
+      allow read: if isStaff(t) || (signedIn() && resource.data.studentUid == me());
+      allow create: if isStaff(t) && request.resource.data.createdBy == me();
+      allow update: if isAdmin(t) || (isStaff(t) && resource.data.createdBy == me());
+      allow delete: if isAdmin(t) || (isStaff(t) && resource.data.createdBy == me());
+    }
+    // Keep-apart groups: staff only (students never see them). Teachers may add groups if the school allows.
+    match /tenants/{t}/passKeepApart/{g} {
+      allow read: if isStaff(t);
+      allow create: if isStaff(t) && request.resource.data.createdBy == me()
+        && (isAdmin(t) || !hasPassSettings(t) || passSettings(t).get('allowTeacherKeepApart', true) != false);
+      allow update, delete: if isAdmin(t) || (isStaff(t) && resource.data.createdBy == me());
+    }
+    // Students found in the hall without a pass.
+    match /tenants/{t}/hallSweeps/{s} {
+      allow read: if isStaff(t) || isDistrictAdmin(t);
+      allow create: if isStaff(t) && request.resource.data.by == me();
+      allow update, delete: if isAdmin(t);
     }
 
     // ── SIS ─────────────────────────────────────────────────────────────
