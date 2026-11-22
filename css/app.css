@@ -414,3 +414,12 @@ body.kiosk-on { user-select: none; -webkit-user-select: none; overscroll-behavio
   .disc-print { font-family: Inter, system-ui, sans-serif; padding: 0 8px; }
   .disc-print h4 { margin-top: 14px; }
 }
+/* Workspace tables */
+.work-table th { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #777; font-weight: 500; padding: .6rem .75rem; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.06); white-space: nowrap; }
+.work-table td { padding: .55rem .75rem; border-bottom: 1px solid rgba(255,255,255,0.04); color: #c9c9c9; vertical-align: top; }
+.work-table tbody tr { cursor: pointer; }
+.work-table tbody tr:hover { background: rgba(255,255,255,0.025); }
+.work-table tr.is-low td { background: rgba(208,59,59,0.06); }
+.visit-table td { white-space: nowrap; }
+.qty-btn { width: 1.5rem; height: 1.5rem; border-radius: .4rem; border: 1px solid rgba(255,255,255,0.12); color: #ddd; line-height: 1; }
+.qty-btn:hover { background: rgba(255,255,255,0.08); }

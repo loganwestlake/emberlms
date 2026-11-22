@@ -1763,6 +1763,7 @@ function globalNavHTML(active) {
     ${ctx?.isGuardian && (ctx.children || []).length ? link('access', 'id-card', 'Family Access', `${home}/record/${ctx.children[0].uid}`) : ''}
     ${ctx && !ctx.isGuardian ? tray('courses', ico('book-open'), 'Courses') : ''}
     ${ctx && (ctx.isStudent || ctx.isRealTeacher) && !ctx.isPersonal ? link('pass', 'ticket', 'Ember Pass', `${home}/pass`) : ''}
+    ${workAreas(ctx).length ? link('work', 'briefcase', 'Workspace', `${home}/work`) : ''}
     ${ctx ? link('calendar', 'calendar-days', 'Calendar', `${home}/calendar`) : ''}
     ${ctx ? link('inbox', 'inbox', 'Inbox', `${home}/inbox`, `<span class="gnav-badge ${inbox.count ? '' : 'hidden'}" data-inbox-badge aria-label="unread conversations">${inbox.count > 99 ? '99+' : inbox.count}</span>`) : ''}
     ${ctx?.isRealTeacher ? link('commons', 'library', 'Commons', `${home}/commons`) : ''}
@@ -2129,6 +2130,24 @@ function openCreateSchoolModal(districtId, district) {
 // ═══════════════════════════════════════════════════════════════
 // TENANT ROUTING
 // ═══════════════════════════════════════════════════════════════
+// Which Workspace dashboards a staff member gets (Health Office, Counseling, Front Office, Food, Transportation,
+// Library, Athletics, IT & Data). Admins see all of them.
+const WORK_AREAS = ['clinic', 'counseling', 'office', 'food', 'transport', 'library', 'athletics', 'it'];
+const SUPPORT_CATS = ['nurse', 'counselor', 'office', 'support', 'it'];
+function workAreas(ctx) {
+  if (!ctx?.isRealTeacher || ctx.isPersonal) return [];
+  if (ctx.isAdmin) return WORK_AREAS;
+  const d = ctx.roleInfo?.data || {}, title = (d.title || '').toLowerCase(), out = [];
+  if (ctx.caps.includes('health')) out.push('clinic');
+  if (ctx.caps.includes('services')) out.push('counseling');
+  if (ctx.caps.includes('records')) out.push('office');
+  if (d.category === 'support') {
+    const m = [/food|cafeteria|kitchen/.test(title) && 'food', /transport|bus/.test(title) && 'transport', /librar|media/.test(title) && 'library', /athlet|coach/.test(title) && 'athletics'].filter(Boolean);
+    out.push(...(m.length ? m : ['food', 'transport', 'library', 'athletics']));
+  }
+  if (d.category === 'it') out.push('it');
+  return [...new Set(out)];
+}
 function makeCtx(slug, tenant, roleInfo) {
   const isRealTeacher = roleInfo.role === 'teacher' || roleInfo.role === 'admin';
   const caps = Array.isArray(roleInfo.data?.caps) ? roleInfo.data.caps : [];
@@ -2196,7 +2215,9 @@ async function viewTenant(slug, segs) {
   const staff = async () => { const m = await import('./staff.js' + BUILD); if (!live(t)) throw Object.assign(new Error('stale'), { stale: true }); return m; };
   if (ctx.isGuardian && !['dashboard', 'record', 'activities', 'inbox', 'calendar', 'announcements', 'notifications'].includes(sub || 'dashboard')) return navigate('/' + slug, { replace: true });
   switch (sub || 'dashboard') {
-    case 'dashboard': return ctx.isGuardian ? (await sis()).viewFamilyHome(ctx) : viewDashboard(ctx);
+    case 'dashboard': return ctx.isGuardian ? (await sis()).viewFamilyHome(ctx)
+      : SUPPORT_CATS.includes(ctx.roleInfo?.data?.category) && workAreas(ctx).length ? (await import('./work.js' + BUILD)).viewWork(ctx, workAreas(ctx)[0], null) : viewDashboard(ctx);
+    case 'work': return teacherOnly(async () => (await import('./work.js' + BUILD)).viewWork(ctx, a || workAreas(ctx)[0], b || null));
     case 'sis': return ctx.isRealTeacher ? (await sis()).viewDirectory(ctx) : viewNotFound();
     case 'record': return (await sis()).viewRecord(ctx, a || 'me', b || 'overview');
     case 'activities': return (await sis()).viewActivities(ctx, a || null);
@@ -2276,7 +2297,7 @@ function tenantPage(ctx, active, content, course = null, { crumbs: extra = [], s
       crumbs = [{ label: home.label, href: buildUrl(base + home.path) }, ...(hit.path === home.path ? [] : [{ label: hit.label, href: buildUrl(base + hit.path) }]), ...extra];
       gActive = 'school';
     } else {
-      gActive = { dashboard: 'dashboard', calendar: 'calendar', inbox: 'inbox', commons: 'commons', 'all-courses': 'courses', notifications: 'notifications', pass: 'pass' }[active] || 'account';
+      gActive = { dashboard: 'dashboard', calendar: 'calendar', inbox: 'inbox', commons: 'commons', 'all-courses': 'courses', notifications: 'notifications', pass: 'pass', work: 'work' }[active] || 'account';
     }
   }
   return appShell({ active: gActive, subnav, crumbs, banner: previewBanner(), content });
@@ -5608,7 +5629,7 @@ const EMBER_API = {
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, myCourses, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
   GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute,
-  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser
+  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas
 };
 globalThis.__ember = EMBER_API;
 export {
@@ -5618,5 +5639,5 @@ export {
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, myCourses, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
   GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute,
-  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser
+  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas
 };

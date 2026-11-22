@@ -379,6 +379,27 @@ service cloud.firestore {
       allow update: if isStaff(t) && resource.data.by == me() && request.resource.data.by == me() && request.resource.data.studentUid == resource.data.studentUid;
       allow delete: if isAdmin(t) || (isStaff(t) && resource.data.by == me());
     }
+    // ── Workspace logs (every record keeps a timestamped history) ──
+    // Health office: nurses (Health access) and admins only.
+    match /tenants/{t}/clinicVisits/{x} { allow read, write: if hasCap(t, 'health'); }
+    match /tenants/{t}/injuries/{x} { allow read, write: if hasCap(t, 'health'); }
+    match /tenants/{t}/ihp/{x} { allow read, write: if hasCap(t, 'health'); }
+    match /tenants/{t}/medLog/{x} { allow read, write: if hasCap(t, 'health'); }
+    match /tenants/{t}/medSupply/{x} { allow read, write: if hasCap(t, 'health'); }
+    // Counseling & SPED: confidential to Services access.
+    match /tenants/{t}/counselingSessions/{x} { allow read, write: if hasCap(t, 'services'); }
+    match /tenants/{t}/planMeetings/{x} { allow read, write: if hasCap(t, 'services'); }
+    // Front office & registrar.
+    match /tenants/{t}/frontOffice/{x} { allow read, write: if hasCap(t, 'records'); }
+    match /tenants/{t}/parentContacts/{x} { allow read, write: if hasCap(t, 'records') || hasCap(t, 'services'); }
+    // Support staff areas: any staff member at the school.
+    match /tenants/{t}/inventory/{x} { allow read, write: if isStaff(t); }
+    match /tenants/{t}/lunchAccounts/{sid} { allow read: if isStaff(t) || (signedIn() && me() == sid) || isGuardianOf(t, sid); allow write: if isStaff(t); }
+    match /tenants/{t}/lunchTx/{x} { allow read: if isStaff(t) || (signedIn() && resource.data.studentUid == me()) || isGuardianOf(t, resource.data.studentUid); allow create: if isStaff(t) && request.resource.data.by == me(); allow update, delete: if isAdmin(t); }
+    match /tenants/{t}/busLog/{x} { allow read, write: if isStaff(t); }
+    match /tenants/{t}/checkouts/{x} { allow read, write: if isStaff(t); }
+    match /tenants/{t}/athletes/{x} { allow read, write: if isStaff(t); }
+    match /tenants/{t}/athleticEvents/{x} { allow read: if isMember(t); allow write: if isStaff(t); }
     // Older keep-apart list (still read so nothing is lost); new groups live in passKeepApart.
     match /tenants/{t}/passPrivate/{d} {
       allow read: if isStaff(t);
