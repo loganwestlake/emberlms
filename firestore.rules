@@ -91,7 +91,7 @@ service cloud.firestore {
                     : (exists(/databases/$(database)/documents/tenants/$(request.resource.data.slug)/users/$(me()))
                        || exists(/databases/$(database)/documents/tenants/$(request.resource.data.slug)/guardians/$(me()))))));
       allow update: if false;
-      allow delete: if signedIn() && (resource.data.uid == me() || isAdmin(resource.data.slug));
+      allow delete: if signedIn() && (resource.data.uid == me() || (resource.data.slug != '_district' && (isAdmin(resource.data.slug) || isDistrictAdmin(resource.data.slug))));
     }
 
     // ── Per-user routing index (lets the app find your school without collection-group queries)
@@ -148,7 +148,9 @@ service cloud.firestore {
           ))
         );
         allow update: if isAdmin(t) || isDistrictAdmin(t)
-          || (signedIn() && me() == uid && (unchanged(['role']) || tenant(t).ownerUid == me()));
+          // IT staff turn access and workspaces on or off — nothing else.
+          || (hasCap(t, 'it') && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['caps', 'areas', 'capLog']))
+          || (signedIn() && me() == uid && unchanged(['role', 'caps', 'areas']) || (signedIn() && me() == uid && tenant(t).ownerUid == me()));
         allow delete: if (isAdmin(t) || isDistrictAdmin(t)) && uid != tenant(t).ownerUid;
       }
 
@@ -529,9 +531,9 @@ service cloud.firestore {
       allow create: if ((isAdmin(t) || isDistrictAdmin(t)) && request.resource.data.userId == uid)
         || (signedIn() && me() == uid && request.resource.data.userId == me()
             && get(/databases/$(database)/documents/familyCodes/$(request.resource.data.code)).data.tenantId == t);
-      allow update: if (isAdmin(t) && request.resource.data.userId == uid)
+      allow update: if ((isAdmin(t) || isDistrictAdmin(t)) && request.resource.data.userId == uid)
         || (signedIn() && me() == uid && request.resource.data.userId == me() && unchanged(['code']));
-      allow delete: if isAdmin(t);
+      allow delete: if isAdmin(t) || isDistrictAdmin(t);
     }
     match /tenants/{t}/guardianLinks/{id} {
       allow read: if canManage(t) || (signedIn() && resource.data.guardianUid == me());

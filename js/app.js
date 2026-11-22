@@ -1850,12 +1850,12 @@ function globalNavHTML(active) {
     ${link('dashboard', 'layout-dashboard', 'Dashboard', home)}
     ${ctx?.isStudent ? link('access', 'id-card', 'My Info', `${home}/record/me`) : ''}
     ${ctx?.isGuardian && (ctx.children || []).length ? link('access', 'id-card', 'Family Access', `${home}/record/${ctx.children[0].uid}`) : ''}
-    ${ctx && !ctx.isGuardian ? tray('courses', ico('book-open'), 'Courses') : ''}
-    ${ctx && (ctx.isStudent || ctx.isRealTeacher) && !ctx.isPersonal ? link('pass', 'ticket', 'Ember Pass', `${home}/pass`) : ''}
+    ${ctx && !ctx.isGuardian && (!ctx.isRealTeacher || ctx.teaches) ? tray('courses', ico('book-open'), 'Courses') : ''}
+    ${ctx && (ctx.isStudent || ctx.teaches || ['counselor', 'office'].includes(ctx.roleInfo?.data?.category)) && !ctx.isPersonal ? link('pass', 'ticket', 'Ember Pass', `${home}/pass`) : ''}
     ${workAreas(ctx).length ? link('work', 'briefcase', 'Workspace', `${home}/work`) : ''}
     ${ctx ? link('calendar', 'calendar-days', 'Calendar', `${home}/calendar`) : ''}
     ${ctx ? link('inbox', 'inbox', 'Inbox', `${home}/inbox`, `<span class="gnav-badge ${inbox.count ? '' : 'hidden'}" data-inbox-badge aria-label="unread conversations">${inbox.count > 99 ? '99+' : inbox.count}</span>`) : ''}
-    ${ctx?.isRealTeacher ? link('commons', 'library', 'Commons', `${home}/commons`) : ''}
+    ${ctx?.teaches ? link('commons', 'library', 'Commons', `${home}/commons`) : ''}
     ${currentUser ? tray('notifications', `<span class="relative inline-flex">${ico('bell')}<span class="gnav-badge ${notifItems().some(notifUnread) ? '' : 'hidden'}" data-notif-badge aria-label="unread notifications">${notifItems().filter(notifUnread).length}</span></span>`, 'Alerts') : ''}
     ${tray('help', ico('circle-help'), 'Help')}
   </nav>`;
@@ -1960,7 +1960,7 @@ async function accountTrayHTML() {
       ${ctx ? trayLink(buildUrl(`${base}/inbox`), 'inbox', 'Inbox') : ''}
       ${ctx && !ctx.isGuardian ? trayLink(buildUrl(`${base}/courses`), 'book-open', 'All courses') : ''}
       ${ctx ? trayLink(buildUrl(`${base}/announcements`), 'megaphone', ctx.isPersonal ? 'Classroom announcements' : 'School announcements') : ''}
-      ${ctx?.isRealTeacher && !ctx.isPersonal ? trayLink(buildUrl(`${base}/planning`), 'notebook-pen', 'My lesson plans') : ''}
+      ${ctx?.teaches && !ctx.isPersonal ? trayLink(buildUrl(`${base}/planning`), 'notebook-pen', 'My lesson plans') : ''}
       ${ctx?.isRealTeacher && !ctx.isAdmin ? trayLink(buildUrl(`${base}/students`), 'users', 'Student accounts') : ''}
       ${ctx?.isRealTeacher ? trayButton('data-concern', 'flag', 'Report a student concern') : ''}
     </div>
@@ -2299,8 +2299,16 @@ function askUsername({ slug, district = null, orgName, name, kind, where, save }
         await setDoc(unameRef(slug, u), { slug, username: u, uid: currentUser.uid, email: currentUser.email, kind, ...(district ? { district } : {}), createdAt: serverTimestamp() });
         await save(u);
         await updatePassword(currentUser, p1);
+        // Prove the new username + password work right now (on a separate sign-in, so this session stays put).
+        let verified = false;
+        try { await signInWithEmailAndPassword(secondaryAuth, currentUser.email, p1); verified = true; await signOut(secondaryAuth); } catch (e2) { console.warn(e2); }
+        // Offer it to the browser's password manager so it's filled in next time.
+        try { if (window.PasswordCredential) await navigator.credentials.store(new PasswordCredential({ id: u, password: p1, name: name || u })); } catch (e3) {}
         m.dismissible = true; m.close();
-        toast(`Done! Next time sign in with ${where.replace('your username', `“${u}”`)}.`);
+        const ok = openModal({ size: 'sm', html: `<div class="p-6 sm:p-7"><div class="tile tile-green tile-lg mb-4">${ico('circle-check', 'w-5 h-5')}</div><h2 class="font-serif text-2xl text-white mb-1">Your new sign-in is ready</h2><p class="text-sm text-gray-400 mb-5">${verified ? 'We checked it — it works right now.' : 'Saved.'} Use it next time you sign in.</p>
+          <div class="card p-4 space-y-2 text-sm" data-new-login><div><span class="text-gray-500 text-xs">Sign in on</span><br><span class="text-white">${escapeHtml(where.replace(' + your username', ''))}</span></div><div><span class="text-gray-500 text-xs">Username</span><br><span class="text-white font-mono">${escapeHtml(u)}</span></div><div><span class="text-gray-500 text-xs">Password</span><br><span class="text-white">The new one you just chose</span></div></div>
+          <button class="btn btn-primary btn-block mt-6" data-close>Done</button></div>` });
+        ok.$('[data-close]').addEventListener('click', () => ok.close()); refreshIcons();
       } catch (ex) { console.error(ex); showError(err, ['auth/invalid-credential', 'auth/wrong-password'].includes(ex.code) ? 'Your current password isn’t right.' : friendlyError(ex)); }
     });
   });
@@ -2310,16 +2318,22 @@ function askUsername({ slug, district = null, orgName, name, kind, where, save }
 // Which Workspace dashboards a staff member gets (Health Office, Counseling, Front Office, Food, Transportation,
 // Library, Athletics, IT & Data). Admins see all of them.
 const WORK_AREAS = ['clinic', 'counseling', 'office', 'food', 'transport', 'library', 'athletics', 'it'];
+const AREA_LABELS = { clinic: 'Health Office', counseling: 'Counseling & SPED', office: 'Front Office', food: 'Food Service', transport: 'Transportation', library: 'Library & Devices', athletics: 'Athletics', it: 'IT & Data' };
 const SUPPORT_CATS = ['nurse', 'counselor', 'office', 'support', 'it'];
 function workAreas(ctx) {
   if (!ctx?.isRealTeacher || ctx.isPersonal) return [];
-  if (ctx.isAdmin) return [...new Set([...ownAreas(ctx), ...WORK_AREAS])]; // oversight of every area (food service is view-only unless assigned)
+  // Everyone, administrators included, sees only the workspaces that are theirs.
   return ownAreas(ctx);
 }
 // The areas this person actually works in: set by an admin / IT (users.areas), otherwise from their role.
 function ownAreas(ctx) {
   const d = ctx.roleInfo?.data || {}, title = (d.title || '').toLowerCase(), out = [];
   if (Array.isArray(d.areas)) return d.areas.filter(a => WORK_AREAS.includes(a));
+  // A person's category decides their one dashboard (a counselor with records access is still a counselor).
+  const byCat = { nurse: 'clinic', counselor: 'counseling', office: 'office', it: 'it' }[d.category];
+  if (byCat) return [byCat];
+  if (d.category === 'it' || ctx.caps.includes('it')) out.push('it');
+  if (ctx.isAdmin && !d.category) return out; // administrators run the school from Admin; a workspace only if assigned
   if (ctx.caps.includes('health')) out.push('clinic');
   if (ctx.caps.includes('services')) out.push('counseling');
   if (ctx.caps.includes('records')) out.push('office');
@@ -2327,7 +2341,6 @@ function ownAreas(ctx) {
     const m = [/food|cafeteria|kitchen/.test(title) && 'food', /transport|bus/.test(title) && 'transport', /librar|media/.test(title) && 'library', /athlet|coach/.test(title) && 'athletics'].filter(Boolean);
     out.push(...m); // no recognised title → nothing until an admin or IT assigns a workspace
   }
-  if (d.category === 'it') out.push('it');
   return [...new Set(out)];
 }
 function makeCtx(slug, tenant, roleInfo) {
@@ -2343,6 +2356,8 @@ function makeCtx(slug, tenant, roleInfo) {
     // Staff capabilities granted by an admin (Admin → Teachers & staff). Admins have all of them.
     can(cap) { return roleInfo.role === 'admin' || (isRealTeacher && caps.includes(cap)); },
     get teacherMode() { return isRealTeacher && !viewAsStudent; },
+    // Teachers, subs and administrators run courses. Nurses, office, counselors, support and IT staff don't.
+    get teaches() { return isRealTeacher && !SUPPORT_CATS.includes(roleInfo.data?.category); },
     get studentView() { return !isRealTeacher || viewAsStudent; },
     me: { uid: currentUser.uid, name: roleInfo.data?.displayName || currentUser.displayName || displayNameOf(roleInfo.data) },
   };
@@ -2517,7 +2532,7 @@ const SCHOOL_MENU = [
   { group: 'Learning', key: 'learn', items: [
     { key: 'admin-courses', label: 'All courses', path: '/admin/courses', icon: 'book-open', desc: 'Every course in the school', show: isAdminC },
     { key: 'admin-planning', label: 'Plan reviews', path: '/admin/planning', icon: 'clipboard-check', desc: 'Approve lesson plans', show: c => c.isAdmin && notPersonal(c) },
-    { key: 'planning', label: 'My lesson plans', path: '/planning', icon: 'notebook-pen', desc: 'Write and submit plans', show: c => isStaffC(c) && notPersonal(c) },
+    { key: 'planning', label: 'My lesson plans', path: '/planning', icon: 'notebook-pen', desc: 'Write and submit plans', show: c => c.teaches && notPersonal(c) },
     { key: 'announcements', label: 'School announcements', path: '/announcements', icon: 'megaphone', desc: 'Post to everyone', show: isAdminC },
   ] },
   { group: 'Forms & requests', key: 'forms', items: [
@@ -4091,12 +4106,13 @@ async function viewAdminTeachers(ctx) {
         const x = teachers.find(tt => tt.uid === cp.dataset.caps);
         const m = openModal({ size: 'sm', html: `<form class="p-6 sm:p-7" novalidate><h2 class="font-serif text-xl text-white mb-1">Access for ${escapeHtml(displayNameOf(x))}</h2><p class="text-sm text-gray-500 mb-5">Extra tools beyond teaching. Admins already have everything.</p>
           <div class="space-y-3">${Object.entries(STAFF_CAPS).map(([k, l]) => `<label class="check"><input type="checkbox" data-cap="${k}" ${(x.caps || []).includes(k) ? 'checked' : ''}> <span><span class="text-white">${l}</span><span class="block text-xs text-gray-500">${STAFF_CAP_HELP[k]}</span></span></label>`).join('')}</div>
+          <h3 class="label mt-6">Workspace (their dashboard)</h3><select data-areas class="input" data-icon="briefcase"><option value="">By role (automatic)</option><option value="none" ${Array.isArray(x.areas) && !x.areas.length ? 'selected' : ''}>None</option>${WORK_AREAS.map(a => `<option value="${a}" ${Array.isArray(x.areas) && x.areas.length === 1 && x.areas[0] === a ? 'selected' : ''}>${AREA_LABELS[a]}</option>`).join('')}</select>
           <div class="flex gap-3 mt-6"><button type="button" data-close class="btn btn-secondary flex-1">Cancel</button><button class="btn btn-primary flex-1">Save</button></div></form>` });
         m.$('form').addEventListener('submit', ev => {
           ev.preventDefault();
-          const caps = m.$$('[data-cap]').filter(c => c.checked).map(c => c.dataset.cap);
+          const caps = m.$$('[data-cap]').filter(c => c.checked).map(c => c.dataset.cap), av = m.$('[data-areas]').value;
           withBusy(ev.currentTarget.querySelector('button:not([data-close])'), 'Saving…', async () => {
-            try { await updateDoc(doc(db, 'tenants', slug, 'users', x.uid), { caps }); m.close(); toast('Access updated'); renderRoute(); } catch (ex) { toast(friendlyError(ex), 'error'); }
+            try { await updateDoc(doc(db, 'tenants', slug, 'users', x.uid), { caps, areas: av === '' ? deleteField() : av === 'none' ? [] : [av] }); m.close(); toast('Access updated'); renderRoute(); } catch (ex) { toast(friendlyError(ex), 'error'); }
           });
         });
         return;
@@ -4116,8 +4132,8 @@ async function viewAdminTeachers(ctx) {
     });
   } catch (e) { console.error(e); if (live(t)) { $('#teachers-list').innerHTML = errorBox(e); refreshIcons(); } }
 }
-const STAFF_CAPS = { services: 'Special ed · 504 · ELL', safety: 'Discipline & safety', health: 'Health / nurse', records: 'Records / registrar' };
-const STAFF_CAP_HELP = { services: 'IEP / 504 / ELL caseloads, accommodations, confidential notes.', safety: 'View and manage the incident log; see every reported concern.',
+const STAFF_CAPS = { services: 'Special ed · 504 · ELL', safety: 'Discipline & safety', health: 'Health / nurse', records: 'Records / registrar', it: 'IT & permissions' };
+const STAFF_CAP_HELP = { it: 'Turn staff access and workspaces on or off; device inventory; state exports.', services: 'IEP / 504 / ELL caseloads, accommodations, confidential notes.', safety: 'View and manage the incident log; see every reported concern.',
   health: 'Edit allergies, medications, immunizations, screenings and nurse visits.', records: 'Edit test scores, academic history, graduation checks and busing.' };
 function openInviteTeacherModal(tenant, joinCode) {
   const signupUrl = location.origin + buildUrl('/signup');
@@ -4292,7 +4308,7 @@ async function viewDashboard(ctx) {
   const first = String(ctx.me.name || '').split(/\s+/)[0];
   render(tenantPage(ctx, 'dashboard', pageHeader({
     eyebrow: escapeHtml(tenant.name), title: 'Dashboard', subtitle: `${greeting}${first ? ', ' + escapeHtml(first) : ''}.`,
-    actions: `${previewToggle(ctx)}${ctx.teacherMode ? `<button id="add-course-btn" class="btn btn-primary">${ico('plus')} New course</button>` : ''}`
+    actions: `${ctx.teaches ? previewToggle(ctx) : ''}${ctx.teacherMode && ctx.teaches ? `<button id="add-course-btn" class="btn btn-primary">${ico('plus')} New course</button>` : ''}`
   }) + `<div class="grid xl:grid-cols-[minmax(0,1fr)_320px] gap-8 max-w-7xl">
       <div class="min-w-0"><div id="ann-strip"></div><div id="fav-note" class="text-xs text-gray-500 mb-3"></div>
         <div id="course-grid" class="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3 gap-5">${skeletonCards(3)}</div></div>
@@ -4398,7 +4414,7 @@ async function renderDashSide(ctx, courses, t) {
 async function viewAllCourses(ctx) {
   const t = routeToken;
   setTitle('All courses', ctx.tenant.name);
-  render(tenantPage(ctx, 'all-courses', pageHeader({ eyebrow: escapeHtml(ctx.tenant.name), title: 'All courses', subtitle: 'Star a course to show it on your dashboard.', actions: ctx.teacherMode ? `<button id="add-course-btn" class="btn btn-primary">${ico('plus')} New course</button>` : '' }) + `<div id="all-courses" class="max-w-5xl">${skeletonRows(4)}</div>`));
+  render(tenantPage(ctx, 'all-courses', pageHeader({ eyebrow: escapeHtml(ctx.tenant.name), title: 'All courses', subtitle: 'Star a course to show it on your dashboard.', actions: ctx.teacherMode && ctx.teaches ? `<button id="add-course-btn" class="btn btn-primary">${ico('plus')} New course</button>` : '' }) + `<div id="all-courses" class="max-w-5xl">${skeletonRows(4)}</div>`));
   $('#add-course-btn')?.addEventListener('click', () => openCourseModal(ctx));
   const el = $('#all-courses');
   let courses = [];

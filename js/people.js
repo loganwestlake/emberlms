@@ -1,6 +1,6 @@
 // District → People: create accounts for any school in the district, by category. Each category maps to
 // an Ember role plus staff capabilities (Services = IEP/504/ELL, Health, Records, Safety).
-import { doc, setDoc, getDocs, collection, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+import { doc, setDoc, getDocs, updateDoc, deleteDoc, collection, query, where, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 const {
   db, $, ico, refreshIcons, escapeHtml, plural, displayNameOf, render, setTitle, iconTile, badge, avatar, skeletonRows, emptyState, errorBox,
   toast, copyText, openModal, modalHeader, modalBody, modalFooter, buildUrl, live, districtShell, getDistrictSchools, createLogin, ensureStudentId, gradYearFor,
@@ -18,7 +18,7 @@ export const PEOPLE_CATEGORIES = [
   { id: 'nurse', label: 'Nurses', icon: 'briefcase-medical', tone: 'red', desc: 'Log clinic visits, medications, immunizations, and medical alerts.', role: 'teacher', caps: ['health'], titles: ['School nurse', 'Health aide', 'Clinic assistant'] },
   { id: 'office', label: 'Office Staff & Registrars', icon: 'building-2', tone: 'teal', desc: 'Handle enrollments, daily attendance, and parent contacts.', role: 'teacher', caps: ['records'], titles: ['Registrar', 'Attendance clerk', 'Front office', 'Data entry clerk'] },
   { id: 'support', label: 'Support Staff', sub: 'Food, Bus, Library, Athletics', icon: 'bus', tone: 'muted', desc: 'Manage lunch accounts, bus routes, books/devices, and sports eligibility.', role: 'teacher', caps: [], titles: ['Food service', 'Transportation', 'Library / media', 'Athletics'] },
-  { id: 'it', label: 'IT & Data Staff', icon: 'server-cog', tone: 'violet', desc: 'Manage permissions, integrations, and state reporting.', role: 'admin', caps: [], titles: ['IT specialist', 'Data coordinator', 'State reporting'] },
+  { id: 'it', label: 'IT & Data Staff', icon: 'server-cog', tone: 'violet', desc: 'Manage permissions, devices, and state reporting.', role: 'teacher', caps: ['it'], titles: ['IT specialist', 'Data coordinator', 'State reporting'] },
 ];
 const CAT = Object.fromEntries(PEOPLE_CATEGORIES.map(c => [c.id, c]));
 const GRADES = ['K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
@@ -61,7 +61,7 @@ export async function viewDistrictPeople(dctx) {
         <input id="pp-q" type="search" class="input !py-2 !w-56" placeholder="Search name or email…" value="${escapeHtml(f.q)}" aria-label="Search people">
         <select id="pp-school" class="input !py-2 !w-auto" aria-label="School" data-icon="school"><option value="">All schools</option>${schools.map(s => `<option value="${escapeHtml(s.id)}" ${f.school === s.id ? 'selected' : ''}>${escapeHtml(s.name || s.id)}</option>`).join('')}</select>
         <select id="pp-cat" class="input !py-2 !w-auto" aria-label="Category" data-icon="tags"><option value="">All categories</option>${PEOPLE_CATEGORIES.filter(c => c.id !== 'student').map(c => `<option value="${c.id}" data-icon="${c.icon}" ${f.cat === c.id ? 'selected' : ''}>${escapeHtml(c.label)}</option>`).join('')}</select></div>
-      ${shown.length ? `<div class="card divide-y divide-white/[0.05] overflow-hidden">${shown.slice(0, 300).map(p => `<div class="flex flex-wrap sm:flex-nowrap items-center gap-3 px-5 py-3">${avatar(p.name)}<div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(p.name)}${p.title ? ` <span class="text-xs text-gray-500">· ${escapeHtml(p.title)}</span>` : ''}</div><div class="text-[11px] text-gray-500 truncate">${escapeHtml(p.email || '')}</div></div>${badge(escapeHtml(CAT[p.cat]?.label || p.cat), 'muted')}<span class="text-xs text-gray-400 w-40 truncate text-right">${escapeHtml(p.school.name || p.school.id)}</span></div>`).join('')}</div><p class="hint mt-2">${plural(shown.length, 'person', 'people')}${shown.length > 300 ? ' · showing the first 300' : ''}. Students are listed under <a class="text-[#A78BFA] hover:underline" href="${buildUrl(`/district/${dctx.districtId}/students`)}">Students</a>.</p>`
+      ${shown.length ? `<div class="card divide-y divide-white/[0.05] overflow-hidden">${shown.slice(0, 300).map(p => `<div class="flex flex-wrap sm:flex-nowrap items-center gap-3 px-5 py-3">${avatar(p.name)}<div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(p.name)}${p.title ? ` <span class="text-xs text-gray-500">· ${escapeHtml(p.title)}</span>` : ''}</div><div class="text-[11px] text-gray-500 truncate">${p.username ? `<span class="font-mono">${escapeHtml(p.username)}</span>` : escapeHtml(p.email || '')}</div></div>${badge(escapeHtml(CAT[p.cat]?.label || p.cat), 'muted')}<span class="text-xs text-gray-400 w-40 truncate text-right">${escapeHtml(p.school.name || p.school.id)}</span><span class="flex gap-1"><button class="btn-icon" data-pp-edit="${escapeHtml(p.school.id)}|${escapeHtml(p.uid)}|${p.kind}" aria-label="Edit ${escapeHtml(p.name)}">${ico('pencil', 'w-4 h-4')}</button><button class="btn-icon danger" data-pp-del="${escapeHtml(p.school.id)}|${escapeHtml(p.uid)}|${p.kind}" aria-label="Remove ${escapeHtml(p.name)}">${ico('trash-2', 'w-4 h-4')}</button></span></div>`).join('')}</div><p class="hint mt-2">${plural(shown.length, 'person', 'people')}${shown.length > 300 ? ' · showing the first 300' : ''}. Students are listed under <a class="text-[#A78BFA] hover:underline" href="${buildUrl(`/district/${dctx.districtId}/students`)}">Students</a>.</p>`
         : emptyState({ icon: 'users', title: 'No one here yet', text: 'Add staff and families with “Add user”.' })}`;
     refreshIcons();
   };
@@ -69,8 +69,8 @@ export async function viewDistrictPeople(dctx) {
     schools = await getDistrictSchools(dctx.districtId);
     const lists = await Promise.all(schools.map(async s => {
       const [u, g] = await Promise.all([getDocs(collection(db, 'tenants', s.id, 'users')).catch(() => ({ docs: [] })), getDocs(collection(db, 'tenants', s.id, 'guardians')).catch(() => ({ docs: [] }))]);
-      return [...u.docs.map(d => { const x = d.data(); return { uid: d.id, name: displayNameOf(x), email: x.email || '', title: x.title || '', cat: categoryOf(x), school: s }; }),
-        ...g.docs.map(d => { const x = d.data(); return { uid: d.id, name: x.name || displayNameOf(x), email: x.email || '', title: x.relationship || '', cat: 'parent', school: s }; })];
+      return [...u.docs.map(d => { const x = d.data(); return { uid: d.id, kind: 'users', raw: x, username: x.username || '', name: displayNameOf(x), email: x.email || '', title: x.title || '', cat: categoryOf(x), school: s }; }),
+        ...g.docs.map(d => { const x = d.data(); return { uid: d.id, kind: 'guardians', raw: x, username: x.username || '', name: x.name || displayNameOf(x), email: x.email || '', title: x.relationship || '', cat: 'parent', school: s }; })];
     }));
     people = lists.flat().sort((a, b) => a.name.localeCompare(b.name));
   };
@@ -81,6 +81,36 @@ export async function viewDistrictPeople(dctx) {
   $('#pp-list').addEventListener('input', e => { if (e.target.id === 'pp-q') { f.q = e.target.value; const pos = e.target.selectionStart; drawList(); const q = $('#pp-q'); q.focus(); q.setSelectionRange(pos, pos); } });
   const refresh = async () => { await load(); if (live(t)) { drawCats(); drawList(); } };
   $('#pp-cats').addEventListener('click', e => { const b = e.target.closest('[data-cat]'); if (b) addUser(dctx, schools, b.dataset.cat, refresh); });
+  // Edit / remove anyone at any school in the district.
+  $('#pp-list').addEventListener('click', async e => {
+    const ed = e.target.closest('[data-pp-edit]'), rm = e.target.closest('[data-pp-del]');
+    if (!ed && !rm) return;
+    const [slug, uid, kind] = (ed || rm).dataset[ed ? 'ppEdit' : 'ppDel'].split('|');
+    const p = people.find(x => x.uid === uid && x.school.id === slug && x.kind === kind);
+    if (rm) {
+      if (p.school.ownerUid === uid) return toast('That person owns the school and can’t be removed.', 'error');
+      if (!await globalThis.__ember.confirmDialog({ title: `Remove ${p.name}?`, message: `They lose access to ${p.school.name || slug} right away${p.username ? ` and the username “${p.username}” is freed up` : ''}.`, confirmLabel: 'Remove', danger: true })) return;
+      try {
+        if (kind === 'guardians') { const links = await getDocs(query(collection(db, 'tenants', slug, 'guardianLinks'), where('guardianUid', '==', uid))); await Promise.all(links.docs.map(l => deleteDoc(l.ref))); }
+        await deleteDoc(doc(db, 'tenants', slug, kind, uid));
+        if (p.username) await deleteDoc(doc(db, 'usernames', `${slug}~${p.username}`)).catch(() => {});
+        toast(`${p.name} removed`); refresh();
+      } catch (ex) { toast(globalThis.__ember.friendlyError(ex), 'error'); }
+      return;
+    }
+    const F = await forms(), isParent = kind === 'guardians', [first, ...rest] = p.name.split(/\s+/);
+    const fields = [{ id: 'first', type: 'text', label: 'First name', required: true }, { id: 'last', type: 'text', label: 'Last name' },
+      ...(isParent ? [{ id: 'relationship', type: 'select', label: 'Relationship', options: ['Mother', 'Father', 'Guardian', 'Grandparent', 'Foster parent', 'Stepparent', 'Other relative', 'Other'] }]
+        : [{ id: 'cat', type: 'select', label: 'Category', required: true, options: PEOPLE_CATEGORIES.filter(c => !['student', 'parent'].includes(c.id)).map(c => ({ v: c.id, l: c.label })) }, { id: 'title', type: 'text', label: 'Title / role' }]),
+      { id: 'phone', type: 'phone', label: 'Phone' }, { id: 'contactEmail', type: 'text', label: 'Contact email' },
+      { id: 'note', type: 'note', text: `Username: ${p.username || '(still signs in with ' + p.email + ')'} · School: ${p.school.name || slug}. Changing the category updates their access and dashboard.` }];
+    F.formModal({ title: `Edit ${p.name}`, icon: 'pencil', form: { sections: [{ fields }] }, data: { first, last: rest.join(' '), relationship: p.raw.relationship || '', cat: p.cat, title: p.raw.title || '', phone: p.raw.phone || '', contactEmail: p.raw.contactEmail || '' }, onSubmit: async d => {
+      const full = `${d.first} ${d.last || ''}`.trim();
+      if (isParent) await updateDoc(doc(db, 'tenants', slug, 'guardians', uid), { userId: uid, name: full, displayName: full, relationship: d.relationship || '', phone: d.phone || '', contactEmail: d.contactEmail || '', updatedAt: serverTimestamp() });
+      else { const c = CAT[d.cat]; await updateDoc(doc(db, 'tenants', slug, 'users', uid), { displayName: full, title: d.title || '', phone: d.phone || '', contactEmail: d.contactEmail || '', category: d.cat, role: c.role, caps: c.caps, updatedAt: serverTimestamp() }); }
+      toast('Saved'); refresh(); return true;
+    } });
+  });
   $('#pp-add').addEventListener('click', () => pickCategory(dctx, schools, refresh));
 }
 
@@ -99,7 +129,7 @@ async function addUser(dctx, schools, catId, done, preset = {}) {
   const cat = CAT[catId], F = await forms();
   if (!schools.length) return toast('Add a school to the district first.', 'error');
   const schoolField = { id: 'school', type: 'select', label: 'School', required: true, options: schools.map(s => ({ v: s.id, l: s.name || s.id })) };
-  const access = cat.caps?.length ? `Access: ${cat.caps.map(c => ({ services: 'IEP / 504 / ELL', health: 'Health records', records: 'Student records & enrollment', safety: 'Discipline log' }[c])).join(', ')}.` : cat.role === 'admin' ? 'Full administrator access to this school.' : '';
+  const access = cat.caps?.length ? `Access: ${cat.caps.map(c => ({ services: 'IEP / 504 / ELL', health: 'Health records', records: 'Student records & enrollment', safety: 'Discipline log', it: 'Staff permissions & devices' }[c])).join(', ')}. Their dashboard is their own workspace only.` : cat.role === 'admin' ? 'Full administrator access to this school.' : catId === 'support' ? 'Gets only the workspace that matches their title.' : '';
   let fields, onSubmit;
   if (catId === 'student') {
     fields = [schoolField, { id: 'first', type: 'text', label: 'First name', required: true }, { id: 'last', type: 'text', label: 'Last name', required: true },

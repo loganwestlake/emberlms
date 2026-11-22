@@ -408,7 +408,7 @@ async function counselingView(ctx, el, tab, t) {
 // FRONT OFFICE & REGISTRAR
 // ═══════════════════════════════════════════════════════════════
 async function officeView(ctx, el, tab, t) {
-  tab = tab || 'late';
+  tab = tab || 'find';
   const kids = await students(ctx);
   const att = (await getDocs(query(col(ctx, 'attendance'), where('date', '==', today()))).catch(() => ({ docs: [] }))).docs.map(d => d.data());
   if (!live(t)) return;
@@ -416,8 +416,9 @@ async function officeView(ctx, el, tab, t) {
   const newKids = kids.filter(s => ms(s.createdAt) > Date.now() - 30 * 86400000);
   const pending = (await getDocs(query(col(ctx, 'students'), where('status', '==', 'pending'))).catch(() => ({ docs: [] }))).size;
   el.innerHTML = `<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">${kpi('Enrolled', kids.length)}${kpi('Absent today', new Set(absent.filter(a => a.code !== 'T').map(a => a.studentUid)).size, absent.length ? 'bad' : 'good')}${kpi('Tardy today', new Set(tardy.map(a => a.studentUid)).size)}${kpi('New this month', newKids.length)}${kpi('Waiting for approval', pending, pending ? 'bad' : '')}</div>
-    ${subTabs(ctx, 'office', [['late', 'Late sign-in', 'alarm-clock'], ['pickups', 'Pickups & dismissal', 'shield-check'], ['desk', 'Sign in / out log', 'door-open'], ['attendance', 'Today’s attendance', 'calendar-check'], ['enroll', 'Enrollment', 'user-plus'], ['contacts', 'Parent contacts', 'phone'], ['inventory', 'Inventory', 'boxes']], tab)}<div id="of-body"></div>`;
+    ${subTabs(ctx, 'office', [['find', 'Find a student', 'search'], ['late', 'Late sign-in', 'alarm-clock'], ['pickups', 'Pickups & dismissal', 'shield-check'], ['desk', 'Sign in / out log', 'door-open'], ['attendance', 'Today’s attendance', 'calendar-check'], ['enroll', 'Enrollment', 'user-plus'], ['contacts', 'Parent contacts', 'phone'], ['inventory', 'Inventory', 'boxes']], tab)}<div id="of-body"></div>`;
   const body = $('#of-body');
+  if (tab === 'find') return findStudentView(ctx, body, kids, t);
   if (tab === 'late') return lateSignIn(ctx, body, kids, t);
   if (tab === 'pickups') return pickups(ctx, body, kids, t);
   if (tab === 'desk') return logbook(ctx, body, { name: 'frontOffice', title: 'Sign in / sign out', icon: 'door-open', tone: 'teal', addLabel: 'New sign in / out', hint: 'Late arrivals, early dismissals and visitors — times are recorded automatically.', from: today(),
@@ -627,9 +628,9 @@ async function itView(ctx, el, tab, t) {
     });
     return refreshIcons();
   }
-  const CAPS = [['services', 'IEP / 504 / ELL'], ['health', 'Health'], ['records', 'Records'], ['safety', 'Discipline']];
+  const CAPS = [['services', 'IEP / 504 / ELL'], ['health', 'Health'], ['records', 'Records'], ['safety', 'Discipline'], ['it', 'IT']];
   const draw = () => {
-    body.innerHTML = `<section class="card overflow-hidden"><div class="px-5 py-4 border-b border-white/[0.06]"><h2 class="text-white font-medium">Staff permissions</h2><p class="text-xs text-gray-500">Turn access on or off. Every change is saved immediately and recorded.</p></div><div class="overflow-x-auto"><table class="w-full text-sm work-table"><thead><tr><th>Name</th><th>Title</th><th>Role</th>${CAPS.map(c => `<th class="text-center">${c[1]}</th>`).join('')}<th>Workspaces</th><th>Last change</th></tr></thead><tbody>${staff.map(s => `<tr><td class="text-white">${escapeHtml(displayNameOf(s))}<div class="text-[11px] text-gray-500">${escapeHtml(s.email || '')}</div></td><td>${escapeHtml(s.title || '')}</td><td>${s.role === 'admin' ? badge('Admin', 'red') : badge('Staff', 'muted')}</td>${CAPS.map(([k]) => `<td class="text-center">${s.role === 'admin' ? ico('check', 'w-4 h-4 inline text-gray-500') : `<input type="checkbox" class="w-4 h-4 accent-[#8B5CF6]" data-cap="${k}" data-uid="${s.uid}" ${(s.caps || []).includes(k) ? 'checked' : ''} aria-label="${escapeHtml(displayNameOf(s))} ${k}" ${ctx.isAdmin ? '' : 'disabled'}>`}</td>`).join('')}<td>${ctx.isAdmin ? `<button class="btn btn-ghost btn-sm" data-areas="${s.uid}">${ico('briefcase', 'w-3.5 h-3.5')} ${escapeHtml(Array.isArray(s.areas) ? (s.areas.map(a => AREAS[a]?.label).join(', ') || 'None') : 'By role')}</button>` : escapeHtml(Array.isArray(s.areas) ? s.areas.map(a => AREAS[a]?.label).join(', ') : 'By role')}</td><td class="text-[11px] text-gray-500">${escapeHtml((s.capLog || []).slice(-1)[0] ? `${fmtStamp(s.capLog.slice(-1)[0].at)} · ${s.capLog.slice(-1)[0].byName}` : '')}</td></tr>`).join('')}</tbody></table></div></section>`;
+    body.innerHTML = `<section class="card overflow-hidden"><div class="px-5 py-4 border-b border-white/[0.06]"><h2 class="text-white font-medium">Staff permissions</h2><p class="text-xs text-gray-500">Turn access on or off. Every change is saved immediately and recorded.</p></div><div class="overflow-x-auto"><table class="w-full text-sm work-table"><thead><tr><th>Name</th><th>Title</th><th>Role</th>${CAPS.map(c => `<th class="text-center">${c[1]}</th>`).join('')}<th>Workspaces</th><th>Last change</th></tr></thead><tbody>${staff.map(s => `<tr><td class="text-white">${escapeHtml(displayNameOf(s))}<div class="text-[11px] text-gray-500">${escapeHtml(s.email || '')}</div></td><td>${escapeHtml(s.title || '')}</td><td>${s.role === 'admin' ? badge('Admin', 'red') : badge('Staff', 'muted')}</td>${CAPS.map(([k]) => `<td class="text-center">${s.role === 'admin' ? ico('check', 'w-4 h-4 inline text-gray-500') : `<input type="checkbox" class="w-4 h-4 accent-[#8B5CF6]" data-cap="${k}" data-uid="${s.uid}" ${(s.caps || []).includes(k) ? 'checked' : ''} aria-label="${escapeHtml(displayNameOf(s))} ${k}" ${ctx.isAdmin || ctx.can('it') ? '' : 'disabled'}>`}</td>`).join('')}<td>${ctx.isAdmin || ctx.can('it') ? `<button class="btn btn-ghost btn-sm" data-areas="${s.uid}">${ico('briefcase', 'w-3.5 h-3.5')} ${escapeHtml(Array.isArray(s.areas) ? (s.areas.map(a => AREAS[a]?.label).join(', ') || 'None') : 'By role')}</button>` : escapeHtml(Array.isArray(s.areas) ? s.areas.map(a => AREAS[a]?.label).join(', ') : 'By role')}</td><td class="text-[11px] text-gray-500">${escapeHtml((s.capLog || []).slice(-1)[0] ? `${fmtStamp(s.capLog.slice(-1)[0].at)} · ${s.capLog.slice(-1)[0].byName}` : '')}</td></tr>`).join('')}</tbody></table></div></section>`;
     refreshIcons();
   };
   draw();
@@ -770,4 +771,59 @@ async function pickups(ctx, el, kids, t) {
   draw();
   el.addEventListener('input', e => { if (e.target.id === 'pk-q') { q = e.target.value.trim().toLowerCase(); draw(); } });
   el.addEventListener('click', e => { const r = e.target.closest('[data-release]'); if (r) { e.stopPropagation(); return release(kids.find(s => s.uid === r.dataset.release)); } const row = e.target.closest('[data-pk]'); if (row) manage(kids.find(s => s.uid === row.dataset.pk)); });
+}
+
+// ── Front office: find a student — where they are right now, today's schedule, who can pick them up ──
+async function findStudentView(ctx, el, kids, t) {
+  const settings = await (await import('./sis.js' + BUILD)).getSettings(ctx).catch(() => null);
+  const periods = settings?.periods || [];
+  let q = '';
+  el.innerHTML = `<div class="relative mb-5"><span class="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500">${ico('search', 'w-5 h-5')}</span><input id="fs-q" type="search" class="input !py-3.5 pl-12 text-lg" placeholder="Student name or ID…" autocomplete="off" aria-label="Find a student"></div><div id="fs-out"></div>`;
+  const out = $('#fs-out');
+  const list = () => kids.filter(s => q && `${displayNameOf(s)} ${s.studentNumber || ''} ${s.username || ''}`.toLowerCase().includes(q)).slice(0, 12);
+  const drawList = () => {
+    const l = list();
+    out.innerHTML = !q ? `<p class="text-sm text-gray-500">Type a name or student ID to see where the student is right now, their schedule, contacts and authorized pickups.</p>`
+      : l.length ? `<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">${l.map(s => `<button class="card card-hover p-4 text-left flex items-center gap-3" data-fs="${s.uid}">${avatar(displayNameOf(s))}<span class="min-w-0"><span class="block text-white truncate">${escapeHtml(displayNameOf(s))}</span><span class="block text-[11px] text-gray-500">${escapeHtml(s.studentNumber || '')} · Grade ${escapeHtml(String(s.gradeLevel ?? '—'))}</span></span></button>`).join('')}</div>`
+      : `<p class="text-sm text-gray-500">No student matches “${escapeHtml(q)}”.</p>`;
+    refreshIcons();
+    if (l.length === 1) show(l[0]);
+  };
+  const show = async s => {
+    out.innerHTML = skeletonRows(3, 'h-24');
+    const [courses, pick, passSnap, attSnap] = await Promise.all([
+      Promise.all((s.enrolledCourseIds || []).map(id => getDoc(dref(ctx, 'courses', id)).then(d => d.exists() ? { id: d.id, ...d.data() } : null).catch(() => null))).then(a => a.filter(Boolean)),
+      getDoc(dref(ctx, 'pickups', s.uid)).then(d => d.exists() ? d.data() : {}).catch(() => ({})),
+      getDocs(query(col(ctx, 'passes'), where('studentUid', '==', s.uid))).catch(() => ({ docs: [] })),
+      getDocs(query(col(ctx, 'attendance'), where('studentUid', '==', s.uid))).catch(() => ({ docs: [] })),
+    ]);
+    if (!live(t)) return;
+    const hm = nowHM(), pIdx = id => { const i = periods.findIndex(p => p.id === id); return i < 0 ? 99 : i; };
+    const sched = courses.map(c => ({ ...c, period: periods.find(p => p.id === c.periodId) })).sort((a, b) => pIdx(a.periodId) - pIdx(b.periodId));
+    const nowP = periods.find(p => p.start && p.end && p.start <= hm && hm <= p.end);
+    const nowC = sched.find(c => c.period && c.period === nowP), nextC = sched.find(c => c.period && c.period.start > hm);
+    const pass = passSnap.docs.map(d => ({ id: d.id, ...d.data() })).find(p => p.status === 'active');
+    const att = attSnap.docs.map(d => d.data()).filter(a => a.date === today());
+    const whereNow = pass ? `Out on a hall pass → ${escapeHtml(pass.destName || '')} (since ${escapeHtml(fmtStamp(pass.startAt))})` : nowC ? `${escapeHtml(nowC.title || 'Class')}${nowC.room ? ` · Room ${escapeHtml(nowC.room)}` : ''}${nowC.ownerName ? ` · ${escapeHtml(nowC.ownerName)}` : ''}` : nowP ? `${escapeHtml(nowP.name)} — no class scheduled` : 'Not during a class period';
+    const contacts = s.contacts || [];
+    out.innerHTML = `<section class="card p-5 mb-4"><div class="flex flex-wrap items-center gap-4">${avatar(displayNameOf(s), null, 'w-14 h-14', 'text-lg')}<div class="flex-1 min-w-0"><div class="font-serif text-2xl text-white">${escapeHtml(displayNameOf(s))}</div><div class="text-xs text-gray-400">${escapeHtml(s.studentNumber || 'No ID')} · Grade ${escapeHtml(String(s.gradeLevel ?? '—'))}${s.homeroom ? ` · Homeroom ${escapeHtml(s.homeroom)}` : ''}${s.bus?.pm?.bus ? ` · Bus ${escapeHtml(s.bus.pm.bus)}` : ''}</div></div>
+        <div class="flex flex-wrap gap-2">${nowC ? `<button class="btn btn-primary btn-sm" data-fs-pass="${s.uid}">${ico('ticket', 'w-3.5 h-3.5')} Send to ${escapeHtml(nowC.title || 'class')}</button>` : ''}<a class="btn btn-secondary btn-sm" href="${buildUrl(`/${ctx.slug}/record/${s.uid}/info`)}">${ico('id-card', 'w-3.5 h-3.5')} Full record</a></div></div>
+        <div class="mt-4 p-4 rounded-xl border ${pass ? 'border-[#fab219]/40 bg-[#fab219]/10' : 'border-[#0ca30c]/30 bg-[#0ca30c]/5'}"><div class="text-[11px] uppercase tracking-wider text-gray-400">Right now · ${escapeHtml(fmt12(hm))}</div><div class="text-white text-lg mt-0.5">${whereNow}</div>${nextC && !pass ? `<div class="text-xs text-gray-400 mt-1">Next: ${escapeHtml(nextC.period.name)} · ${escapeHtml(nextC.title || '')}${nextC.room ? ' · Room ' + escapeHtml(nextC.room) : ''} at ${escapeHtml(fmt12(nextC.period.start))}</div>` : ''}${att.length ? `<div class="text-xs text-gray-300 mt-2">Today: ${att.map(a => `${escapeHtml(a.courseTitle || '')} ${badge(escapeHtml(a.code), a.code === 'P' ? 'green' : a.code === 'T' ? 'amber' : 'red')}`).join(' ')}</div>` : ''}</div></section>
+      <div class="grid lg:grid-cols-2 gap-4"><section class="card overflow-hidden"><div class="px-5 py-3 border-b border-white/[0.06] text-white font-medium">Today’s schedule</div>${sched.length ? `<table class="w-full text-sm work-table"><tbody>${sched.map(c => `<tr class="${c === nowC ? 'is-now' : ''}"><td class="text-gray-400 whitespace-nowrap">${escapeHtml(c.period?.name || '—')}<div class="text-[10px]">${c.period ? `${escapeHtml(fmt12(c.period.start))}–${escapeHtml(fmt12(c.period.end))}` : ''}</div></td><td class="text-white">${escapeHtml(c.title || '')}</td><td>${c.room ? 'Rm ' + escapeHtml(c.room) : ''}</td><td>${escapeHtml(c.ownerName || '')}</td></tr>`).join('')}</tbody></table>` : `<p class="text-sm text-gray-500 p-5">Not enrolled in any classes.</p>`}</section>
+        <section class="card overflow-hidden"><div class="px-5 py-3 border-b border-white/[0.06] text-white font-medium">Contacts & pickups</div><div class="p-5 space-y-2 text-sm">${pick.custody ? `<div class="p-2 rounded-lg bg-[#fab219]/10 border border-[#fab219]/40">${ico('scale', 'w-4 h-4 inline -mt-0.5 text-[#fcd34d]')} ${escapeHtml(pick.custody)}</div>` : ''}
+          ${contacts.map(c => `<div class="flex justify-between gap-3"><span class="text-white">${escapeHtml(c.name || '')} <span class="text-gray-500 text-xs">${escapeHtml(c.relation || '')}</span></span>${c.phone ? `<a class="text-[#F59E0B]" href="tel:${escapeHtml(String(c.phone).replace(/[^\d+]/g, ''))}">${escapeHtml(c.phone)}</a>` : ''}</div>`).join('') || '<p class="text-gray-500">No emergency contacts on file.</p>'}
+          <div class="pt-2 text-xs text-gray-400">Authorized pickups: ${(pick.people || []).map(x => escapeHtml(x.name)).join(', ') || '<span class="text-[#fcd34d]">none on file</span>'}</div>${(pick.blocked || []).length ? `<div class="text-xs text-[#f08a8a]">Do not release: ${pick.blocked.map(b => escapeHtml(b.name)).join(', ')}</div>` : ''}
+          <a class="btn btn-ghost btn-sm mt-2" href="${buildUrl(`/${ctx.slug}/work/office/pickups`)}">${ico('shield-check', 'w-3.5 h-3.5')} Pickups & dismissal</a></div></section></div>`;
+    refreshIcons();
+    out.querySelector('[data-fs-pass]')?.addEventListener('click', e => withBusy(e.currentTarget, 'Sending…', async () => {
+      try {
+        await addDoc(col(ctx, 'passes'), { studentUid: s.uid, studentName: displayNameOf(s), date: today(), createdBy: ctx.me.uid, createdByName: ctx.me.name, createdByRole: 'staff', type: 'standard', fromCourseId: '', fromTitle: 'Front office', fromTeacherUid: '', fromTeacherName: '', fromRoom: '', destId: 'room', destName: nowC.title || 'Class', destKind: 'room', destTeacherUid: nowC.ownerUid || '', destTeacherName: nowC.ownerName || '', destRoom: nowC.room || '', destOther: '', note: 'Sent from the front office', minutes: 5, status: 'active', startAt: serverTimestamp(), approvedBy: ctx.me.uid, approvedByName: ctx.me.name, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+        if (nowC.ownerUid) notify(ctx, { to: [nowC.ownerUid], kind: 'pass', title: `${displayNameOf(s)} is on the way from the office`, body: nowC.title || '', link: `/${ctx.slug}/pass` }).catch(() => {});
+        toast(`Pass sent: ${displayNameOf(s)} → ${nowC.title}`);
+      } catch (ex) { toast(friendlyError(ex), 'error'); }
+    }));
+  };
+  $('#fs-q').addEventListener('input', e => { q = e.target.value.trim().toLowerCase(); drawList(); });
+  out.addEventListener('click', e => { const b = e.target.closest('[data-fs]'); if (b) show(kids.find(s => s.uid === b.dataset.fs)); });
+  drawList(); setTimeout(() => $('#fs-q')?.focus(), 50);
 }
