@@ -149,7 +149,7 @@ service cloud.firestore {
         );
         allow update: if isAdmin(t) || isDistrictAdmin(t)
           // IT staff turn access and workspaces on or off — nothing else.
-          || (hasCap(t, 'it') && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['caps', 'areas', 'capLog']))
+          || (hasCap(t, 'it') && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['caps', 'areas', 'capLog', 'staffNumber']))
           || (signedIn() && me() == uid && unchanged(['role', 'caps', 'areas']) || (signedIn() && me() == uid && tenant(t).ownerUid == me()));
         allow delete: if (isAdmin(t) || isDistrictAdmin(t)) && uid != tenant(t).ownerUid;
       }
@@ -416,6 +416,11 @@ service cloud.firestore {
     match /tenants/{t}/parentContacts/{x} { allow read, write: if hasCap(t, 'records') || hasCap(t, 'services'); }
     // Support staff areas: any staff member at the school.
     match /tenants/{t}/inventory/{x} { allow read, write: if isStaff(t); }
+    // School devices: IT registers and assigns them; the person a device is assigned to (and a student's family) can see it.
+    match /tenants/{t}/devices/{x} {
+      allow read: if isStaff(t) || (signedIn() && resource.data.assignedUid == me()) || isGuardianOf(t, resource.data.assignedUid);
+      allow write: if hasCap(t, 'it');
+    }
     match /tenants/{t}/lunchAccounts/{sid} { allow read: if isStaff(t) || (signedIn() && me() == sid) || isGuardianOf(t, sid); allow write: if isStaff(t); }
     match /tenants/{t}/lunchTx/{x} { allow read: if isStaff(t) || (signedIn() && resource.data.studentUid == me()) || isGuardianOf(t, resource.data.studentUid); allow create: if isStaff(t) && request.resource.data.by == me(); allow update, delete: if isAdmin(t); }
     match /tenants/{t}/busLog/{x} { allow read, write: if isStaff(t); }

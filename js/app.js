@@ -1963,6 +1963,7 @@ async function accountTrayHTML() {
       ${ctx?.teaches && !ctx.isPersonal ? trayLink(buildUrl(`${base}/planning`), 'notebook-pen', 'My lesson plans') : ''}
       ${ctx?.isRealTeacher && !ctx.isAdmin ? trayLink(buildUrl(`${base}/students`), 'users', 'Student accounts') : ''}
       ${ctx?.isRealTeacher ? trayButton('data-concern', 'flag', 'Report a student concern') : ''}
+      ${ctx?.isRealTeacher && !ctx.isPersonal ? trayButton('data-my-devices', 'laptop', 'My devices') : ''}
     </div>
     ${ctx?.isStudent ? navSection('My records') + [['schedule', 'calendar-range', 'Schedule'], ['attendance', 'calendar-check', 'Attendance'], ['reportcards', 'file-text', 'Report cards'], ['discipline', 'shield', 'Discipline'], ['career', 'compass', 'Career plan']].map(([k, i, l]) => trayLink(buildUrl(`${base}/record/me/${k}`), i, l)).join('') : ''}
     ${ctx?.isGuardian ? navSection('My students') + (ctx.children || []).map(k => trayLink(buildUrl(`${base}/record/${k.uid}`), 'user', escapeHtml(displayNameOf(k)), k.gradeLevel ? `Grade ${escapeHtml(k.gradeLevel)}` : '')).join('') + trayButton('data-add-child', 'user-plus', 'Add a student') : ''}
@@ -5690,6 +5691,7 @@ document.addEventListener('click', async e => {
   if (t.closest('[data-subnav-toggle]')) { const on = document.body.classList.toggle('subnav-collapsed'); ls('ember_subnav_collapsed', on ? '1' : '0'); return; }
   if (t.closest('[data-profile]')) { closeTray(); if (layoutState.ctx) openProfileModal(layoutState.ctx); return; }
   if (t.closest('[data-add-child]')) { closeTray(); if (layoutState.ctx) (await import('./sis.js' + BUILD)).openAddStudentCode(layoutState.ctx); return; }
+  if (t.closest('[data-my-devices]')) { closeTray(); const c = layoutState.ctx; if (c) (await import('./work.js' + BUILD)).openMyDevices(c); return; }
   if (t.closest('[data-concern]')) { closeTray(); const c = layoutState.ctx; if (c) (await import('./sis.js' + BUILD)).openIncidentModal(c, null, [], { concern: !c.can('safety') }); return; }
   const hp = t.closest('[data-help]');
   if (hp) return openHelp(hp.dataset.help);

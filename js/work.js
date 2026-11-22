@@ -608,9 +608,10 @@ async function itView(ctx, el, tab, t) {
   if (!live(t)) return;
   const staff = staffSnap.docs.map(d => ({ uid: d.id, ...d.data() })).sort((a, b) => displayNameOf(a).localeCompare(displayNameOf(b)));
   el.innerHTML = `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">${kpi('Staff accounts', staff.length)}${kpi('Administrators', staff.filter(s => s.role === 'admin').length)}${kpi('Students', kids.length)}${kpi('Students missing an ID', kids.filter(s => !s.studentNumber).length, kids.some(s => !s.studentNumber) ? 'bad' : 'good')}</div>
-    ${subTabs(ctx, 'it', [['permissions', 'Permissions', 'key-round'], ['devices', 'Devices', 'laptop'], ['reports', 'State reporting', 'file-spreadsheet']], tab)}<div id="it-body"></div>`;
+    ${subTabs(ctx, 'it', [['permissions', 'Permissions', 'key-round'], ['devices', 'Devices', 'laptop'], ['supplies', 'Supplies', 'boxes'], ['reports', 'State reporting', 'file-spreadsheet']], tab)}<div id="it-body"></div>`;
   const body = $('#it-body');
-  if (tab === 'devices') return inventory(ctx, body, 'it', { title: 'Device & asset inventory', categories: ['Chromebook', 'Laptop', 'Desktop', 'Tablet', 'Projector', 'Interactive panel', 'Printer', 'Network', 'Hotspot', 'Other'], assign: true });
+  if (tab === 'devices') return devicesView(ctx, body, staff, kids, t);
+  if (tab === 'supplies') return inventory(ctx, body, 'it', { title: 'IT supplies & spare parts', categories: ['Chargers', 'Cables', 'Keyboards & mice', 'Headphones', 'Cases', 'Spare parts', 'Printer supplies', 'Network', 'Other'] });
   if (tab === 'reports') {
     const reports = [['students', 'Student demographics', 'Student ID, name, grade, DOB, gender, ELL / IEP / 504, meal status'], ['attendance', 'Attendance (date range)', 'Every attendance mark with date, class and code'], ['discipline', 'Discipline incidents', 'Incidents and referrals with dates, types and actions'], ['clinic', 'Health office visits', 'Visit counts with reasons and dispositions'], ['staff', 'Staff roster', 'Name, title, category, role and access']];
     body.innerHTML = `<section class="card p-5 mb-4"><div class="flex flex-wrap items-end gap-3"><div><label class="label" for="rp-from">From</label><input type="date" id="rp-from" class="input !w-auto" value="${schoolYear().slice(0, 4)}-08-01"></div><div><label class="label" for="rp-to">To</label><input type="date" id="rp-to" class="input !w-auto" value="${today()}"></div><p class="hint flex-1">CSV files open in Excel or Google Sheets and can be reformatted for your state's upload.</p></div></section>
@@ -826,4 +827,149 @@ async function findStudentView(ctx, el, kids, t) {
   $('#fs-q').addEventListener('input', e => { q = e.target.value.trim().toLowerCase(); drawList(); });
   out.addEventListener('click', e => { const b = e.target.closest('[data-fs]'); if (b) show(kids.find(s => s.uid === b.dataset.fs)); });
   drawList(); setTimeout(() => $('#fs-q')?.focus(), 50);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// IT DEVICE REGISTRY — every device has an asset tag; assigned to a person its code becomes
+// their ID + a count (student 2030-0001-1, staff STF-0001-1); assigned to a room, RM-214-1.
+// ═══════════════════════════════════════════════════════════════
+const DEVICE_TYPES = [['Chromebook', 'laptop'], ['Laptop', 'laptop'], ['Tablet', 'tablet'], ['Desktop', 'monitor'], ['Smart board', 'presentation'], ['Projector', 'projector'], ['Document camera', 'camera'], ['Hotspot', 'wifi'], ['Calculator', 'calculator'], ['Printer', 'printer'], ['Other', 'cpu']];
+const DEVICE_STATUS = { stock: ['In stock', 'muted'], assigned: ['Assigned', 'green'], repair: ['In repair', 'amber'], lost: ['Lost / stolen', 'red'], retired: ['Retired', 'muted'] };
+const devIcon = type => (DEVICE_TYPES.find(d => d[0] === type) || DEVICE_TYPES.at(-1))[1];
+// Staff get an ID like STF-0001 (students already have 2030-0001), reserved in a transaction-free counter doc.
+async function ensureStaffId(ctx, s) {
+  if (s.staffNumber) return s.staffNumber;
+  const ref = dref(ctx, 'counters', 'staffIds'), cur = (await getDoc(ref).catch(() => null))?.data()?.n || 0;
+  const id = `STF-${String(cur + 1).padStart(4, '0')}`;
+  await setDoc(ref, { n: increment(1) }, { merge: true });
+  await updateDoc(dref(ctx, 'users', s.uid), { staffNumber: id });
+  s.staffNumber = id;
+  return id;
+}
+async function devicesView(ctx, el, staff, kids, t) {
+  const F = await forms();
+  let devices = [], q = '', fType = '', fStatus = '', fWho = '';
+  const people = [...kids.map(s => ({ uid: s.uid, kind: 'student', name: displayNameOf(s), idn: s.studentNumber || '', grade: s.gradeLevel, raw: s })), ...staff.map(s => ({ uid: s.uid, kind: 'staff', name: displayNameOf(s), idn: s.staffNumber || '', title: s.title || (s.role === 'admin' ? 'Administrator' : 'Teacher'), raw: s }))].sort((a, b) => a.name.localeCompare(b.name));
+  const rooms = [...new Set((await getDocs(col(ctx, 'courses')).catch(() => ({ docs: [] }))).docs.map(d => d.data().room).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
+  if (!live(t)) return;
+  el.innerHTML = `<div id="dv-kpi" class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5"></div>
+    <section class="card overflow-hidden"><div class="flex flex-wrap items-center gap-3 px-5 py-4 border-b border-white/[0.06]"><div class="flex items-center gap-3 flex-1 min-w-[220px]">${iconTile('laptop', 'violet')}<div><h2 class="text-white font-medium">Device registry</h2><p class="text-xs text-gray-500">Assign to a student or staff member (code = their ID + count) or to a room / teacher.</p></div></div>
+      <input type="search" id="dv-q" class="input !py-1.5 !w-48" placeholder="Code, serial, person…" aria-label="Search devices">
+      <select id="dv-type" class="input !py-1.5 !w-auto" aria-label="Type" data-icon="cpu"><option value="">All types</option>${DEVICE_TYPES.map(([d, i]) => `<option data-icon="${i}">${d}</option>`).join('')}</select>
+      <select id="dv-status" class="input !py-1.5 !w-auto" aria-label="Status" data-icon="tag"><option value="">Any status</option>${Object.entries(DEVICE_STATUS).map(([k, [l]]) => `<option value="${k}">${l}</option>`).join('')}</select>
+      <select id="dv-who" class="input !py-1.5 !w-auto" aria-label="Assigned to" data-icon="users"><option value="">Anyone</option><option value="student">Students</option><option value="staff">Staff</option><option value="room">Rooms</option><option value="none">Unassigned</option></select>
+      <button class="btn btn-secondary btn-sm" id="dv-csv">${ico('download', 'w-3.5 h-3.5')} CSV</button><button class="btn btn-primary btn-sm" id="dv-add">${ico('plus', 'w-3.5 h-3.5')} Register device</button></div><div id="dv-list">${skeletonRows(3)}</div></section>`;
+  const shown = () => devices.filter(d => (!fType || d.type === fType) && (!fStatus || d.status === fStatus) && (!fWho || (fWho === 'none' ? !d.assignedKind : d.assignedKind === fWho))
+    && (!q || `${d.code} ${d.number} ${d.serial} ${d.model} ${d.assignedName} ${d.room || ''}`.toLowerCase().includes(q))).sort((a, b) => (a.code || a.number).localeCompare(b.code || b.number, undefined, { numeric: true }));
+  const draw = () => {
+    const by = k => devices.filter(d => d.assignedKind === k).length;
+    $('#dv-kpi').innerHTML = kpi('Devices', devices.length) + kpi('Students', by('student')) + kpi('Staff', by('staff')) + kpi('Rooms', by('room')) + kpi('In stock', devices.filter(d => d.status === 'stock').length) + kpi('Repair / lost', devices.filter(d => ['repair', 'lost'].includes(d.status)).length, devices.some(d => ['repair', 'lost'].includes(d.status)) ? 'bad' : '');
+    const l = shown();
+    $('#dv-list').innerHTML = l.length ? `<div class="overflow-x-auto"><table class="w-full text-sm work-table"><thead><tr><th>Device code</th><th>Type</th><th>Model</th><th>Serial</th><th>Assigned to</th><th>Status</th><th>Since</th><th></th></tr></thead><tbody>${l.map(d => `<tr data-dv="${d.id}"><td class="font-mono text-[#F59E0B] whitespace-nowrap">${escapeHtml(d.code || d.number)}${d.code && d.code !== d.number ? `<div class="text-[10px] text-gray-500">${escapeHtml(d.number)}</div>` : ''}</td><td class="whitespace-nowrap">${ico(devIcon(d.type), 'w-3.5 h-3.5 inline -mt-0.5 text-gray-400')} ${escapeHtml(d.type)}</td><td>${escapeHtml(d.model || '')}</td><td class="font-mono text-xs">${escapeHtml(d.serial || '')}</td>
+      <td>${d.assignedKind ? `<span class="text-white">${escapeHtml(d.assignedName || '')}</span> <span class="text-[11px] text-gray-500">${escapeHtml(d.assignedKind === 'room' ? `Room ${d.room}` : d.assignedKind === 'student' ? `Student · ${d.assignedId}` : `Staff · ${d.assignedId}`)}</span>` : '<span class="text-gray-500">—</span>'}</td>
+      <td>${badge(DEVICE_STATUS[d.status]?.[0] || d.status, DEVICE_STATUS[d.status]?.[1] || 'muted')}</td><td class="text-[11px] text-gray-500 whitespace-nowrap">${escapeHtml(fmtStamp(d.assignedAt || d.createdAt))}</td>
+      <td class="text-right whitespace-nowrap">${d.assignedKind ? `<button class="btn btn-ghost btn-sm" data-dv-return="${d.id}">${ico('undo-2', 'w-3.5 h-3.5')} Return</button>` : `<button class="btn btn-secondary btn-sm" data-dv-assign="${d.id}">${ico('user-plus', 'w-3.5 h-3.5')} Assign</button>`}</td></tr>`).join('')}</tbody></table></div><p class="hint px-5 py-2">${plural(l.length, 'device')}</p>`
+      : `<div class="p-6">${emptyState({ icon: 'laptop', title: devices.length ? 'No devices match' : 'No devices yet', text: devices.length ? '' : 'Register your first Chromebook, laptop or smart board.' })}</div>`;
+    refreshIcons();
+  };
+  unsubs.push(onSnapshot(col(ctx, 'devices'), s => { devices = s.docs.map(d => ({ id: d.id, ...d.data() })); if (live(t)) draw(); }, e => { $('#dv-list').innerHTML = errorBox(e); refreshIcons(); }));
+  const nextTag = () => `IT-${String(devices.reduce((a, d) => Math.max(a, Number(String(d.number || '').split('-')[1]) || 0), 0) + 1).padStart(4, '0')}`;
+  // Device code for a holder: their ID + the next number for them (2030-0001-1, 2030-0001-2 …).
+  const codeFor = prefix => { const n = devices.reduce((a, d) => { const m = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-(\\d+)$`).exec(d.code || ''); return m ? Math.max(a, Number(m[1])) : a; }, 0); return `${prefix}-${n + 1}`; };
+  const register = (d = null) => F.formModal({ title: d ? `Edit ${d.code || d.number}` : 'Register a device', subtitle: d ? d.type : `Asset tag ${nextTag()} is assigned automatically.`, icon: 'laptop', form: { sections: [{ fields: [
+      { id: 'type', type: 'select', label: 'Type', required: true, options: DEVICE_TYPES.map(([x]) => x) }, { id: 'model', type: 'text', label: 'Make / model', placeholder: 'e.g. Dell 3110 Chromebook' },
+      { id: 'serial', type: 'text', label: 'Serial number', required: true }, { id: 'status', type: 'select', label: 'Status', options: Object.entries(DEVICE_STATUS).filter(([k]) => k !== 'assigned' || d?.assignedKind).map(([k, [l]]) => ({ v: k, l })) },
+      { id: 'purchased', type: 'date', label: 'Purchased' }, { id: 'warranty', type: 'date', label: 'Warranty ends' }, { id: 'notes', type: 'textarea', label: 'Notes / condition', rows: 2, span: 'sm:col-span-2' }] }] },
+    data: d ? { ...d } : { type: 'Chromebook', status: 'stock' }, submit: d ? 'Save' : 'Register', onSubmit: async v => {
+      if (devices.some(x => x.serial && x.serial.toLowerCase() === v.serial.trim().toLowerCase() && x.id !== d?.id)) throw new Error('A device with that serial number is already registered.');
+      const rec = { type: v.type, model: v.model || '', serial: v.serial.trim(), status: v.status || 'stock', purchased: v.purchased || '', warranty: v.warranty || '', notes: v.notes || '', updatedAt: serverTimestamp() };
+      if (d) await updateDoc(dref(ctx, 'devices', d.id), { ...rec, log: arrayUnion(stamp(ctx, 'Edited')) });
+      else { const number = nextTag(); await addDoc(col(ctx, 'devices'), { ...rec, number, code: number, assignedKind: '', assignedUid: '', assignedName: '', createdAt: serverTimestamp(), log: [stamp(ctx, `Registered as ${number}`)] }); toast(`Registered ${number}`); }
+      return true;
+    } });
+  const assign = d => {
+    const m = openModal({ html: modalHeader({ title: `Assign ${escapeHtml(d.number)}`, subtitle: `${escapeHtml(d.type)}${d.model ? ' · ' + escapeHtml(d.model) : ''}${d.serial ? ' · SN ' + escapeHtml(d.serial) : ''}`, icon: devIcon(d.type) }) + `<form novalidate>${modalBody(`
+      <div class="segmented grid grid-cols-2 mb-4" role="group"><button type="button" data-to="person" aria-pressed="${d.type !== 'Smart board' && d.type !== 'Projector'}">${ico('user', 'w-3.5 h-3.5')} A person</button><button type="button" data-to="room" aria-pressed="${d.type === 'Smart board' || d.type === 'Projector'}">${ico('door-open', 'w-3.5 h-3.5')} A room / teacher</button></div>
+      <div data-pane="person"><label class="label" for="as-person">Student or staff member</label><select id="as-person" class="input" data-icon="user"><option value="">Choose a person…</option><optgroup label="Students">${people.filter(p => p.kind === 'student').map(p => `<option value="${p.uid}" data-icon="graduation-cap">${escapeHtml(p.name)}${p.idn ? ' · ' + escapeHtml(p.idn) : ''}</option>`).join('')}</optgroup><optgroup label="Staff">${people.filter(p => p.kind === 'staff').map(p => `<option value="${p.uid}" data-icon="briefcase">${escapeHtml(p.name)} · ${escapeHtml(p.title)}${p.idn ? ' · ' + escapeHtml(p.idn) : ''}</option>`).join('')}</optgroup></select><p class="hint mt-2">Parents can't be assigned devices.</p></div>
+      <div data-pane="room" class="hidden grid sm:grid-cols-2 gap-3"><div><label class="label" for="as-room">Room</label><input id="as-room" class="input" list="as-rooms" placeholder="e.g. 214"><datalist id="as-rooms">${rooms.map(r => `<option value="${escapeHtml(r)}">`).join('')}</datalist></div><div><label class="label" for="as-teacher">Teacher</label><select id="as-teacher" class="input" data-icon="presentation"><option value="">No teacher</option>${staff.map(s => `<option value="${s.uid}">${escapeHtml(displayNameOf(s))}</option>`).join('')}</select></div></div>
+      <div class="mt-4 p-3 rounded-lg border border-white/[0.08] bg-white/[0.02] text-sm"><span class="text-gray-500 text-xs">Device code will be</span><div class="font-mono text-[#F59E0B] text-lg" id="as-code">—</div></div>
+      <label class="label mt-4" for="as-note">Note (optional)</label><input id="as-note" class="input" placeholder="e.g. Charger included">
+      <p class="form-error mt-3 hidden" id="as-err"></p>`)}${modalFooter(`<button type="button" data-close class="btn btn-secondary flex-1">Cancel</button><button type="submit" class="btn btn-primary flex-1">${ico('check', 'w-4 h-4')} Assign</button>`)}</form>` });
+    let to = d.type === 'Smart board' || d.type === 'Projector' ? 'room' : 'person';
+    const pane = () => { m.$$('[data-to]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.to === to))); m.$('[data-pane="person"]').classList.toggle('hidden', to !== 'person'); m.$('[data-pane="room"]').classList.toggle('hidden', to !== 'room'); preview(); };
+    const preview = () => {
+      let code = '—';
+      if (to === 'person') { const p = people.find(x => x.uid === m.$('#as-person').value); if (p) code = p.idn ? codeFor(p.idn) : `${p.kind === 'staff' ? 'STF-new' : '(student needs an ID)'}-1`; }
+      else { const r = m.$('#as-room').value.trim(); if (r) code = codeFor(`RM-${r.toUpperCase().replace(/\s+/g, '')}`); }
+      m.$('#as-code').textContent = code;
+    };
+    m.el.addEventListener('click', e => { const b = e.target.closest('[data-to]'); if (b) { to = b.dataset.to; pane(); } });
+    m.el.addEventListener('change', preview); m.el.addEventListener('input', preview); pane();
+    m.$('form').addEventListener('submit', e => {
+      e.preventDefault();
+      const err = m.$('#as-err');
+      withBusy(e.submitter || m.$('[type=submit]'), 'Assigning…', async () => {
+        try {
+          let patch;
+          if (to === 'person') {
+            const p = people.find(x => x.uid === m.$('#as-person').value);
+            if (!p) return globalThis.__ember.showError(err, 'Choose a student or staff member.');
+            let idn = p.idn;
+            if (!idn && p.kind === 'staff') idn = p.idn = await ensureStaffId(ctx, p.raw);
+            if (!idn) return globalThis.__ember.showError(err, `${p.name} doesn't have a student ID yet — set their grade so one is created.`);
+            patch = { assignedKind: p.kind, assignedUid: p.uid, assignedName: p.name, assignedId: idn, room: '', teacherUid: '', code: codeFor(idn) };
+          } else {
+            const r = m.$('#as-room').value.trim().toUpperCase().replace(/\s+/g, ''), tUid = m.$('#as-teacher').value, tch = staff.find(s => s.uid === tUid);
+            if (!r) return globalThis.__ember.showError(err, 'Enter the room.');
+            patch = { assignedKind: 'room', assignedUid: tUid || '', assignedName: tch ? `${displayNameOf(tch)} · Room ${r}` : `Room ${r}`, assignedId: `RM-${r}`, room: r, teacherUid: tUid || '', code: codeFor(`RM-${r}`) };
+          }
+          const note = m.$('#as-note').value.trim();
+          await updateDoc(dref(ctx, 'devices', d.id), { ...patch, status: 'assigned', assignedAt: Date.now(), assignNote: note, updatedAt: serverTimestamp(), log: arrayUnion(stamp(ctx, `Assigned to ${patch.assignedName} as ${patch.code}${note ? ' · ' + note : ''}`)) });
+          if (patch.assignedKind !== 'room' || patch.teacherUid) notify(ctx, { to: [patch.assignedUid || patch.teacherUid], kind: 'system', title: `${d.type} ${patch.code} is assigned to you`, body: `${d.model || d.type}${d.serial ? ' · SN ' + d.serial : ''}`, link: `/${ctx.slug}` }).catch(() => {});
+          m.close(); toast(`${d.number} → ${patch.assignedName} (${patch.code})`);
+        } catch (ex) { globalThis.__ember.showError(err, friendlyError(ex)); }
+      });
+    });
+    refreshIcons();
+  };
+  const ret = async d => {
+    const F2 = await forms();
+    F2.formModal({ title: `Return ${d.code}`, subtitle: `From ${d.assignedName}`, icon: 'undo-2', form: { sections: [{ fields: [{ id: 'status', type: 'select', label: 'Back to', required: true, options: [{ v: 'stock', l: 'In stock (ready to reassign)' }, { v: 'repair', l: 'In repair' }, { v: 'lost', l: 'Lost / stolen' }, { v: 'retired', l: 'Retired' }] }, { id: 'condition', type: 'text', label: 'Condition / note', span: 'sm:col-span-2' }] }] }, data: { status: 'stock' }, submit: 'Return device', onSubmit: async v => {
+      await updateDoc(dref(ctx, 'devices', d.id), { status: v.status, code: d.number, assignedKind: '', assignedUid: '', assignedName: '', assignedId: '', room: '', teacherUid: '', returnedAt: Date.now(), updatedAt: serverTimestamp(), log: arrayUnion(stamp(ctx, `Returned from ${d.assignedName} (${d.code}) → ${DEVICE_STATUS[v.status][0]}${v.condition ? ' · ' + v.condition : ''}`)) });
+      toast(`${d.code} returned`); return true;
+    } });
+  };
+  const open = d => {
+    const m = openModal({ size: 'lg', html: modalHeader({ title: escapeHtml(d.code || d.number), subtitle: `${escapeHtml(d.type)}${d.model ? ' · ' + escapeHtml(d.model) : ''} · asset ${escapeHtml(d.number)}`, icon: devIcon(d.type) }) + modalBody(`
+      <dl class="grid sm:grid-cols-3 gap-4 mb-5">${[['Serial', d.serial], ['Status', DEVICE_STATUS[d.status]?.[0]], ['Assigned to', d.assignedName || '—'], ['Purchased', fmtDate(d.purchased)], ['Warranty ends', fmtDate(d.warranty)], ['Notes', d.notes]].map(([k, v]) => `<div><dt class="text-[11px] uppercase tracking-wider text-gray-500">${k}</dt><dd class="text-sm text-gray-200 mt-0.5">${escapeHtml(v || '—')}</dd></div>`).join('')}</dl>
+      <h3 class="label">History</h3>${timeline(d.log)}`) + modalFooter(`<button class="btn btn-ghost" data-del>${ico('trash-2', 'w-4 h-4')} Delete</button><span class="flex-1"></span><button class="btn btn-secondary" data-edit>${ico('pencil', 'w-4 h-4')} Edit</button>${d.assignedKind ? `<button class="btn btn-secondary" data-ret>${ico('undo-2', 'w-4 h-4')} Return</button>` : `<button class="btn btn-primary" data-asg>${ico('user-plus', 'w-4 h-4')} Assign</button>`}`) });
+    m.el.addEventListener('click', async e => {
+      if (e.target.closest('[data-edit]')) { m.close(); register(d); }
+      if (e.target.closest('[data-asg]')) { m.close(); assign(d); }
+      if (e.target.closest('[data-ret]')) { m.close(); ret(d); }
+      if (e.target.closest('[data-del]') && await confirmDialog({ title: `Delete ${d.number}?`, message: 'Use Return → Retired to keep its history instead.', confirmLabel: 'Delete', danger: true })) { await deleteDoc(dref(ctx, 'devices', d.id)).catch(ex => toast(friendlyError(ex), 'error')); m.close(); }
+    });
+    refreshIcons();
+  };
+  el.addEventListener('input', e => { if (e.target.id === 'dv-q') { q = e.target.value.trim().toLowerCase(); draw(); } });
+  el.addEventListener('change', e => { if (e.target.id === 'dv-type') fType = e.target.value; if (e.target.id === 'dv-status') fStatus = e.target.value; if (e.target.id === 'dv-who') fWho = e.target.value; if (/dv-(type|status|who)/.test(e.target.id)) draw(); });
+  el.addEventListener('click', e => {
+    if (e.target.closest('#dv-add')) return register();
+    if (e.target.closest('#dv-csv')) return csv('devices.csv', ['Device code', 'Asset tag', 'Type', 'Model', 'Serial', 'Status', 'Assigned to', 'Kind', 'ID', 'Room', 'Assigned at', 'Purchased', 'Warranty'], shown().map(d => [d.code, d.number, d.type, d.model, d.serial, DEVICE_STATUS[d.status]?.[0], d.assignedName, d.assignedKind, d.assignedId || '', d.room || '', d.assignedAt ? fmtStamp(d.assignedAt) : '', d.purchased, d.warranty]));
+    const a = e.target.closest('[data-dv-assign]'); if (a) { e.stopPropagation(); return assign(devices.find(d => d.id === a.dataset.dvAssign)); }
+    const r = e.target.closest('[data-dv-return]'); if (r) { e.stopPropagation(); return ret(devices.find(d => d.id === r.dataset.dvReturn)); }
+    const row = e.target.closest('[data-dv]'); if (row) open(devices.find(d => d.id === row.dataset.dv));
+  });
+}
+
+// "My devices" — shown on a student's Student Info and in a staff member's account menu.
+export async function devicesFor(ctx, uid) {
+  const snap = await getDocs(query(col(ctx, 'devices'), where('assignedUid', '==', uid))).catch(() => ({ docs: [] }));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+export const deviceCardsHTML = list => list.length ? `<div class="grid sm:grid-cols-2 gap-3">${list.map(d => `<div class="card p-4 flex items-center gap-3">${iconTile(devIcon(d.type), 'violet')}<div class="min-w-0"><div class="font-mono text-[#F59E0B]">${escapeHtml(d.code)}</div><div class="text-sm text-white">${escapeHtml(d.type)}${d.model ? ' · ' + escapeHtml(d.model) : ''}</div><div class="text-[11px] text-gray-500">${d.serial ? 'SN ' + escapeHtml(d.serial) + ' · ' : ''}since ${escapeHtml(fmtStamp(d.assignedAt))}${d.room ? ' · Room ' + escapeHtml(d.room) : ''}</div></div></div>`).join('')}</div>` : '<p class="text-sm text-gray-500">No devices assigned.</p>';
+export async function openMyDevices(ctx) {
+  const list = await devicesFor(ctx, ctx.me.uid);
+  const m = openModal({ html: modalHeader({ title: 'My devices', subtitle: 'Devices IT has assigned to you. Contact IT if anything is wrong.', icon: 'laptop' }) + modalBody(deviceCardsHTML(list)) });
+  refreshIcons(); return m;
 }
