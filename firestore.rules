@@ -139,7 +139,7 @@ service cloud.firestore {
         allow get: if canManage(t) || (signedIn() && me() == sid) || isGuardianOf(t, sid);
         allow list: if canManage(t);
         // staff create logins; students may self-register as "pending"
-        allow create: if isStaff(t) || (
+        allow create: if isStaff(t) || isDistrictAdmin(t) || (
           signedIn() && me() == sid
           && request.resource.data.status == 'pending'
           && request.resource.data.get('enrolledCourseIds', []).size() == 0
@@ -370,7 +370,7 @@ service cloud.firestore {
     }
     // Running numbers for student IDs (2030-0001 …). Staff reserve the next number in a transaction.
     match /tenants/{t}/counters/{c} {
-      allow read, write: if isStaff(t);
+      allow read, write: if isStaff(t) || isDistrictAdmin(t);
     }
     // Staff comments on a student (internal notes). Staff only — never students or families.
     match /tenants/{t}/staffNotes/{n} {
@@ -485,7 +485,7 @@ service cloud.firestore {
     match /tenants/{t}/guardians/{uid} {
       allow read: if canManage(t) || (signedIn() && me() == uid);
       // Becoming a guardian requires a Family Access code issued by this school.
-      allow create: if (isAdmin(t) && request.resource.data.userId == uid)
+      allow create: if ((isAdmin(t) || isDistrictAdmin(t)) && request.resource.data.userId == uid)
         || (signedIn() && me() == uid && request.resource.data.userId == me()
             && get(/databases/$(database)/documents/familyCodes/$(request.resource.data.code)).data.tenantId == t);
       allow update: if (isAdmin(t) && request.resource.data.userId == uid)
@@ -495,7 +495,7 @@ service cloud.firestore {
     match /tenants/{t}/guardianLinks/{id} {
       allow read: if canManage(t) || (signedIn() && resource.data.guardianUid == me());
       // Admins link parents directly; a parent links themselves by presenting the student's Family Access code.
-      allow create: if (isAdmin(t) && id == request.resource.data.guardianUid + '_' + request.resource.data.studentUid)
+      allow create: if ((isAdmin(t) || isDistrictAdmin(t)) && id == request.resource.data.guardianUid + '_' + request.resource.data.studentUid)
         || signedIn() && request.resource.data.guardianUid == me()
         && id == me() + '_' + request.resource.data.studentUid
         && get(/databases/$(database)/documents/familyCodes/$(request.resource.data.code)).data.studentUid == request.resource.data.studentUid

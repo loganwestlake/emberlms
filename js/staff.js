@@ -761,12 +761,13 @@ function officeSummary(office) {
 async function syncFamilyRecords(ctx, id, teacher, office) {
   const share = office.shareWithFamily !== 'No'; // reviewed referrals are visible to the family unless the office hides them
   const behaviors = referralBehaviors(teacher);
+  const report = (await sisModule()).familyReport(teacher, office, id);
   await Promise.allSettled((teacher.students || []).map(st => {
     const ref = doc(db, 'tenants', ctx.slug, 'disciplineRecords', `${id}_${st.uid}`);
     if (!share) return deleteDoc(ref);
     const loc = teacher.location === 'Other' ? (teacher['location|Other|text'] || 'Other') : teacher.location;
     return setDoc(ref, { incidentId: id, studentUid: st.uid, studentName: st.name, date: teacher.date || '', location: loc || '', behavior: teacher.primary || behaviors[0] || 'Behavior referral', behaviors,
-      actions: officeSummary(office), summary: office.familyNote || '', status: (office.status || 'Open').toLowerCase(), adminName: office.adminName || '', adminPhone: office.adminPhone || '', sharedBy: ctx.me.uid, sharedAt: serverTimestamp() });
+      actions: officeSummary(office), summary: office.familyNote || '', status: (office.status || 'Open').toLowerCase(), adminName: office.adminName || '', adminPhone: office.adminPhone || '', report, sharedBy: ctx.me.uid, sharedAt: serverTimestamp() });
   }));
 }
 function notifyFamily(ctx, teacher, office, id) {

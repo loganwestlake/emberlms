@@ -1969,15 +1969,16 @@ async function viewDistrict(districtId, segs = []) {
   if (sub === 'safety') return sis.viewDistrictSafety(dctx);
   if (sub === 'notifications') return (await import('./staff.js' + BUILD)).viewDistrictNotifications(dctx);
   if (sub === 'passes') return (await import('./pass.js' + BUILD)).viewDistrictPassPolicy(dctx);
+  if (sub === 'people') return (await import('./people.js' + BUILD)).viewDistrictPeople(dctx);
   return sis.viewDistrictHome(dctx);
 }
 function districtShell({ districtId, district }, active, header, body) {
   layoutState = { ctx: null, district: { id: districtId, ...district }, course: null };
   const p = s => buildUrl(`/district/${districtId}${s}`);
-  const labels = { overview: 'Dashboard', schools: 'Schools', teachers: 'Teachers', planning: 'Lesson plans', attendance: 'Attendance', students: 'Students', safety: 'Safety', notifications: 'Notifications', passes: 'Ember Pass policy' };
+  const labels = { overview: 'Dashboard', schools: 'Schools', teachers: 'Teachers', planning: 'Lesson plans', attendance: 'Attendance', students: 'Students', safety: 'Safety', notifications: 'Notifications', passes: 'Ember Pass policy', people: 'People' };
   const subnav = subnavHTML({
     accent: 'violet', eyebrow: 'District', title: district.name || districtId, items: [
-      { href: p(''), label: 'Dashboard', active: active === 'overview' }, { href: p('/schools'), label: 'Schools', active: active === 'schools' },
+      { href: p(''), label: 'Dashboard', active: active === 'overview' }, { href: p('/schools'), label: 'Schools', active: active === 'schools' }, { href: p('/people'), label: 'People', active: active === 'people' },
       { section: 'Student information' },
       { href: p('/students'), label: 'Students', active: active === 'students' }, { href: p('/attendance'), label: 'Attendance', active: active === 'attendance' },
       { href: p('/safety'), label: 'Safety', active: active === 'safety' }, { href: p('/passes'), label: 'Ember Pass policy', active: active === 'passes' },

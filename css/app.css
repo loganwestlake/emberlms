@@ -409,3 +409,8 @@ body.sidebar-open .drawer-backdrop { opacity: 1; pointer-events: auto; }
 .kiosk-fs.hidden { display: none; }
 body.kiosk-on #update-banner { display: none !important; }
 body.kiosk-on { user-select: none; -webkit-user-select: none; overscroll-behavior: none; }
+@media print {
+  .disc-print, .disc-print * { color: #111 !important; background: transparent !important; border-color: #bbb !important; box-shadow: none !important; }
+  .disc-print { font-family: Inter, system-ui, sans-serif; padding: 0 8px; }
+  .disc-print h4 { margin-top: 14px; }
+}

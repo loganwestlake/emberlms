@@ -2013,7 +2013,7 @@ async function disciplineTab(ctx, el, student, t) {
       const jobs = [];
       list.forEach(x => {
         const want = familyVisible(x), have = mine.get(x.id), rec = familyRecordOf(x, sid);
-        if (want && (!have || have.status !== rec.status || have.actions !== rec.actions || have.summary !== rec.summary)) jobs.push(setDoc(tdoc(ctx, 'disciplineRecords', `${x.id}_${sid}`), { ...rec, sharedBy: ctx.me.uid, sharedAt: serverTimestamp() }).then(() => sharedIds.add(x.id)));
+        if (want && (!have || have.status !== rec.status || have.actions !== rec.actions || have.summary !== rec.summary || !have.report)) jobs.push(setDoc(tdoc(ctx, 'disciplineRecords', `${x.id}_${sid}`), { ...rec, sharedBy: ctx.me.uid, sharedAt: serverTimestamp() }).then(() => sharedIds.add(x.id)));
         if (!want && have) jobs.push(deleteDoc(tdoc(ctx, 'disciplineRecords', `${x.id}_${sid}`)).then(() => sharedIds.delete(x.id)));
       });
       await Promise.allSettled(jobs);
@@ -2068,7 +2068,31 @@ const familyVisible = x => x.familyVisibility === 'shown' || (x.familyVisibility
 function familyRecordOf(x, sid) {
   const o = x.office || {}, i = (x.studentUids || []).indexOf(sid);
   return { incidentId: x.id, studentUid: sid, studentName: (x.studentNames || [])[i] || '', date: x.date || '', location: x.location || '', behavior: x.type || 'Behavior referral',
-    behaviors: (x.behaviors || [x.type]).filter(Boolean), actions: x.office ? officeActionsText(o) : '', summary: o.familyNote || '', status: (x.status || 'open').toLowerCase(), adminName: o.adminName || '', adminPhone: o.adminPhone || '' };
+    behaviors: (x.behaviors || [x.type]).filter(Boolean), actions: x.office ? officeActionsText(o) : '', summary: o.familyNote || '', status: (x.status || 'open').toLowerCase(), adminName: o.adminName || '', adminPhone: o.adminPhone || '',
+    report: x.referral ? familyReport(x.referral, o, x.id) : { number: x.id.slice(-6).toUpperCase(), date: x.date || '', location: x.location || '', primary: x.type || '', behaviors: [x.type].filter(Boolean), consequences: actionList(o, 'officeActions'), stepsBefore: [], reviewedBy: o.adminName || '' } };
+}
+// The detailed, family-safe referral report: what happened (behaviors, when, where), what the teacher
+// tried first, every consequence with its dates, and who to contact. Never the teacher's written
+// description, witness names, attachments or the office's internal notes.
+const fmtISO = d => d ? formatDate(String(d).slice(0, 10) + 'T12:00') : '';
+const SUB_LABELS = { days: 'Days', start: 'Starting', returnOn: 'Returns to school', dates: 'Date(s)', when: 'When', periods: 'Period(s) / time', until: 'Until', for: 'Length', type: 'Type', date: 'Date', who: 'Contacted', method: 'How', outcome: 'Outcome', which: 'Privilege(s)', to: 'Referred to', officer: 'Officer', case: 'Case number', charge: 'Charge', text: 'Details' };
+const SUB_HIDE = new Set(['attachment', 'comments']);
+const fmtSub = (k, v) => Array.isArray(v) ? v.map(x => /^\d{4}-\d{2}-\d{2}$/.test(x) ? fmtISO(x) : x).join(', ') : /^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? fmtISO(v) : String(v);
+function actionList(src, field) {
+  return (src?.[field] || []).map(a => ({ action: a === 'Other' ? (src[`${field}|Other|text`] || 'Other') : a,
+    details: Object.entries(src).filter(([k, v]) => k.startsWith(`${field}|${a}|`) && v !== '' && v != null && !(Array.isArray(v) && !v.length)).map(([k, v]) => [k.split('|')[2], v])
+      .filter(([k]) => !SUB_HIDE.has(k) && !(a === 'Other' && k === 'text')).map(([k, v]) => [SUB_LABELS[k] || k, fmtSub(k, v)]) }));
+}
+export function familyReport(t = {}, o = {}, id = '') {
+  const loc = t.location === 'Other' ? (t['location|Other|text'] || 'Other') : t.location;
+  const behaviors = [...(t.classroomBehaviors || []), ...(t.officeBehaviors || [])].map(b => b === 'Other' ? (t['classroomBehaviors|Other|text'] || t['officeBehaviors|Other|text'] || 'Other') : b);
+  return {
+    number: id ? id.slice(-6).toUpperCase() : '', date: t.date || '', time: t.time || '', course: t.course || '', location: loc || '', grade: t.grade || '',
+    referredBy: [t.referrer, t.referrerRole].filter(Boolean).join(' · '), primary: t.primary || behaviors[0] || '', behaviors,
+    reasons: (t.reasons || []).filter(r => r !== 'Other'), injury: t.injury || '', injuryNote: t.injury === 'Yes' ? (t.injuryNote || '') : '',
+    stepsBefore: actionList(t, 'classroomActions'), consequences: actionList(o, 'officeActions'), determination: (o.considered || []).filter(Boolean),
+    reviewedBy: o.adminName || '', reviewedOn: o.adminDate || '', status: o.status || '',
+  };
 }
 function officeActionsText(office) {
   return (office.officeActions || []).map(a => {
@@ -2080,13 +2104,34 @@ function officeActionsText(office) {
   }).join(', ');
 }
 function familyDisciplineHTML(list) {
-  return `<div class="space-y-3">${[...list].sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(x => { const [lvl, lbl] = DISC_STATUS(x.status); return `<article class="card p-5">
-    <div class="flex flex-wrap items-start justify-between gap-3"><div><div class="text-xs text-gray-500 mb-1">${escapeHtml(formatDate((x.date || '') + 'T12:00'))}${x.location ? ' · ' + escapeHtml(x.location) : ''}</div><h3 class="text-white font-medium">${escapeHtml(x.behavior || 'Behavior referral')}</h3></div>${statusChip(lvl, lbl)}</div>
-    ${(x.behaviors || []).length > 1 ? `<p class="text-xs text-gray-400 mt-2">Also noted: ${escapeHtml(x.behaviors.filter(b => b !== x.behavior).join(', '))}</p>` : ''}
-    ${x.actions ? `<div class="mt-3 p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]"><div class="text-[11px] uppercase tracking-wider text-gray-500 mb-1">Action taken</div><p class="text-sm text-gray-200">${escapeHtml(x.actions)}</p></div>` : ''}
-    ${x.summary ? `<p class="text-sm text-gray-300 mt-3 whitespace-pre-wrap">${escapeHtml(x.summary)}</p>` : ''}
-    <p class="text-xs text-gray-500 mt-3">${ico('user', 'w-3.5 h-3.5 inline -mt-0.5')} ${escapeHtml(x.adminName || 'School administration')}${x.adminPhone ? ` · <a class="text-[#F59E0B] hover:underline" href="tel:${escapeHtml(x.adminPhone.replace(/[^\d+]/g, ''))}">${escapeHtml(x.adminPhone)}</a>` : ''}</p></article>`; }).join('')}</div>`;
+  const row = (k, v) => v ? `<div><dt class="text-[11px] uppercase tracking-wider text-gray-500">${k}</dt><dd class="text-sm text-gray-200 mt-0.5">${v}</dd></div>` : '';
+  const acts = (items, icon, empty) => items?.length ? `<ul class="space-y-2">${items.map(a => `<li class="rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2.5"><div class="flex items-center gap-2 text-sm text-white">${ico(icon, 'w-4 h-4 text-[#F59E0B] shrink-0')} ${escapeHtml(a.action)}</div>${a.details?.length ? `<dl class="grid sm:grid-cols-2 gap-x-6 gap-y-1 mt-2 pl-6">${a.details.map(([l, v]) => `<div class="text-xs"><dt class="inline text-gray-500">${escapeHtml(l)}:</dt> <dd class="inline text-gray-300">${escapeHtml(v)}</dd></div>`).join('')}</dl>` : ''}</li>`).join('')}</ul>` : `<p class="text-sm text-gray-500">${empty}</p>`;
+  return `<div class="space-y-4">${[...list].sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(x => {
+    const [lvl, lbl] = DISC_STATUS(x.status), r = x.report || {};
+    const others = (r.behaviors || x.behaviors || []).filter(b => b !== (r.primary || x.behavior));
+    return `<article class="card overflow-hidden disc-report" data-disc-report="${escapeHtml(x.id || x.incidentId || '')}">
+    <header class="flex flex-wrap items-start justify-between gap-3 px-5 sm:px-6 py-4 border-b border-white/[0.06]">
+      <div><div class="text-[11px] uppercase tracking-[0.16em] text-[#F59E0B] mb-1">Discipline report${r.number ? ` · #${escapeHtml(r.number)}` : ''}</div><h3 class="font-serif text-2xl text-white">${escapeHtml(r.primary || x.behavior || 'Behavior referral')}</h3>
+        <div class="text-xs text-gray-400 mt-1">${escapeHtml(formatDate((x.date || '') + 'T12:00'))}${r.time ? ' at ' + escapeHtml(fmtTime12(r.time)) : ''}${(r.location || x.location) ? ' · ' + escapeHtml(r.location || x.location) : ''}</div></div>
+      <div class="flex items-center gap-2">${statusChip(lvl, lbl)}<button class="btn-icon" data-disc-print aria-label="Print this report" title="Print">${ico('printer', 'w-4 h-4')}</button></div></header>
+    <div class="px-5 sm:px-6 py-5 space-y-6">
+      <section><h4 class="label">What happened</h4><dl class="grid sm:grid-cols-3 gap-4">${row('Behavior', escapeHtml(r.primary || x.behavior || ''))}${row('Also noted', escapeHtml(others.join(', ')))}${row('Class', escapeHtml(r.course || ''))}${row('Grade', escapeHtml(r.grade ? (r.grade === 'K' ? 'Kindergarten' : 'Grade ' + r.grade) : ''))}${row('Referred by', escapeHtml(r.referredBy || ''))}${row('Possible reasons', escapeHtml((r.reasons || []).join(', ')))}${r.injury ? row('Anyone injured?', escapeHtml(r.injury + (r.injuryNote ? ' — ' + r.injuryNote : ''))) : ''}</dl></section>
+      ${r.stepsBefore ? `<section><h4 class="label">Steps the teacher took first</h4>${acts(r.stepsBefore, 'circle-check', 'None recorded.')}</section>` : ''}
+      <section><h4 class="label">Consequences &amp; next steps</h4>${r.consequences ? acts(r.consequences, 'gavel', x.status === 'open' ? 'The office hasn’t decided yet.' : 'No further action.') : x.actions ? `<p class="text-sm text-gray-200">${escapeHtml(x.actions)}</p>` : '<p class="text-sm text-gray-500">The office hasn’t decided yet.</p>'}
+        ${(r.determination || []).length ? `<p class="text-xs text-gray-400 mt-3">${ico('info', 'w-3.5 h-3.5 inline -mt-0.5')} Determination: ${escapeHtml(r.determination.join(', '))}</p>` : ''}</section>
+      ${x.summary ? `<section><h4 class="label">Message from the school</h4><p class="text-sm text-gray-200 whitespace-pre-wrap rounded-lg border-l-2 border-[#F59E0B] pl-3">${escapeHtml(x.summary)}</p></section>` : ''}
+      <footer class="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-white/[0.06] text-xs text-gray-400"><span>${ico('user-check', 'w-3.5 h-3.5 inline -mt-0.5')} Reviewed by ${escapeHtml(r.reviewedBy || x.adminName || 'school administration')}${r.reviewedOn ? ' on ' + escapeHtml(fmtISO(r.reviewedOn)) : ''}</span>
+        ${x.adminPhone ? `<a class="btn btn-secondary btn-sm" href="tel:${escapeHtml(x.adminPhone.replace(/[^\d+]/g, ''))}">${ico('phone', 'w-3.5 h-3.5')} ${escapeHtml(x.adminPhone)}</a>` : '<span>Questions? Contact the school office.</span>'}</footer>
+    </div></article>`; }).join('')}</div>`;
 }
+const fmtTime12 = hm => { const [h, m] = String(hm).split(':').map(Number); return Number.isFinite(h) ? new Date(2000, 0, 1, h, m || 0).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : hm; };
+// Print one report on its own.
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-disc-print]'); if (!b) return;
+  const card = b.closest('.disc-report'); let root = document.getElementById('print-root'); if (!root) { root = document.createElement('div'); root.id = 'print-root'; document.body.appendChild(root); }
+  root.innerHTML = `<div class="pf disc-print">${card.innerHTML}</div>`; root.querySelectorAll('button').forEach(x => x.remove());
+  const done = () => { root.innerHTML = ''; removeEventListener('afterprint', done); }; addEventListener('afterprint', done); setTimeout(() => print(), 50);
+});
 
 // ── Staff comments on a student: internal notes only staff can see ("great with electronics",
 // "struggles with paper-and-pencil work"). Never shown to the student or family.
