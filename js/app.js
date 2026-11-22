@@ -983,7 +983,7 @@ function viewLogin() {
   const schoolParam = params.get('school');
   const next = safeNext(params.get('next'));
   let mode = params.get('as') || (schoolParam ? 'student' : 'staff');
-  if (!['staff', 'student', 'parent'].includes(mode)) mode = 'staff';
+  if (!['staff', 'student', 'parent', 'district'].includes(mode)) mode = 'staff';
   let school = schoolParam ? { slug: schoolParam, name: schoolParam } : null;
   let picker = null;
   let useEmail = params.get('email') === '1'; // district admins and personal classrooms still use email
@@ -1009,12 +1009,13 @@ function viewLogin() {
       blurb: 'Sign in to your school, district, or personal classroom.',
       content: `
         <h2 class="font-serif text-3xl text-white mb-1">Sign in</h2>
-        <p class="text-gray-500 text-sm mb-6">${mode === 'student' ? 'Students sign in with the username your teacher gave you.' : mode === 'parent' ? 'Parents and guardians — see grades, attendance and more in Family Access.' : 'Teachers, administrators and independent teachers.'}</p>
+        <p class="text-gray-500 text-sm mb-6">${mode === 'student' ? 'Students sign in with the username your teacher gave you.' : mode === 'parent' ? 'Parents and guardians — see grades, attendance and more in Family Access.' : mode === 'district' ? 'District administrators — one sign-in for every school in your district.' : 'Teachers, administrators and school staff.'}</p>
         ${currentUser ? signedInCard() : ''}
-        <div class="segmented grid grid-cols-3 w-full mb-6" role="group" aria-label="Account type">
+        <div class="segmented grid grid-cols-4 w-full mb-6" role="group" aria-label="Account type">
           <button type="button" data-login-mode="staff" aria-pressed="${mode === 'staff'}">${ico('briefcase', 'w-3.5 h-3.5')} Staff</button>
           <button type="button" data-login-mode="student" aria-pressed="${mode === 'student'}">${ico('graduation-cap', 'w-3.5 h-3.5')} Student</button>
           <button type="button" data-login-mode="parent" aria-pressed="${mode === 'parent'}">${ico('users', 'w-3.5 h-3.5')} Parent</button>
+          <button type="button" data-login-mode="district" aria-pressed="${mode === 'district'}">${ico('landmark', 'w-3.5 h-3.5')} District</button>
         </div>
         <div id="login-body"></div>
         <p class="text-xs text-gray-600 mt-8 text-center">Don't have an account? <a href="${buildUrl('/signup')}" class="text-[#F59E0B] hover:underline">Sign up</a></p>`
@@ -1028,6 +1029,41 @@ function viewLogin() {
     }));
     const body = $('#login-body');
 
+    if (mode === 'district' && !useEmail) {
+      body.innerHTML = `
+        <form id="district-form" novalidate>
+          <label for="district-username" class="label">District username</label>
+          <input id="district-username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" class="input mb-4 font-mono" placeholder="firstname.lastname" required />
+          ${passwordField('district-password')}
+          <p id="login-error" class="form-error mt-4 hidden" role="alert"></p>
+          <button type="submit" class="btn btn-violet btn-block py-3 mt-5">Sign in</button>
+          <p class="hint text-center mt-4">No school to pick — you'll see every school in your district.</p>
+          <p class="text-center mt-3"><button type="button" id="use-email" class="text-xs text-gray-500 hover:text-[#A78BFA]">First time? Sign in with your email, then make a username</button></p>
+        </form>`;
+      refreshIcons();
+      const err = $('#login-error');
+      $('#use-email').addEventListener('click', () => { useEmail = true; draw(); });
+      $('#district-form').addEventListener('submit', e => {
+        e.preventDefault();
+        const btn = e.currentTarget.querySelector('[type=submit]');
+        const raw = $('#district-username').value.trim(), p = $('#district-password').value;
+        showError(err, '');
+        if (!raw || !p) return showError(err, 'Enter your username and password.');
+        if (raw.includes('@')) { useEmail = true; draw(); $('#district-email').value = raw; return; }
+        withBusy(btn, 'Signing in…', () => authFlow(async () => {
+          try {
+            const ix = await getDoc(unameRef('_district', cleanUsername(raw))).catch(() => null);
+            if (!ix?.exists()) return showError(err, 'Incorrect username or password.');
+            const cred = await signInWithEmailAndPassword(auth, ix.data().email, p);
+            navigate(ix.data().district ? `/district/${ix.data().district}` : (await resolveDestinationForUser(cred.user)) || '/', { replace: true });
+          } catch (ex) {
+            if (['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found', 'auth/invalid-email'].includes(ex.code)) showError(err, 'Incorrect username or password.');
+            else { console.error(ex); showError(err, friendlyError(ex)); }
+          }
+        }));
+      });
+      return;
+    }
     if ((mode === 'staff' || mode === 'parent') && !useEmail) {
       const P = mode;
       body.innerHTML = `
@@ -1069,8 +1105,8 @@ function viewLogin() {
       });
       return;
     }
-    if (mode === 'staff' || mode === 'parent') {
-      const P = mode; // element ids: staff-email / parent-email …
+    if (mode === 'staff' || mode === 'parent' || mode === 'district') {
+      const P = mode; // element ids: staff-email / parent-email / district-email …
       body.innerHTML = `
         <p class="text-center mb-4"><button type="button" id="use-username" class="text-xs text-[#F59E0B] hover:underline">${ico('arrow-left', 'w-3 h-3 inline -mt-0.5')} Sign in with your school username instead</button></p>
         <button type="button" id="google-btn" class="btn btn-google btn-block py-3">${GOOGLE_SVG} Continue with Google</button>
@@ -1951,6 +1987,7 @@ function helpTrayHTML() {
   const { ctx } = layoutState;
   return `<div class="space-y-0.5">
     ${ctx?.isStudent ? trayButton('data-help="ask"', 'message-circle-question', 'Ask your instructor a question') : ''}
+    ${trayButton('data-help="flow"', 'workflow', 'How Ember works (roles & flow)')}
     ${trayButton('data-help="guides"', 'book-open-check', 'Search the help guides')}
     ${trayButton('data-help="shortcuts"', 'keyboard', 'Keyboard shortcuts')}
     ${ctx ? trayButton('data-help="report"', 'bug', 'Report a problem') : ''}
@@ -2003,6 +2040,7 @@ async function viewDistrict(districtId, segs = []) {
   ls(`ember_district:${currentUser.uid}`, districtId);
   watchNotifications();
   const dctx = { districtId, district, t };
+  setTimeout(() => { if (live(t)) maybeAskDistrictUsername(district); }, 400);
   const sub = segs[0] || 'overview';
   if (sub === 'schools') return viewDistrictSchools(dctx);
   if (sub === 'teachers') return viewDistrictTeachers(dctx);
@@ -2211,22 +2249,33 @@ const isUsernameAccount = user => /@[a-z0-9-]+\.emberlms\.local$/i.test(user?.em
 // People who still sign in with a real email pick a username + new password once.
 function maybeAskForUsername(ctx) {
   const d = ctx.roleInfo?.data || {};
-  if (!(ctx.isRealTeacher || ctx.isGuardian) || ctx.isPersonal || d.username || d.districtAdmin || isUsernameAccount(currentUser) || isKioskUser(currentUser)) return;
+  if (!(ctx.isRealTeacher || ctx.isGuardian) || ctx.isPersonal || d.username || d.districtAdmin) return;
+  askUsername({ slug: ctx.slug, orgName: ctx.tenant.name, name: ctx.me.name, kind: ctx.isGuardian ? 'parent' : 'staff', where: `${ctx.tenant.name} + your username`,
+    save: async u => { await updateDoc(doc(db, 'tenants', ctx.slug, ctx.isGuardian ? 'guardians' : 'users', currentUser.uid), { username: u }); ctx.roleInfo.data.username = u; } });
+}
+async function maybeAskDistrictUsername(district) {
+  let ix = null; try { ix = (await getDoc(doc(db, 'userIndex', currentUser.uid))).data(); } catch (e) {}
+  if (ix?.districtUsername) return;
+  askUsername({ slug: '_district', district: district.id, orgName: district.name || 'your district', name: currentUser.displayName || '', kind: 'district', where: 'the District tab + your username',
+    save: u => setDoc(doc(db, 'userIndex', currentUser.uid), { districtUsername: u, district: district.id }, { merge: true }) });
+}
+function askUsername({ slug, district = null, orgName, name, kind, where, save }) {
+  if (isUsernameAccount(currentUser) || isKioskUser(currentUser)) return;
   if (!(currentUser?.providerData || []).some(p => p.providerId === 'password')) return; // Google sign-ins keep using Google
-  if (ss('ember_username_prompt') === currentUser.uid) return;
-  ss('ember_username_prompt', currentUser.uid);
-  const name = ctx.me.name || '', [first, ...rest] = name.split(/\s+/);
-  const m = openModal({ size: 'sm', html: modalHeader({ title: 'Make a username and password', subtitle: `${escapeHtml(ctx.tenant.name)} now uses usernames instead of email addresses.`, icon: 'user-round-cog' }) + `<form novalidate>${modalBody(`
-    <p class="text-sm text-gray-300 mb-4">From now on you'll sign in with <b class="text-white">your school + username + password</b>. Your account, classes and records stay exactly the same.</p>
+  if (ss('ember_username_prompt') === `${currentUser.uid}|${slug}`) return;
+  ss('ember_username_prompt', `${currentUser.uid}|${slug}`);
+  const [first, ...rest] = (name || '').split(/\s+/);
+  const m = openModal({ size: 'sm', html: modalHeader({ title: 'Make a username and password', subtitle: `${escapeHtml(orgName)} now uses usernames instead of email addresses.`, icon: 'user-round-cog', tone: kind === 'district' ? 'violet' : 'amber' }) + `<form novalidate>${modalBody(`
+    <p class="text-sm text-gray-300 mb-4">From now on you'll sign in with <b class="text-white">${escapeHtml(where)}</b>. Your account and everything in it stay exactly the same.</p>
     <label class="label" for="un-user">Username</label><input id="un-user" class="input font-mono mb-1" autocomplete="off" autocapitalize="none" spellcheck="false"><p class="hint mb-4" id="un-hint">Checking…</p>
     <label class="label" for="un-pass">New password</label><input id="un-pass" type="password" class="input mb-3" autocomplete="new-password" placeholder="At least 8 characters">
     <label class="label" for="un-pass2">Type it again</label><input id="un-pass2" type="password" class="input mb-3" autocomplete="new-password">
     <label class="label" for="un-cur">Current password</label><input id="un-cur" type="password" class="input" autocomplete="current-password" placeholder="The one you just used">
-    <p class="form-error mt-3 hidden" id="un-err"></p>`)}${modalFooter(`<button type="submit" class="btn btn-primary flex-1">${ico('check', 'w-4 h-4')} Save and continue</button>`)}</form>` });
+    <p class="form-error mt-3 hidden" id="un-err"></p>`)}${modalFooter(`<button type="submit" class="btn ${kind === 'district' ? 'btn-violet' : 'btn-primary'} flex-1">${ico('check', 'w-4 h-4')} Save and continue</button>`)}</form>` });
   m.dismissible = false;
   const uin = m.$('#un-user'), hint = m.$('#un-hint');
-  suggestUsername(ctx.slug, first, rest.join(' ')).then(u => { if (!uin.value) uin.value = u; hint.textContent = `Suggested: ${u}. You can change it.`; });
-  let tm; uin.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(async () => { const u = cleanUsername(uin.value); hint.textContent = !validUsername(u) ? '3–30 letters, numbers, dots, dashes or underscores.' : await usernameTaken(ctx.slug, u) ? `“${u}” is taken.` : `“${u}” is available.`; }, 300); });
+  suggestUsername(slug, first || (currentUser.email || '').split('@')[0], rest.join(' ')).then(u => { if (!uin.value) uin.value = u; hint.textContent = `Suggested: ${u}. You can change it.`; });
+  let tm; uin.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(async () => { const u = cleanUsername(uin.value); hint.textContent = !validUsername(u) ? '3–30 letters, numbers, dots, dashes or underscores.' : await usernameTaken(slug, u) ? `“${u}” is taken.` : `“${u}” is available.`; }, 300); });
   m.$('form').addEventListener('submit', e => {
     e.preventDefault();
     const u = cleanUsername(uin.value), p1 = m.$('#un-pass').value, p2 = m.$('#un-pass2').value, cur = m.$('#un-cur').value, err = m.$('#un-err');
@@ -2237,13 +2286,12 @@ function maybeAskForUsername(ctx) {
     withBusy(e.submitter || m.$('[type=submit]'), 'Saving…', async () => {
       try {
         await reauthenticateWithCredential(currentUser, EmailAuthProvider.credential(currentUser.email, cur));
-        if (await usernameTaken(ctx.slug, u)) return showError(err, `“${u}” is taken — try another.`);
-        await reserveUsername(ctx.slug, u, { uid: currentUser.uid, email: currentUser.email, kind: ctx.isGuardian ? 'parent' : 'staff' });
-        await updateDoc(doc(db, 'tenants', ctx.slug, ctx.isGuardian ? 'guardians' : 'users', currentUser.uid), { username: u });
+        if (await usernameTaken(slug, u)) return showError(err, `“${u}” is taken — try another.`);
+        await setDoc(unameRef(slug, u), { slug, username: u, uid: currentUser.uid, email: currentUser.email, kind, ...(district ? { district } : {}), createdAt: serverTimestamp() });
+        await save(u);
         await updatePassword(currentUser, p1);
-        ctx.roleInfo.data.username = u;
         m.dismissible = true; m.close();
-        toast(`Done! Next time sign in with ${ctx.tenant.name} + “${u}”.`);
+        toast(`Done! Next time sign in with ${where.replace('your username', `“${u}”`)}.`);
       } catch (ex) { console.error(ex); showError(err, ['auth/invalid-credential', 'auth/wrong-password'].includes(ex.code) ? 'Your current password isn’t right.' : friendlyError(ex)); }
     });
   });
@@ -2256,14 +2304,19 @@ const WORK_AREAS = ['clinic', 'counseling', 'office', 'food', 'transport', 'libr
 const SUPPORT_CATS = ['nurse', 'counselor', 'office', 'support', 'it'];
 function workAreas(ctx) {
   if (!ctx?.isRealTeacher || ctx.isPersonal) return [];
-  if (ctx.isAdmin) return WORK_AREAS;
+  if (ctx.isAdmin) return [...new Set([...ownAreas(ctx), ...WORK_AREAS])]; // oversight of every area (food service is view-only unless assigned)
+  return ownAreas(ctx);
+}
+// The areas this person actually works in: set by an admin / IT (users.areas), otherwise from their role.
+function ownAreas(ctx) {
   const d = ctx.roleInfo?.data || {}, title = (d.title || '').toLowerCase(), out = [];
+  if (Array.isArray(d.areas)) return d.areas.filter(a => WORK_AREAS.includes(a));
   if (ctx.caps.includes('health')) out.push('clinic');
   if (ctx.caps.includes('services')) out.push('counseling');
   if (ctx.caps.includes('records')) out.push('office');
   if (d.category === 'support') {
     const m = [/food|cafeteria|kitchen/.test(title) && 'food', /transport|bus/.test(title) && 'transport', /librar|media/.test(title) && 'library', /athlet|coach/.test(title) && 'athletics'].filter(Boolean);
-    out.push(...(m.length ? m : ['food', 'transport', 'library', 'athletics']));
+    out.push(...m); // no recognised title → nothing until an admin or IT assigns a workspace
   }
   if (d.category === 'it') out.push('it');
   return [...new Set(out)];
@@ -5520,6 +5573,11 @@ function openProfileModal(ctx) {
 function openHelp(kind) {
   const { ctx, course } = layoutState;
   closeTray();
+  if (kind === 'flow') {
+    const d = ctx?.roleInfo?.data || {};
+    const role = layoutState.district ? 'district' : !ctx ? null : ctx.isStudent ? 'student' : ctx.isGuardian ? 'parent' : ctx.isAdmin && d.category !== 'it' ? 'admin' : d.category && d.category !== 'teacher' ? d.category : 'teacher';
+    return import('./flow.js' + BUILD).then(m => m.openFlowGuide(role));
+  }
   if (kind === 'ask') {
     return (async () => {
       const courses = await myCourses(ctx).catch(() => []);
@@ -5753,7 +5811,7 @@ const EMBER_API = {
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, myCourses, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
   GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute,
-  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas, cleanUsername, usernameEmail, validUsername, usernameTaken, suggestUsername, reserveUsername, createUsernameLogin
+  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas, ownAreas, WORK_AREAS, cleanUsername, usernameEmail, validUsername, usernameTaken, suggestUsername, reserveUsername, createUsernameLogin
 };
 globalThis.__ember = EMBER_API;
 export {
@@ -5763,5 +5821,5 @@ export {
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, myCourses, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
   GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute,
-  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas, cleanUsername, usernameEmail, validUsername, usernameTaken, suggestUsername, reserveUsername, createUsernameLogin
+  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas, ownAreas, WORK_AREAS, cleanUsername, usernameEmail, validUsername, usernameTaken, suggestUsername, reserveUsername, createUsernameLogin
 };

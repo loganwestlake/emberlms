@@ -423,3 +423,8 @@ body.kiosk-on { user-select: none; -webkit-user-select: none; overscroll-behavio
 .visit-table td { white-space: nowrap; }
 .qty-btn { width: 1.5rem; height: 1.5rem; border-radius: .4rem; border: 1px solid rgba(255,255,255,0.12); color: #ddd; line-height: 1; }
 .qty-btn:hover { background: rgba(255,255,255,0.08); }
+/* How Ember works */
+.flow-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .5rem; counter-reset: s; }
+.flow-steps li { display: flex; gap: .5rem; align-items: flex-start; padding: .65rem .75rem; border-radius: .75rem; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.02); font-size: .8rem; color: #d4d4d4; }
+.flow-steps li span { flex-shrink: 0; width: 1.35rem; height: 1.35rem; border-radius: 999px; background: #F59E0B; color: #111; font-weight: 700; font-size: .7rem; display: grid; place-items: center; }
+details > summary { list-style: none; } details > summary::-webkit-details-marker { display: none; }

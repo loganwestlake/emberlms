@@ -2,12 +2,12 @@
 // Food Service, Transportation, Library, Athletics and IT & Data. Every record is timestamped and
 // keeps a history of who did what and when.
 import {
-  doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, getDocs, onSnapshot, serverTimestamp, arrayUnion, increment
+  doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, getDocs, onSnapshot, serverTimestamp, arrayUnion, increment, deleteField
 } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 const {
   db, $, $$, ico, refreshIcons, escapeHtml, plural, displayNameOf, tsMillis, toDateInput, render, setTitle, iconTile, badge, avatar,
   skeletonRows, emptyState, errorBox, toast, withBusy, confirmDialog, openModal, modalHeader, modalBody, modalFooter, buildUrl, navigate, live, unsubs,
-  pageHeader, tenantPage, routeTokenNow, friendlyError, notify, guardianUidsOf, workAreas
+  pageHeader, tenantPage, routeTokenNow, friendlyError, notify, guardianUidsOf, workAreas, ownAreas, WORK_AREAS
 } = globalThis.__ember;
 const BUILD = new URL(import.meta.url).search;
 const forms = () => import('./staff.js' + BUILD);
@@ -451,11 +451,15 @@ async function officeView(ctx, el, tab, t) {
 // ═══════════════════════════════════════════════════════════════
 const PRICE = { Paid: 3.25, Reduced: 0.40, Free: 0, 'Universal / CEP': 0 };
 async function foodView(ctx, el, tab, t) {
-  tab = tab || 'pos';
+  // Only Food Service staff charge students; everyone else (e.g. administrators) gets a read-only view.
+  const canSell = ownAreas(ctx).includes('food');
+  tab = tab || (canSell ? 'pos' : 'accounts');
+  if (!canSell && tab === 'pos') tab = 'accounts';
   const kids = await students(ctx);
   if (!live(t)) return;
   let accts = {}, tx = [];
-  el.innerHTML = `<div id="fd-kpi" class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6"></div>${subTabs(ctx, 'food', [['pos', 'Serve a meal', 'utensils'], ['accounts', 'Lunch accounts', 'wallet'], ['tx', 'Transactions', 'receipt'], ['inventory', 'Inventory', 'boxes']], tab)}<div id="fd-body"></div>`;
+  el.innerHTML = `${canSell ? '' : `<div class="mb-5 p-3 rounded-xl border border-white/[0.08] bg-white/[0.02] text-sm text-gray-300 flex gap-2">${ico('eye', 'w-4 h-4 shrink-0 mt-0.5 text-gray-400')}<span>View only. Serving meals and taking deposits is done by Food Service staff. An administrator or IT can assign this workspace under IT &amp; Data → Permissions.</span></div>`}
+    <div id="fd-kpi" class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6"></div>${subTabs(ctx, 'food', [...(canSell ? [['pos', 'Serve a meal', 'utensils']] : []), ['accounts', 'Lunch accounts', 'wallet'], ['tx', 'Transactions', 'receipt'], ['inventory', 'Inventory', 'boxes']], tab)}<div id="fd-body"></div>`;
   const bal = uid => Number(accts[uid]?.balance || 0);
   const status = s => s.lunch || 'Paid';
   const kpis = () => { const tt = tx.filter(x => x.date === today()); const meals = tt.filter(x => x.kind === 'meal'); $('#fd-kpi').innerHTML = kpi('Meals served today', meals.length) + kpi('Free / reduced today', meals.filter(m => m.status !== 'Paid').length) + kpi('Sales today', money(meals.reduce((a, m) => a + (m.amount || 0), 0))) + kpi('Deposits today', money(tt.filter(x => x.kind === 'deposit').reduce((a, m) => a + (m.amount || 0), 0))) + kpi('Negative balances', kids.filter(s => bal(s.uid) < 0).length, kids.some(s => bal(s.uid) < 0) ? 'bad' : 'good'); };
@@ -479,7 +483,7 @@ async function foodView(ctx, el, tab, t) {
           <div class="flex gap-2 mt-3"><button class="btn btn-primary btn-sm flex-1" data-serve="${s.uid}" ${served.has(`${s.uid}|${$('#fd-meal')?.value || 'Lunch'}`) ? 'disabled' : ''}>${ico('utensils', 'w-3.5 h-3.5')} Serve · ${money(p)}</button><button class="btn btn-secondary btn-sm" data-deposit="${s.uid}">${ico('plus', 'w-3.5 h-3.5')} Deposit</button></div></div>`; }).join('')}</div>`;
       const qi = $('#fd-q'); qi.focus(); qi.setSelectionRange(q.length, q.length);
     } else if (tab === 'accounts') {
-      body.innerHTML = `<section class="card overflow-hidden"><div class="flex items-center gap-3 px-5 py-4 border-b border-white/[0.06]"><h2 class="text-white font-medium flex-1">Lunch accounts</h2><button class="btn btn-secondary btn-sm" id="fd-csv">${ico('download', 'w-3.5 h-3.5')} CSV</button></div><div class="overflow-x-auto"><table class="w-full text-sm work-table"><thead><tr><th>Student</th><th>ID</th><th>Meal status</th><th class="text-right">Balance</th><th>Last activity</th><th></th></tr></thead><tbody>${[...kids].sort((a, b) => bal(a.uid) - bal(b.uid)).map(s => `<tr><td class="text-white">${escapeHtml(displayNameOf(s))}</td><td class="font-mono text-xs">${escapeHtml(s.studentNumber || '')}</td><td>${badge(escapeHtml(status(s)), status(s) === 'Paid' ? 'muted' : 'green')}</td><td class="text-right tabular-nums ${bal(s.uid) < 0 ? 'text-[#f08a8a]' : bal(s.uid) < 5 ? 'text-[#fcd34d]' : ''}">${money(bal(s.uid))}</td><td class="text-[11px] text-gray-500">${escapeHtml(fmtStamp(accts[s.uid]?.updatedAt))}</td><td class="text-right"><button class="btn btn-secondary btn-sm" data-deposit="${s.uid}">${ico('plus', 'w-3.5 h-3.5')} Deposit</button></td></tr>`).join('')}</tbody></table></div></section>`;
+      body.innerHTML = `<section class="card overflow-hidden"><div class="flex items-center gap-3 px-5 py-4 border-b border-white/[0.06]"><h2 class="text-white font-medium flex-1">Lunch accounts</h2><button class="btn btn-secondary btn-sm" id="fd-csv">${ico('download', 'w-3.5 h-3.5')} CSV</button></div><div class="overflow-x-auto"><table class="w-full text-sm work-table"><thead><tr><th>Student</th><th>ID</th><th>Meal status</th><th class="text-right">Balance</th><th>Last activity</th><th></th></tr></thead><tbody>${[...kids].sort((a, b) => bal(a.uid) - bal(b.uid)).map(s => `<tr><td class="text-white">${escapeHtml(displayNameOf(s))}</td><td class="font-mono text-xs">${escapeHtml(s.studentNumber || '')}</td><td>${badge(escapeHtml(status(s)), status(s) === 'Paid' ? 'muted' : 'green')}</td><td class="text-right tabular-nums ${bal(s.uid) < 0 ? 'text-[#f08a8a]' : bal(s.uid) < 5 ? 'text-[#fcd34d]' : ''}">${money(bal(s.uid))}</td><td class="text-[11px] text-gray-500">${escapeHtml(fmtStamp(accts[s.uid]?.updatedAt))}</td><td class="text-right">${canSell ? `<button class="btn btn-secondary btn-sm" data-deposit="${s.uid}">${ico('plus', 'w-3.5 h-3.5')} Deposit</button>` : ''}</td></tr>`).join('')}</tbody></table></div></section>`;
     } else {
       const l = [...tx].sort((a, b) => b.at - a.at).slice(0, 300);
       body.innerHTML = `<section class="card overflow-hidden"><div class="px-5 py-4 border-b border-white/[0.06]"><h2 class="text-white font-medium">Transactions</h2></div>${l.length ? `<div class="overflow-x-auto"><table class="w-full text-sm work-table"><thead><tr><th>Date</th><th>Time</th><th>Student</th><th>Type</th><th>Status</th><th class="text-right">Amount</th><th class="text-right">Balance after</th><th>By</th></tr></thead><tbody>${l.map(x => `<tr><td>${fmtDate(x.date)}</td><td>${fmt12(x.time)}</td><td class="text-white">${escapeHtml(x.studentName)}</td><td>${escapeHtml(x.kind === 'meal' ? x.meal : 'Deposit')}</td><td>${escapeHtml(x.status || '')}</td><td class="text-right tabular-nums ${x.kind === 'deposit' ? 'text-[#6ee06e]' : ''}">${x.kind === 'deposit' ? '+' : '−'}${money(x.amount)}</td><td class="text-right tabular-nums">${money(x.balanceAfter)}</td><td>${escapeHtml(x.byName || '')}</td></tr>`).join('')}</tbody></table></div>` : `<div class="p-6">${emptyState({ icon: 'receipt', title: 'No transactions yet' })}</div>`}</section>`;
@@ -490,9 +494,9 @@ async function foodView(ctx, el, tab, t) {
   body.addEventListener('input', e => { if (e.target.id === 'fd-q') { q = e.target.value.trim().toLowerCase(); draw(); } });
   body.addEventListener('change', e => { if (e.target.id === 'fd-meal') draw(); });
   body.addEventListener('click', async e => {
-    const sv = e.target.closest('[data-serve]');
+    const sv = canSell && e.target.closest('[data-serve]');
     if (sv) { const s = kids.find(x => x.uid === sv.dataset.serve), meal = $('#fd-meal')?.value || 'Lunch'; const amt = meal === 'Breakfast' ? Math.min(PRICE[status(s)] ?? 2, 2) : (PRICE[status(s)] ?? PRICE.Paid); return withBusy(sv, '…', async () => { try { await post(s, 'meal', amt, meal); toast(`${meal} served to ${displayNameOf(s)}`); } catch (ex) { toast(friendlyError(ex), 'error'); } }); }
-    const dp = e.target.closest('[data-deposit]');
+    const dp = canSell && e.target.closest('[data-deposit]');
     if (dp) { const s = kids.find(x => x.uid === dp.dataset.deposit); const F = await forms(); return F.formModal({ title: `Deposit · ${displayNameOf(s)}`, subtitle: `Balance ${money(bal(s.uid))}`, icon: 'wallet', form: { sections: [{ fields: [{ id: 'amount', type: 'number', label: 'Amount ($)', required: true, min: 0.01, maxN: 500 }, { id: 'method', type: 'select', label: 'Paid by', options: ['Cash', 'Check', 'Online', 'Other'] }] }] }, data: { amount: 20, method: 'Cash' }, submit: 'Add deposit', onSubmit: async d => { await post(s, 'deposit', Number(d.amount)); toast('Deposit added'); return true; } }); }
     if (e.target.closest('#fd-csv')) csv('lunch-accounts.csv', ['Student ID', 'Student', 'Meal status', 'Balance'], kids.map(s => [s.studentNumber || '', displayNameOf(s), status(s), bal(s.uid).toFixed(2)]));
   });
@@ -625,10 +629,22 @@ async function itView(ctx, el, tab, t) {
   }
   const CAPS = [['services', 'IEP / 504 / ELL'], ['health', 'Health'], ['records', 'Records'], ['safety', 'Discipline']];
   const draw = () => {
-    body.innerHTML = `<section class="card overflow-hidden"><div class="px-5 py-4 border-b border-white/[0.06]"><h2 class="text-white font-medium">Staff permissions</h2><p class="text-xs text-gray-500">Turn access on or off. Every change is saved immediately and recorded.</p></div><div class="overflow-x-auto"><table class="w-full text-sm work-table"><thead><tr><th>Name</th><th>Title</th><th>Role</th>${CAPS.map(c => `<th class="text-center">${c[1]}</th>`).join('')}<th>Last change</th></tr></thead><tbody>${staff.map(s => `<tr><td class="text-white">${escapeHtml(displayNameOf(s))}<div class="text-[11px] text-gray-500">${escapeHtml(s.email || '')}</div></td><td>${escapeHtml(s.title || '')}</td><td>${s.role === 'admin' ? badge('Admin', 'red') : badge('Staff', 'muted')}</td>${CAPS.map(([k]) => `<td class="text-center">${s.role === 'admin' ? ico('check', 'w-4 h-4 inline text-gray-500') : `<input type="checkbox" class="w-4 h-4 accent-[#8B5CF6]" data-cap="${k}" data-uid="${s.uid}" ${(s.caps || []).includes(k) ? 'checked' : ''} aria-label="${escapeHtml(displayNameOf(s))} ${k}" ${ctx.isAdmin ? '' : 'disabled'}>`}</td>`).join('')}<td class="text-[11px] text-gray-500">${escapeHtml((s.capLog || []).slice(-1)[0] ? `${fmtStamp(s.capLog.slice(-1)[0].at)} · ${s.capLog.slice(-1)[0].byName}` : '')}</td></tr>`).join('')}</tbody></table></div></section>`;
+    body.innerHTML = `<section class="card overflow-hidden"><div class="px-5 py-4 border-b border-white/[0.06]"><h2 class="text-white font-medium">Staff permissions</h2><p class="text-xs text-gray-500">Turn access on or off. Every change is saved immediately and recorded.</p></div><div class="overflow-x-auto"><table class="w-full text-sm work-table"><thead><tr><th>Name</th><th>Title</th><th>Role</th>${CAPS.map(c => `<th class="text-center">${c[1]}</th>`).join('')}<th>Workspaces</th><th>Last change</th></tr></thead><tbody>${staff.map(s => `<tr><td class="text-white">${escapeHtml(displayNameOf(s))}<div class="text-[11px] text-gray-500">${escapeHtml(s.email || '')}</div></td><td>${escapeHtml(s.title || '')}</td><td>${s.role === 'admin' ? badge('Admin', 'red') : badge('Staff', 'muted')}</td>${CAPS.map(([k]) => `<td class="text-center">${s.role === 'admin' ? ico('check', 'w-4 h-4 inline text-gray-500') : `<input type="checkbox" class="w-4 h-4 accent-[#8B5CF6]" data-cap="${k}" data-uid="${s.uid}" ${(s.caps || []).includes(k) ? 'checked' : ''} aria-label="${escapeHtml(displayNameOf(s))} ${k}" ${ctx.isAdmin ? '' : 'disabled'}>`}</td>`).join('')}<td>${ctx.isAdmin ? `<button class="btn btn-ghost btn-sm" data-areas="${s.uid}">${ico('briefcase', 'w-3.5 h-3.5')} ${escapeHtml(Array.isArray(s.areas) ? (s.areas.map(a => AREAS[a]?.label).join(', ') || 'None') : 'By role')}</button>` : escapeHtml(Array.isArray(s.areas) ? s.areas.map(a => AREAS[a]?.label).join(', ') : 'By role')}</td><td class="text-[11px] text-gray-500">${escapeHtml((s.capLog || []).slice(-1)[0] ? `${fmtStamp(s.capLog.slice(-1)[0].at)} · ${s.capLog.slice(-1)[0].byName}` : '')}</td></tr>`).join('')}</tbody></table></div></section>`;
     refreshIcons();
   };
   draw();
+  body.addEventListener('click', async e => {
+    const b = e.target.closest('[data-areas]'); if (!b) return;
+    const s = staff.find(x => x.uid === b.dataset.areas), F = await forms();
+    F.formModal({ title: `Workspaces · ${displayNameOf(s)}`, subtitle: 'Which areas this person works in. “By role” uses their title and access.', icon: 'briefcase', form: { sections: [{ fields: [
+      { id: 'mode', type: 'radio', label: 'Assign', required: true, cols: 1, options: [{ v: 'role', l: 'By role (automatic)' }, { v: 'pick', l: 'Choose workspaces' }] },
+      { id: 'areas', type: 'checks', label: 'Workspaces', options: Object.entries(AREAS).map(([k, a]) => ({ v: k, l: a.label })), showIf: { id: 'mode', eq: 'pick' }, span: 'sm:col-span-2' }] }] },
+      data: { mode: Array.isArray(s.areas) ? 'pick' : 'role', areas: s.areas || [] }, onSubmit: async d => {
+        const areas = d.mode === 'pick' ? (d.areas || []) : null, entry = stamp(ctx, `Workspaces: ${areas ? areas.map(a => AREAS[a].label).join(', ') || 'none' : 'by role'}`);
+        await updateDoc(dref(ctx, 'users', s.uid), { areas: areas === null ? deleteField() : areas, capLog: arrayUnion(entry) });
+        s.areas = areas === null ? undefined : areas; s.capLog = [...(s.capLog || []), entry]; draw(); toast('Workspaces updated'); return true;
+      } });
+  });
   body.addEventListener('change', async e => {
     const c = e.target.closest('[data-cap]'); if (!c) return;
     const s = staff.find(x => x.uid === c.dataset.uid), caps = new Set(s.caps || []);

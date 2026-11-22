@@ -83,11 +83,13 @@ service cloud.firestore {
       allow list: if false;
       allow create: if signedIn() && key == request.resource.data.slug + '~' + request.resource.data.username
         && request.resource.data.username.matches('^[a-z0-9][a-z0-9._-]{2,29}$')
-        && (isAdmin(request.resource.data.slug) || isDistrictAdmin(request.resource.data.slug)
-            || (request.resource.data.kind == 'student' && isStaff(request.resource.data.slug))
+        && ((request.resource.data.slug != '_district' && (isAdmin(request.resource.data.slug) || isDistrictAdmin(request.resource.data.slug)))
+            || (request.resource.data.slug != '_district' && request.resource.data.kind == 'student' && isStaff(request.resource.data.slug))
             || (request.resource.data.uid == me() && request.resource.data.email == request.auth.token.email
-                && (exists(/databases/$(database)/documents/tenants/$(request.resource.data.slug)/users/$(me()))
-                    || exists(/databases/$(database)/documents/tenants/$(request.resource.data.slug)/guardians/$(me())))));
+                && (request.resource.data.slug == '_district'
+                    ? me() in get(/databases/$(database)/documents/districts/$(request.resource.data.district)).data.get('adminUids', [])
+                    : (exists(/databases/$(database)/documents/tenants/$(request.resource.data.slug)/users/$(me()))
+                       || exists(/databases/$(database)/documents/tenants/$(request.resource.data.slug)/guardians/$(me()))))));
       allow update: if false;
       allow delete: if signedIn() && (resource.data.uid == me() || isAdmin(resource.data.slug));
     }
