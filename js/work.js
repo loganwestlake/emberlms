@@ -408,7 +408,7 @@ async function counselingView(ctx, el, tab, t) {
 // FRONT OFFICE & REGISTRAR
 // ═══════════════════════════════════════════════════════════════
 async function officeView(ctx, el, tab, t) {
-  tab = tab || 'desk';
+  tab = tab || 'late';
   const kids = await students(ctx);
   const att = (await getDocs(query(col(ctx, 'attendance'), where('date', '==', today()))).catch(() => ({ docs: [] }))).docs.map(d => d.data());
   if (!live(t)) return;
@@ -416,8 +416,10 @@ async function officeView(ctx, el, tab, t) {
   const newKids = kids.filter(s => ms(s.createdAt) > Date.now() - 30 * 86400000);
   const pending = (await getDocs(query(col(ctx, 'students'), where('status', '==', 'pending'))).catch(() => ({ docs: [] }))).size;
   el.innerHTML = `<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">${kpi('Enrolled', kids.length)}${kpi('Absent today', new Set(absent.filter(a => a.code !== 'T').map(a => a.studentUid)).size, absent.length ? 'bad' : 'good')}${kpi('Tardy today', new Set(tardy.map(a => a.studentUid)).size)}${kpi('New this month', newKids.length)}${kpi('Waiting for approval', pending, pending ? 'bad' : '')}</div>
-    ${subTabs(ctx, 'office', [['desk', 'Sign in / out', 'door-open'], ['attendance', 'Today’s attendance', 'calendar-check'], ['enroll', 'Enrollment', 'user-plus'], ['contacts', 'Parent contacts', 'phone'], ['inventory', 'Inventory', 'boxes']], tab)}<div id="of-body"></div>`;
+    ${subTabs(ctx, 'office', [['late', 'Late sign-in', 'alarm-clock'], ['pickups', 'Pickups & dismissal', 'shield-check'], ['desk', 'Sign in / out log', 'door-open'], ['attendance', 'Today’s attendance', 'calendar-check'], ['enroll', 'Enrollment', 'user-plus'], ['contacts', 'Parent contacts', 'phone'], ['inventory', 'Inventory', 'boxes']], tab)}<div id="of-body"></div>`;
   const body = $('#of-body');
+  if (tab === 'late') return lateSignIn(ctx, body, kids, t);
+  if (tab === 'pickups') return pickups(ctx, body, kids, t);
   if (tab === 'desk') return logbook(ctx, body, { name: 'frontOffice', title: 'Sign in / sign out', icon: 'door-open', tone: 'teal', addLabel: 'New sign in / out', hint: 'Late arrivals, early dismissals and visitors — times are recorded automatically.', from: today(),
     fields: () => [{ id: 'kind', type: 'chips', label: 'Type', required: true, options: ['Late arrival', 'Early dismissal', 'Visitor', 'Volunteer', 'Return to campus'] }, { id: 'students', type: 'students', label: 'Student', showIf: { id: 'kind', in: ['Late arrival', 'Early dismissal', 'Return to campus'] } },
       { id: 'visitor', type: 'text', label: 'Visitor name', showIf: { id: 'kind', in: ['Visitor', 'Volunteer'] } }, { id: 'date', type: 'date', label: 'Date', required: true }, { id: 'time', type: 'time', label: 'Time in / out', required: true },
@@ -643,3 +645,113 @@ document.addEventListener('click', e => {
   root.innerHTML = `<div class="pf disc-print"><h1 style="font-size:20px;margin-bottom:8px">Individual Health Plan</h1>${dlg.innerHTML}</div>`; root.querySelectorAll('button').forEach(x => x.remove());
   const done = () => { root.innerHTML = ''; removeEventListener('afterprint', done); }; addEventListener('afterprint', done); setTimeout(() => print(), 50);
 });
+
+// ── Front office: late sign-in (records the tardy and sends a late pass to class) ──
+const findStudent = (kids, v) => { const q = String(v || '').trim().toLowerCase(); return kids.find(s => (s.studentNumber || '').toLowerCase() === q) || kids.find(s => displayNameOf(s).toLowerCase() === q) || null; };
+async function currentClass(ctx, s) {
+  const settings = await (await import('./sis.js' + BUILD)).getSettings(ctx).catch(() => null);
+  const hm = nowHM(), period = (settings?.periods || []).find(p => p.start && p.end && p.start <= hm && hm <= p.end);
+  if (!period) return null;
+  const cs = await Promise.all((s.enrolledCourseIds || []).map(id => getDoc(dref(ctx, 'courses', id)).then(d => d.exists() ? { id: d.id, ...d.data() } : null).catch(() => null)));
+  return cs.find(c => c && c.periodId === period.id) || null;
+}
+async function lateSignIn(ctx, el, kids, t) {
+  let recs = [];
+  el.innerHTML = `<section class="card p-5 mb-6"><div class="flex items-center gap-3 mb-4">${iconTile('alarm-clock', 'amber')}<div><h2 class="text-white font-medium">Sign in a late student</h2><p class="text-xs text-gray-500">The time is recorded automatically. Marks them tardy in their current class and sends a late pass to the teacher.</p></div></div>
+    <form id="lt-form" class="grid sm:grid-cols-6 gap-3 items-end" novalidate>
+      <div class="sm:col-span-2"><label class="label" for="lt-stu">Student name or ID</label><input id="lt-stu" class="input" list="lt-stus" autocomplete="off"><datalist id="lt-stus">${kids.map(s => `<option value="${escapeHtml(displayNameOf(s))}">${escapeHtml(s.studentNumber || '')}</option>`).join('')}</datalist></div>
+      <div class="sm:col-span-2"><label class="label" for="lt-reason">Reason</label><select id="lt-reason" class="input" data-icon="clipboard-list">${['Overslept / traffic', 'Appointment (medical)', 'Appointment (dental)', 'Bus late', 'Illness', 'Family emergency', 'Court / legal', 'Weather', 'Other'].map(r => `<option>${r}</option>`).join('')}</select></div>
+      <div><label class="label" for="lt-exc">Excused?</label><select id="lt-exc" class="input" data-icon="badge-check"><option>No</option><option>Yes</option></select></div>
+      <button class="btn btn-primary">${ico('log-in', 'w-4 h-4')} Sign in</button>
+      <div class="sm:col-span-4"><label class="label" for="lt-by">Brought in by (optional)</label><input id="lt-by" class="input" placeholder="Parent / guardian name"></div>
+      <label class="check sm:col-span-2 self-center"><input type="checkbox" id="lt-pass" checked> <span>Send a late pass to their class</span></label>
+    </form><p class="form-error hidden mt-2" id="lt-err"></p></section><section><h2 class="label">Late today</h2><div id="lt-list"></div></section>`;
+  const draw = () => {
+    const l = recs.filter(r => r.date === today() && r.kind === 'Late arrival').sort((a, b) => (b.time || '').localeCompare(a.time || ''));
+    $('#lt-list').innerHTML = l.length ? `<div class="card overflow-x-auto"><table class="w-full text-sm work-table"><thead><tr><th>Time in</th><th>Student</th><th>Grade</th><th>Reason</th><th>Excused</th><th>Class</th><th>Late pass</th><th>Signed in by</th></tr></thead><tbody>${l.map(r => `<tr><td class="tabular-nums text-white">${fmt12(r.time)}</td><td class="text-white">${escapeHtml(r.studentName || '')}</td><td>${escapeHtml(String(r.grade ?? ''))}</td><td>${escapeHtml(r.reason || '')}</td><td>${r.excused === 'Yes' ? badge('Excused', 'green') : badge('Unexcused', 'amber')}</td><td>${escapeHtml(r.classTitle || '—')}</td><td>${r.passId ? badge('Sent', 'blue') : ''}</td><td>${escapeHtml(r.createdByName || '')}</td></tr>`).join('')}</tbody></table></div>` : `<p class="text-sm text-gray-500 card p-5">No late arrivals yet today.</p>`;
+    refreshIcons();
+  };
+  unsubs.push(onSnapshot(query(col(ctx, 'frontOffice'), where('date', '==', today())), s => { recs = s.docs.map(d => ({ id: d.id, ...d.data() })); if (live(t)) draw(); }));
+  $('#lt-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const st = findStudent(kids, $('#lt-stu').value), err = $('#lt-err');
+    if (!st) return globalThis.__ember.showError(err, 'Pick a student from the list (name or student ID).');
+    globalThis.__ember.showError(err, '');
+    withBusy(e.submitter || $('#lt-form [type=submit]') || $('#lt-form button'), 'Signing in…', async () => {
+      try {
+        const tm = nowHM(), excused = $('#lt-exc').value, reason = $('#lt-reason').value, cls = await currentClass(ctx, st);
+        let passId = '';
+        if (cls) await setDoc(dref(ctx, 'attendance', `${today()}_${cls.id}_${st.uid}`), { date: today(), courseId: cls.id, courseTitle: cls.title || '', periodId: cls.periodId || null, studentUid: st.uid, studentName: displayNameOf(st), code: 'T', note: `Signed in late by the office at ${fmt12(tm)} · ${reason}${excused === 'Yes' ? ' (excused)' : ''}`, takenBy: ctx.me.uid, updatedAt: serverTimestamp() }, { merge: true });
+        if (cls && $('#lt-pass').checked) passId = (await addDoc(col(ctx, 'passes'), { studentUid: st.uid, studentName: displayNameOf(st), date: today(), createdBy: ctx.me.uid, createdByName: ctx.me.name, createdByRole: 'staff', type: 'late', fromCourseId: '', fromTitle: 'Front office', fromTeacherUid: '', fromTeacherName: '', fromRoom: '', destId: 'late', destName: cls.title || 'Class', destKind: '', destTeacherUid: cls.ownerUid || '', destTeacherName: cls.ownerName || '', destRoom: cls.room || '', destOther: '', destCourseId: cls.id, destCourseTitle: cls.title || '', recordTardy: false, lateReason: reason, note: `${reason}${excused === 'Yes' ? ' · excused' : ''}`, minutes: 5, status: 'active', startAt: serverTimestamp(), approvedBy: ctx.me.uid, approvedByName: ctx.me.name, createdAt: serverTimestamp(), updatedAt: serverTimestamp() })).id;
+        await addDoc(col(ctx, 'frontOffice'), { kind: 'Late arrival', studentUid: st.uid, studentName: displayNameOf(st), grade: st.gradeLevel ?? '', date: today(), time: tm, schoolYear: schoolYear(), reason, excused, by: $('#lt-by').value.trim(), classTitle: cls?.title || '', passId, createdBy: ctx.me.uid, createdByName: ctx.me.name, createdAt: serverTimestamp(), log: [stamp(ctx, `Signed in late at ${fmt12(tm)}`)] });
+        if (cls?.ownerUid && passId) notify(ctx, { to: [cls.ownerUid], kind: 'pass', title: `${displayNameOf(st)} is on the way (late)`, body: `${reason}${excused === 'Yes' ? ' · excused' : ''}`, link: `/${ctx.slug}/pass` }).catch(() => {});
+        $('#lt-stu').value = ''; $('#lt-by').value = ''; $('#lt-stu').focus();
+        toast(`${displayNameOf(st)} signed in at ${fmt12(tm)}${cls ? ` · tardy in ${cls.title}` : ''}`);
+      } catch (ex) { toast(friendlyError(ex), 'error'); }
+    });
+  });
+  draw(); setTimeout(() => $('#lt-stu')?.focus(), 50);
+}
+
+// ── Front office: registered pickup people + early dismissal check ──
+async function pickups(ctx, el, kids, t) {
+  const F = await forms();
+  let map = {}, q = '';
+  el.innerHTML = `<section class="card overflow-hidden"><div class="flex flex-wrap items-center gap-3 px-5 py-4 border-b border-white/[0.06]"><div class="flex items-center gap-3 flex-1">${iconTile('shield-check', 'teal')}<div><h2 class="text-white font-medium">Authorized pickups & early dismissal</h2><p class="text-xs text-gray-500">Only people on a student's list can sign them out. “Do not release” people are blocked.</p></div></div><input type="search" id="pk-q" class="input !py-1.5 !w-56" placeholder="Student name or ID…" aria-label="Find student"></div><div id="pk-list"></div></section>`;
+  const draw = () => {
+    const l = kids.filter(s => !q || `${displayNameOf(s)} ${s.studentNumber || ''}`.toLowerCase().includes(q)).slice(0, 80);
+    $('#pk-list').innerHTML = `<div class="overflow-x-auto"><table class="w-full text-sm work-table"><thead><tr><th>Student</th><th>ID</th><th>Grade</th><th>Authorized</th><th>Do not release</th><th>Updated</th><th></th></tr></thead><tbody>${l.map(s => { const p = map[s.uid] || {}; return `<tr data-pk="${s.uid}"><td class="text-white">${escapeHtml(displayNameOf(s))}${p.custody ? ` ${ico('scale', 'w-3.5 h-3.5 inline text-[#fcd34d]')}` : ''}</td><td class="font-mono text-xs">${escapeHtml(s.studentNumber || '')}</td><td>${escapeHtml(String(s.gradeLevel ?? ''))}</td><td>${(p.people || []).length ? escapeHtml(p.people.map(x => x.name).join(', ')) : '<span class="text-[#fcd34d]">None on file</span>'}</td><td>${(p.blocked || []).length ? badge(`${p.blocked.length}`, 'red') : ''}</td><td class="text-[11px] text-gray-500">${escapeHtml(fmtStamp(p.updatedAt))}</td><td class="text-right whitespace-nowrap"><button class="btn btn-primary btn-sm" data-release="${s.uid}">${ico('log-out', 'w-3.5 h-3.5')} Early dismissal</button></td></tr>`; }).join('')}</tbody></table></div>`;
+    refreshIcons();
+  };
+  unsubs.push(onSnapshot(col(ctx, 'pickups'), s => { map = Object.fromEntries(s.docs.map(d => [d.id, d.data()])); if (live(t)) draw(); }));
+  const save = (s, patch, action) => setDoc(dref(ctx, 'pickups', s.uid), { studentUid: s.uid, studentName: displayNameOf(s), ...patch, updatedAt: serverTimestamp(), log: arrayUnion(stamp(ctx, action)) }, { merge: true });
+  const manage = s => {
+    const p = map[s.uid] || {};
+    const m = openModal({ size: 'lg', align: 'top', html: modalHeader({ title: `Pickups · ${escapeHtml(displayNameOf(s))}`, subtitle: s.studentNumber ? `ID ${escapeHtml(s.studentNumber)}` : '', icon: 'shield-check', tone: 'teal' }) + modalBody(`
+      ${p.custody ? `<div class="mb-4 p-3 rounded-lg border border-[#fab219]/40 bg-[#fab219]/10 text-sm text-gray-100">${ico('scale', 'w-4 h-4 inline -mt-0.5 text-[#fcd34d]')} ${escapeHtml(p.custody)}</div>` : ''}
+      <div class="flex items-center justify-between mb-2"><h3 class="label !mb-0">Authorized to pick up</h3><button class="btn btn-secondary btn-sm" data-add="people">${ico('user-plus', 'w-3.5 h-3.5')} Add person</button></div>
+      ${(p.people || []).length ? `<div class="space-y-2 mb-6">${p.people.map((x, i) => `<div class="card p-3 flex items-center gap-3">${avatar(x.name)}<div class="flex-1 min-w-0"><div class="text-white text-sm">${escapeHtml(x.name)} <span class="text-xs text-gray-500">· ${escapeHtml(x.relation || '')}</span></div><div class="text-[11px] text-gray-500">${escapeHtml([x.phone, x.idNote && 'ID: ' + x.idNote, x.addedByName && `added ${fmtStamp(x.addedAt)} by ${x.addedByName}`].filter(Boolean).join(' · '))}</div></div><button class="btn-icon danger" data-rm="people" data-i="${i}" aria-label="Remove">${ico('trash-2', 'w-4 h-4')}</button></div>`).join('')}</div>` : `<p class="text-sm text-[#fcd34d] mb-6">No one is on file yet.</p>`}
+      <div class="flex items-center justify-between mb-2"><h3 class="label !mb-0 text-[#f08a8a]">Do not release to</h3><button class="btn btn-secondary btn-sm" data-add="blocked">${ico('ban', 'w-3.5 h-3.5')} Add</button></div>
+      ${(p.blocked || []).length ? `<div class="space-y-2 mb-6">${p.blocked.map((x, i) => `<div class="card p-3 flex items-center gap-3 border-[#d03b3b]/40">${ico('ban', 'w-4 h-4 text-[#f08a8a]')}<div class="flex-1"><div class="text-white text-sm">${escapeHtml(x.name)}</div><div class="text-[11px] text-gray-500">${escapeHtml(x.note || '')}</div></div><button class="btn-icon danger" data-rm="blocked" data-i="${i}" aria-label="Remove">${ico('trash-2', 'w-4 h-4')}</button></div>`).join('')}</div>` : `<p class="text-sm text-gray-500 mb-6">None.</p>`}
+      <label class="label" for="pk-custody">Custody / court order note</label><div class="flex gap-2"><input id="pk-custody" class="input" value="${escapeHtml(p.custody || '')}" placeholder="e.g. Court order on file — Mom only"><button class="btn btn-secondary" data-custody>Save</button></div>
+      <h3 class="label mt-6">History</h3>${timeline(p.log)}`) });
+    m.el.addEventListener('click', async e => {
+      const add = e.target.closest('[data-add]');
+      if (add) { const blocked = add.dataset.add === 'blocked'; return F.formModal({ title: blocked ? 'Do not release to…' : 'Add an authorized person', icon: blocked ? 'ban' : 'user-plus', form: { sections: [{ fields: blocked ? [{ id: 'name', type: 'text', label: 'Name', required: true }, { id: 'note', type: 'text', label: 'Reason / note', span: 'sm:col-span-2' }] : [{ id: 'name', type: 'text', label: 'Full name', required: true }, { id: 'relation', type: 'select', label: 'Relationship', required: true, options: ['Mother', 'Father', 'Guardian', 'Grandparent', 'Stepparent', 'Aunt / uncle', 'Sibling (18+)', 'Family friend', 'Babysitter / nanny', 'Other'] }, { id: 'phone', type: 'phone', label: 'Phone' }, { id: 'idNote', type: 'text', label: 'ID on file', placeholder: 'e.g. Driver license ending 4821' }] }] }, onSubmit: async d => { const list = [...(p[add.dataset.add] || []), { ...d, addedAt: Date.now(), addedBy: ctx.me.uid, addedByName: ctx.me.name }]; await save(s, { [add.dataset.add]: list }, `${blocked ? 'Do-not-release added' : 'Authorized pickup added'}: ${d.name}`); m.close(); setTimeout(() => manage(s), 150); return true; } }); }
+      const rm = e.target.closest('[data-rm]');
+      if (rm) { const key = rm.dataset.rm, list = [...(p[key] || [])], [gone] = list.splice(Number(rm.dataset.i), 1); await save(s, { [key]: list }, `Removed ${key === 'blocked' ? 'do-not-release' : 'pickup'}: ${gone?.name}`); m.close(); setTimeout(() => manage(s), 150); }
+      if (e.target.closest('[data-custody]')) { await save(s, { custody: m.$('#pk-custody').value.trim() }, 'Custody note updated'); toast('Saved'); }
+    });
+    refreshIcons();
+  };
+  const release = s => {
+    const p = map[s.uid] || {}, people = p.people || [];
+    const m = openModal({ html: modalHeader({ title: `Early dismissal · ${escapeHtml(displayNameOf(s))}`, subtitle: 'The time out is recorded when you confirm.', icon: 'log-out', tone: 'teal' }) + `<form novalidate>${modalBody(`
+      ${p.custody ? `<div class="mb-4 p-3 rounded-lg border border-[#fab219]/40 bg-[#fab219]/10 text-sm">${ico('scale', 'w-4 h-4 inline -mt-0.5 text-[#fcd34d]')} ${escapeHtml(p.custody)}</div>` : ''}
+      ${(p.blocked || []).length ? `<div class="mb-4 p-3 rounded-lg border border-[#d03b3b]/40 bg-[#d03b3b]/10 text-sm">${ico('ban', 'w-4 h-4 inline -mt-0.5 text-[#f08a8a]')} Do not release to: <b>${escapeHtml(p.blocked.map(b => b.name).join(', '))}</b></div>` : ''}
+      <span class="label">Who is picking up?</span><div class="space-y-1.5 mb-4">${people.map((x, i) => `<label class="check"><input type="radio" name="pk-who" value="${i}" ${i === 0 ? 'checked' : ''}> <span>${escapeHtml(x.name)} <span class="text-gray-500">· ${escapeHtml(x.relation || '')}${x.idNote ? ' · ' + escapeHtml(x.idNote) : ''}</span></span></label>`).join('')}<label class="check"><input type="radio" name="pk-who" value="other" ${people.length ? '' : 'checked'}> <span class="text-[#fcd34d]">Someone not on the list</span></label></div>
+      <div id="pk-other" class="${people.length ? 'hidden' : ''} mb-4"><input id="pk-oname" class="input mb-2" placeholder="Their name"><input id="pk-ook" class="input" placeholder="Who approved it (parent on the phone / administrator)"><p class="hint mt-1">Only release with approval from a parent on file or an administrator.</p></div>
+      <div class="grid sm:grid-cols-2 gap-3"><div><label class="label" for="pk-reason">Reason</label><select id="pk-reason" class="input" data-icon="clipboard-list">${['Appointment (medical)', 'Appointment (dental)', 'Illness', 'Family emergency', 'Court / legal', 'Sent home by nurse', 'Other'].map(r => `<option>${r}</option>`).join('')}</select></div><div><label class="label" for="pk-ret">Returning today?</label><select id="pk-ret" class="input"><option>No</option><option>Yes</option></select></div></div>
+      <label class="check mt-4"><input type="checkbox" id="pk-id"> <span>I checked their photo ID</span></label><p class="form-error hidden mt-3" id="pk-err"></p>`)}${modalFooter(`<button type="button" data-close class="btn btn-secondary flex-1">Cancel</button><button type="submit" class="btn btn-primary flex-1">${ico('log-out', 'w-4 h-4')} Release student</button>`)}</form>` });
+    m.el.addEventListener('change', e => { if (e.target.name === 'pk-who') m.$('#pk-other').classList.toggle('hidden', e.target.value !== 'other'); });
+    m.$('form').addEventListener('submit', e => {
+      e.preventDefault();
+      const who = m.$('[name=pk-who]:checked')?.value, err = m.$('#pk-err');
+      const person = who === 'other' ? { name: m.$('#pk-oname').value.trim(), relation: 'Not on list' } : people[Number(who)];
+      if (!person?.name) return globalThis.__ember.showError(err, 'Enter who is picking them up.');
+      if ((p.blocked || []).some(b => b.name.trim().toLowerCase() === person.name.trim().toLowerCase())) return globalThis.__ember.showError(err, `${person.name} is on the do-not-release list. Do not release this student — contact an administrator.`);
+      if (who === 'other' && !m.$('#pk-ook').value.trim()) return globalThis.__ember.showError(err, 'Say who approved releasing to someone not on the list.');
+      if (!m.$('#pk-id').checked) return globalThis.__ember.showError(err, 'Check their photo ID first.');
+      withBusy(e.submitter || m.$('[type=submit]'), 'Releasing…', async () => {
+        const tm = nowHM();
+        await addDoc(col(ctx, 'frontOffice'), { kind: 'Early dismissal', studentUid: s.uid, studentName: displayNameOf(s), grade: s.gradeLevel ?? '', date: today(), time: tm, schoolYear: schoolYear(), reason: m.$('#pk-reason').value, by: person.name, relation: person.relation || '', onList: who !== 'other', approvedBy: who === 'other' ? m.$('#pk-ook').value.trim() : '', idChecked: 'Yes', returning: m.$('#pk-ret').value, createdBy: ctx.me.uid, createdByName: ctx.me.name, createdAt: serverTimestamp(), log: [stamp(ctx, `Released to ${person.name} at ${fmt12(tm)}${who === 'other' ? ' (not on list — approved by ' + m.$('#pk-ook').value.trim() + ')' : ''}`)] });
+        guardianUidsOf(ctx, [s.uid]).then(to => notify(ctx, { to, kind: 'system', title: `${displayNameOf(s)} was signed out at ${fmt12(tm)}`, body: `Picked up by ${person.name}${person.relation ? ' (' + person.relation + ')' : ''} · ${m.$('#pk-reason').value}`, link: `/${ctx.slug}/record/${s.uid}` })).catch(() => {});
+        m.close(); toast(`${displayNameOf(s)} released to ${person.name} at ${fmt12(tm)}`);
+      });
+    });
+    refreshIcons();
+  };
+  draw();
+  el.addEventListener('input', e => { if (e.target.id === 'pk-q') { q = e.target.value.trim().toLowerCase(); draw(); } });
+  el.addEventListener('click', e => { const r = e.target.closest('[data-release]'); if (r) { e.stopPropagation(); return release(kids.find(s => s.uid === r.dataset.release)); } const row = e.target.closest('[data-pk]'); if (row) manage(kids.find(s => s.uid === row.dataset.pk)); });
+}

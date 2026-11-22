@@ -1003,29 +1003,24 @@ export async function viewAdministrators(ctx) {
       : emptyState({ icon: 'shield-check', title: 'No administrators', text: 'Add one so someone can manage the school.' });
     refreshIcons();
   };
+  const newAdmin = async () => (await import('./people.js' + BUILD)).openAddUser({ slug: ctx.slug, name: ctx.tenant.name, by: ctx.me.uid }, 'admin', load);
   const openAdd = () => {
     const teachers = staff.filter(x => x.role !== 'admin');
     const form = { sections: [{ fields: [
-      { id: 'mode', type: 'radio', label: 'Who?', required: true, cols: 1, options: [...(teachers.length ? [{ v: 'promote', l: 'Someone already on staff here' }] : []), { v: 'new', l: 'Someone new — create a login for them' }] },
+      { id: 'mode', type: 'radio', label: 'Who?', required: true, cols: 1, options: [...(teachers.length ? [{ v: 'promote', l: 'Someone already on staff here' }] : []), { v: 'new', l: 'Someone new — create a username and password' }] },
       { id: 'who', type: 'select', label: 'Staff member', required: true, options: teachers.map(x => ({ v: x.uid, l: `${displayNameOf(x)}${x.email ? ' · ' + x.email : ''}` })), showIf: { id: 'mode', eq: 'promote' }, span: 'sm:col-span-2' },
-      { id: 'name', type: 'text', label: 'Full name', required: true, showIf: { id: 'mode', eq: 'new' } },
-      { id: 'email', type: 'text', label: 'Email', required: true, placeholder: 'name@school.org', showIf: { id: 'mode', eq: 'new' } },
-      { id: 'title', type: 'select', label: 'Title', options: ADMIN_TITLES },
-      { id: 'phone', type: 'phone', label: 'Phone' },
-      { id: 'password', type: 'text', label: 'Temporary password', required: true, showIf: { id: 'mode', eq: 'new' }, hint: 'They can change it under Account → Profile after signing in.' },
-    ] }], rules: [d => d.mode === 'new' && d.email && !isEmail(d.email) ? { id: 'email', msg: 'Enter a valid email address.' } : null, d => d.mode === 'new' && d.password && d.password.length < 8 ? { id: 'password', msg: 'Use at least 8 characters.' } : null] };
+      { id: 'title', type: 'select', label: 'Title', options: ADMIN_TITLES, showIf: { id: 'mode', eq: 'promote' } },
+      { id: 'phone', type: 'phone', label: 'Phone', showIf: { id: 'mode', eq: 'promote' } },
+      { id: 'note', type: 'note', text: 'Next you’ll enter their name; a username (firstname.lastname) and password are created for them.', showIf: { id: 'mode', eq: 'new' } },
+    ] }] };
+    if (!teachers.length) return newAdmin();
     formModal({ title: 'Add administrator', subtitle: ctx.tenant.name, icon: 'shield-check', form, data: { mode: teachers.length ? 'promote' : 'new', password: genPassword() }, submit: 'Add administrator', onSubmit: async d => {
       if (d.mode === 'promote') {
         await updateDoc(doc(col, d.who), { role: 'admin', title: d.title || '', phone: d.phone || '', promotedBy: ctx.me.uid, updatedAt: serverTimestamp() });
         const p = staff.find(x => x.uid === d.who);
         notify(ctx, { to: [d.who], kind: 'system', title: `You're now an administrator at ${ctx.tenant.name}`, body: `Added by ${ctx.me.name}. Look for Admin in the left menu.`, link: `/${ctx.slug}/admin` }).catch(() => {});
         toast(`${displayNameOf(p)} is now an administrator`);
-      } else {
-        const email = d.email.toLowerCase();
-        const uid = await createLogin(email, d.password);
-        await setDoc(doc(col, uid), { userId: uid, role: 'admin', email, displayName: d.name, title: d.title || '', phone: d.phone || '', createdBy: ctx.me.uid, createdAt: serverTimestamp() });
-        credentialsModal('Administrator added', d.name, email, d.password, 'Ask them to change this password after their first sign-in.');
-      }
+      } else { setTimeout(newAdmin, 0); return true; }
       load(); return true;
     } });
   };
@@ -1114,7 +1109,8 @@ export async function viewParents(ctx) {
     refreshIcons();
   };
   const studentPick = ids => ids.map(id => students.find(s2 => s2.uid === id)).filter(Boolean).map(s2 => ({ uid: s2.uid, name: displayNameOf(s2), grade: s2.gradeLevel ?? '' }));
-  const openAdd = (studentId = null) => {
+  const openAdd = async (studentId = null) => (await import('./people.js' + BUILD)).openAddUser({ slug: ctx.slug, name: ctx.tenant.name, by: ctx.me.uid }, 'parent', load, null, studentId ? { students: studentPick([studentId]) } : {});
+  const openAddByEmail = (studentId = null) => {
     const form = { sections: [{ fields: [
       { id: 'students', type: 'students', label: 'Student(s)', required: true },
       { id: 'name', type: 'text', label: 'Parent / guardian name', required: true },

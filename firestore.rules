@@ -76,6 +76,22 @@ service cloud.firestore {
       allow update: if false;
     }
 
+    // ── Usernames: school + username → the account's sign-in email. Readable before sign-in (one at a time,
+    // never listed). Admins create them for people they add; staff for students; anyone for themselves.
+    match /usernames/{key} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn() && key == request.resource.data.slug + '~' + request.resource.data.username
+        && request.resource.data.username.matches('^[a-z0-9][a-z0-9._-]{2,29}$')
+        && (isAdmin(request.resource.data.slug) || isDistrictAdmin(request.resource.data.slug)
+            || (request.resource.data.kind == 'student' && isStaff(request.resource.data.slug))
+            || (request.resource.data.uid == me() && request.resource.data.email == request.auth.token.email
+                && (exists(/databases/$(database)/documents/tenants/$(request.resource.data.slug)/users/$(me()))
+                    || exists(/databases/$(database)/documents/tenants/$(request.resource.data.slug)/guardians/$(me())))));
+      allow update: if false;
+      allow delete: if signedIn() && (resource.data.uid == me() || isAdmin(resource.data.slug));
+    }
+
     // ── Per-user routing index (lets the app find your school without collection-group queries)
     match /userIndex/{uid} {
       allow read, write: if signedIn() && me() == uid;
@@ -391,6 +407,8 @@ service cloud.firestore {
     match /tenants/{t}/planMeetings/{x} { allow read, write: if hasCap(t, 'services'); }
     // Front office & registrar.
     match /tenants/{t}/frontOffice/{x} { allow read, write: if hasCap(t, 'records'); }
+    // Who may pick a student up (and who may not). Front office & admins.
+    match /tenants/{t}/pickups/{sid} { allow read, write: if hasCap(t, 'records'); }
     match /tenants/{t}/parentContacts/{x} { allow read, write: if hasCap(t, 'records') || hasCap(t, 'services'); }
     // Support staff areas: any staff member at the school.
     match /tenants/{t}/inventory/{x} { allow read, write: if isStaff(t); }

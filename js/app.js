@@ -4,7 +4,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebas
 import {
   getAuth, GoogleAuthProvider, signInWithPopup,
   signInWithEmailAndPassword, createUserWithEmailAndPassword,
-  signOut, onAuthStateChanged, sendPasswordResetEmail
+  signOut, onAuthStateChanged, sendPasswordResetEmail, updatePassword, EmailAuthProvider, reauthenticateWithCredential
 } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 import {
   getFirestore, doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc,
@@ -986,6 +986,7 @@ function viewLogin() {
   if (!['staff', 'student', 'parent'].includes(mode)) mode = 'staff';
   let school = schoolParam ? { slug: schoolParam, name: schoolParam } : null;
   let picker = null;
+  let useEmail = params.get('email') === '1'; // district admins and personal classrooms still use email
 
   if (schoolParam) {
     getTenant(schoolParam).then(t => {
@@ -1027,9 +1028,51 @@ function viewLogin() {
     }));
     const body = $('#login-body');
 
+    if ((mode === 'staff' || mode === 'parent') && !useEmail) {
+      const P = mode;
+      body.innerHTML = `
+        <form id="${P}-uform" novalidate>
+          <span class="label">Your school</span>
+          <div id="school-picker" class="mb-4"></div>
+          <label for="${P}-username" class="label">Username</label>
+          <input id="${P}-username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" class="input mb-4 font-mono" placeholder="firstname.lastname" required />
+          ${passwordField(`${P}-upassword`)}
+          <p id="login-error" class="form-error mt-4 hidden" role="alert"></p>
+          <button type="submit" class="btn btn-primary btn-block py-3 mt-5">Sign in</button>
+          <p class="hint text-center mt-4">Forgot your password? Ask your school office to reset it.</p>
+          <p class="text-center mt-3"><button type="button" id="use-email" class="text-xs text-gray-500 hover:text-[#F59E0B]">District administrator or personal classroom? Sign in with email</button></p>
+        </form>
+        ${P === 'parent' ? `<div class="mt-6 p-4 rounded-xl border border-white/[0.08] bg-white/[0.02]"><p class="text-sm text-white mb-1">First time here?</p><p class="text-xs text-gray-500 mb-3">Ask the school office for your username, or create your parent account with your child's Family Access code.</p><a href="${buildUrl('/signup?role=guardian')}" class="btn btn-secondary btn-block">${ico('user-plus', 'w-4 h-4')} Create a parent account</a></div>` : ''}`;
+      refreshIcons();
+      picker = mountSchoolPicker($('#school-picker'), { initial: school, onChange: s => { school = s; } });
+      const err = $('#login-error');
+      $('#use-email').addEventListener('click', () => { useEmail = true; draw(); });
+      $(`#${P}-uform`).addEventListener('submit', e => {
+        e.preventDefault();
+        const btn = e.currentTarget.querySelector('[type=submit]');
+        showError(err, '');
+        if (!school) return showError(err, 'Select your school first.');
+        const raw = $(`#${P}-username`).value.trim(), p = $(`#${P}-upassword`).value;
+        if (!raw || !p) return showError(err, 'Enter your username and password.');
+        if (raw.includes('@')) { useEmail = true; draw(); $(`#${P}-email`).value = raw; return; } // typed an email: switch over
+        withBusy(btn, 'Signing in…', () => authFlow(async () => {
+          try {
+            const email = await emailForUsername(school.slug, cleanUsername(raw));
+            const cred = await signInWithEmailAndPassword(auth, email, p);
+            rememberTenant(cred.user.uid, school.slug);
+            await afterLogin(cred.user, `/${school.slug}`);
+          } catch (e) {
+            if (['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found', 'auth/invalid-email'].includes(e.code)) showError(err, 'Incorrect username or password. Check you picked the right school.');
+            else { console.error(e); showError(err, friendlyError(e)); }
+          }
+        }));
+      });
+      return;
+    }
     if (mode === 'staff' || mode === 'parent') {
       const P = mode; // element ids: staff-email / parent-email …
       body.innerHTML = `
+        <p class="text-center mb-4"><button type="button" id="use-username" class="text-xs text-[#F59E0B] hover:underline">${ico('arrow-left', 'w-3 h-3 inline -mt-0.5')} Sign in with your school username instead</button></p>
         <button type="button" id="google-btn" class="btn btn-google btn-block py-3">${GOOGLE_SVG} Continue with Google</button>
         ${DIVIDER}
         <form id="${P}-form" novalidate>
@@ -1046,6 +1089,7 @@ function viewLogin() {
           <a href="${buildUrl('/signup?role=guardian')}" class="btn btn-secondary btn-block">${ico('user-plus', 'w-4 h-4')} Create a parent account</a></div>` : ''}`;
       refreshIcons();
       const err = $('#login-error');
+      $('#use-username').addEventListener('click', () => { useEmail = false; draw(); });
       $('#google-btn').addEventListener('click', e => withBusy(e.currentTarget, 'Opening Google…', () => authFlow(async () => {
         showError(err, '');
         try {
@@ -2130,6 +2174,82 @@ function openCreateSchoolModal(districtId, district) {
 // ═══════════════════════════════════════════════════════════════
 // TENANT ROUTING
 // ═══════════════════════════════════════════════════════════════
+// ── Usernames ──────────────────────────────────────────────────────
+// Everyone signs in with school + username + password. New logins are username@school.emberlms.local;
+// usernames/{school~username} points a username at the account's sign-in email, so people who used to
+// sign in with a real email keep the same account after picking a username.
+const cleanUsername = v => String(v || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '.').replace(/[^a-z0-9._-]/g, '').replace(/\.{2,}/g, '.').replace(/^[._-]+|[._-]+$/g, '').slice(0, 30);
+const usernameEmail = (u, slug) => `${cleanUsername(u)}@${slug}.emberlms.local`;
+const unameRef = (slug, u) => doc(db, 'usernames', `${slug}~${cleanUsername(u)}`);
+const validUsername = u => /^[a-z0-9][a-z0-9._-]{2,29}$/.test(u || '');
+async function usernameTaken(slug, u) { try { return (await getDoc(unameRef(slug, u))).exists(); } catch (e) { return false; } }
+// firstname.lastname, then firstname.lastname2, 3, … until one is free.
+async function suggestUsername(slug, first, last = '') {
+  const base = cleanUsername([first, last].filter(Boolean).join('.')) || 'user';
+  for (let n = 1; n < 60; n++) { const u = n === 1 ? base : `${base}${n}`; if (!await usernameTaken(slug, u)) return u; }
+  return `${base}${Date.now() % 10000}`;
+}
+async function reserveUsername(slug, u, { uid, email, kind }) {
+  await setDoc(unameRef(slug, u), { slug, username: cleanUsername(u), uid, email, kind, createdAt: serverTimestamp() });
+}
+// Creates a sign-in for someone else under a username (used by admins and the district).
+async function createUsernameLogin(slug, username, password, kind) {
+  const u = cleanUsername(username);
+  if (!validUsername(u)) throw new Error('Usernames are 3–30 letters, numbers, dots, dashes or underscores.');
+  if (await usernameTaken(slug, u)) throw new Error(`“${u}” is already taken at this school — try ${await suggestUsername(slug, u)}.`);
+  const email = usernameEmail(u, slug);
+  let uid;
+  try { uid = await createLogin(email, password); }
+  catch (ex) { if (ex.code === 'auth/email-already-in-use') throw new Error(`“${u}” is already taken at this school (maybe by a student).`); throw ex; }
+  return { uid, username: u, email };
+}
+async function emailForUsername(slug, u) {
+  try { const x = await getDoc(unameRef(slug, u)); if (x.exists()) return x.data().email; } catch (e) {}
+  return usernameEmail(u, slug);
+}
+const isUsernameAccount = user => /@[a-z0-9-]+\.emberlms\.local$/i.test(user?.email || '');
+// People who still sign in with a real email pick a username + new password once.
+function maybeAskForUsername(ctx) {
+  const d = ctx.roleInfo?.data || {};
+  if (!(ctx.isRealTeacher || ctx.isGuardian) || ctx.isPersonal || d.username || d.districtAdmin || isUsernameAccount(currentUser) || isKioskUser(currentUser)) return;
+  if (!(currentUser?.providerData || []).some(p => p.providerId === 'password')) return; // Google sign-ins keep using Google
+  if (ss('ember_username_prompt') === currentUser.uid) return;
+  ss('ember_username_prompt', currentUser.uid);
+  const name = ctx.me.name || '', [first, ...rest] = name.split(/\s+/);
+  const m = openModal({ size: 'sm', html: modalHeader({ title: 'Make a username and password', subtitle: `${escapeHtml(ctx.tenant.name)} now uses usernames instead of email addresses.`, icon: 'user-round-cog' }) + `<form novalidate>${modalBody(`
+    <p class="text-sm text-gray-300 mb-4">From now on you'll sign in with <b class="text-white">your school + username + password</b>. Your account, classes and records stay exactly the same.</p>
+    <label class="label" for="un-user">Username</label><input id="un-user" class="input font-mono mb-1" autocomplete="off" autocapitalize="none" spellcheck="false"><p class="hint mb-4" id="un-hint">Checking…</p>
+    <label class="label" for="un-pass">New password</label><input id="un-pass" type="password" class="input mb-3" autocomplete="new-password" placeholder="At least 8 characters">
+    <label class="label" for="un-pass2">Type it again</label><input id="un-pass2" type="password" class="input mb-3" autocomplete="new-password">
+    <label class="label" for="un-cur">Current password</label><input id="un-cur" type="password" class="input" autocomplete="current-password" placeholder="The one you just used">
+    <p class="form-error mt-3 hidden" id="un-err"></p>`)}${modalFooter(`<button type="submit" class="btn btn-primary flex-1">${ico('check', 'w-4 h-4')} Save and continue</button>`)}</form>` });
+  m.dismissible = false;
+  const uin = m.$('#un-user'), hint = m.$('#un-hint');
+  suggestUsername(ctx.slug, first, rest.join(' ')).then(u => { if (!uin.value) uin.value = u; hint.textContent = `Suggested: ${u}. You can change it.`; });
+  let tm; uin.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(async () => { const u = cleanUsername(uin.value); hint.textContent = !validUsername(u) ? '3–30 letters, numbers, dots, dashes or underscores.' : await usernameTaken(ctx.slug, u) ? `“${u}” is taken.` : `“${u}” is available.`; }, 300); });
+  m.$('form').addEventListener('submit', e => {
+    e.preventDefault();
+    const u = cleanUsername(uin.value), p1 = m.$('#un-pass').value, p2 = m.$('#un-pass2').value, cur = m.$('#un-cur').value, err = m.$('#un-err');
+    if (!validUsername(u)) return showError(err, 'Usernames are 3–30 letters, numbers, dots, dashes or underscores.');
+    if (p1.length < 8) return showError(err, 'Use at least 8 characters for your new password.');
+    if (p1 !== p2) return showError(err, 'The new passwords don’t match.');
+    if (!cur) return showError(err, 'Enter your current password.');
+    withBusy(e.submitter || m.$('[type=submit]'), 'Saving…', async () => {
+      try {
+        await reauthenticateWithCredential(currentUser, EmailAuthProvider.credential(currentUser.email, cur));
+        if (await usernameTaken(ctx.slug, u)) return showError(err, `“${u}” is taken — try another.`);
+        await reserveUsername(ctx.slug, u, { uid: currentUser.uid, email: currentUser.email, kind: ctx.isGuardian ? 'parent' : 'staff' });
+        await updateDoc(doc(db, 'tenants', ctx.slug, ctx.isGuardian ? 'guardians' : 'users', currentUser.uid), { username: u });
+        await updatePassword(currentUser, p1);
+        ctx.roleInfo.data.username = u;
+        m.dismissible = true; m.close();
+        toast(`Done! Next time sign in with ${ctx.tenant.name} + “${u}”.`);
+      } catch (ex) { console.error(ex); showError(err, ['auth/invalid-credential', 'auth/wrong-password'].includes(ex.code) ? 'Your current password isn’t right.' : friendlyError(ex)); }
+    });
+  });
+  refreshIcons();
+}
+
 // Which Workspace dashboards a staff member gets (Health Office, Counseling, Front Office, Food, Transportation,
 // Library, Athletics, IT & Data). Admins see all of them.
 const WORK_AREAS = ['clinic', 'counseling', 'office', 'food', 'transport', 'library', 'athletics', 'it'];
@@ -2207,6 +2327,7 @@ async function viewTenant(slug, segs) {
   }
   layoutState = { ctx, district: null, course: null };
   watchInbox(ctx);
+  setTimeout(() => { if (live(t)) maybeAskForUsername(ctx); }, 400);
   const [sub, a, b, c, d] = segs;
   const teacherOnly = fn => ctx.isRealTeacher ? fn() : viewNotFound();
   const adminOnly = fn => ctx.isAdmin ? fn() : viewNotFound();
@@ -3323,6 +3444,7 @@ async function createStudentAccount(slug, { firstName, lastName, username, passw
     tempPassword: password, enrolledCourseIds: [],
     approvedBy: currentUser.uid, approvedAt: serverTimestamp(), createdAt: serverTimestamp()
   });
+  reserveUsername(slug, username, { uid: cred.user.uid, email: fakeEmail, kind: 'student' }).catch(() => {});
   return { uid: cred.user.uid, studentNumber };
 }
 
@@ -3875,9 +3997,11 @@ async function viewAdminTeachers(ctx) {
   const { slug, tenant } = ctx;
   const t = routeToken;
   setTitle('Teachers & staff', tenant.name);
-  render(tenantPage(ctx, 'admin-teachers', pageHeader({ eyebrow: 'Admin', title: 'Teachers & staff', subtitle: 'Roles and access. Student services and Safety access let counselors, case managers and deans use those SIS tools without being admins.', actions: `<button id="invite-teacher-btn" class="btn btn-primary">${ico('user-plus')} Invite teachers</button>` }) +
+  render(tenantPage(ctx, 'admin-teachers', pageHeader({ eyebrow: 'Admin', title: 'Teachers & staff', subtitle: 'Roles and access. Student services and Safety access let counselors, case managers and deans use those SIS tools without being admins.', actions: `<div class="flex flex-wrap gap-2"><button id="invite-teacher-btn" class="btn btn-secondary">${ico('link')} Invite with join code</button><button id="create-staff-btn" class="btn btn-primary">${ico('user-plus')} Create account</button></div>` }) +
     `<div id="teachers-list" class="max-w-5xl">${skeletonRows(5)}</div>`));
   $('#invite-teacher-btn').addEventListener('click', async () => openInviteTeacherModal(tenant, await getJoinCode(slug, tenant)));
+  // Admins create staff directly (username + password) — no join code needed.
+  $('#create-staff-btn').addEventListener('click', async () => (await import('./people.js' + BUILD)).openAddUser({ slug, name: tenant.name, by: currentUser.uid }, null, () => renderRoute(), ['teacher', 'admin', 'counselor', 'nurse', 'office', 'support', 'it']));
   try {
     const [teachersSnap, coursesSnap] = await Promise.all([getDocs(collection(db, 'tenants', slug, 'users')), getDocs(collection(db, 'tenants', slug, 'courses'))]);
     if (!live(t)) return;
@@ -5629,7 +5753,7 @@ const EMBER_API = {
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, myCourses, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
   GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute,
-  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas
+  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas, cleanUsername, usernameEmail, validUsername, usernameTaken, suggestUsername, reserveUsername, createUsernameLogin
 };
 globalThis.__ember = EMBER_API;
 export {
@@ -5639,5 +5763,5 @@ export {
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, myCourses, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
   GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute,
-  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas
+  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas, cleanUsername, usernameEmail, validUsername, usernameTaken, suggestUsername, reserveUsername, createUsernameLogin
 };

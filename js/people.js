@@ -3,7 +3,8 @@
 import { doc, setDoc, getDocs, collection, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 const {
   db, $, ico, refreshIcons, escapeHtml, plural, displayNameOf, render, setTitle, iconTile, badge, avatar, skeletonRows, emptyState, errorBox,
-  toast, copyText, openModal, modalHeader, modalBody, modalFooter, buildUrl, live, districtShell, getDistrictSchools, createLogin, ensureStudentId, gradYearFor
+  toast, copyText, openModal, modalHeader, modalBody, modalFooter, buildUrl, live, districtShell, getDistrictSchools, createLogin, ensureStudentId, gradYearFor,
+  cleanUsername, suggestUsername, reserveUsername, createUsernameLogin, usernameTaken, validUsername
 } = globalThis.__ember;
 const BUILD = new URL(import.meta.url).search;
 const forms = () => import('./staff.js' + BUILD);
@@ -34,8 +35,12 @@ function credentials(title, who, lines, note) {
     <div class="flex gap-3 mt-6"><button class="btn btn-secondary flex-1" data-copy>${ico('copy', 'w-4 h-4')} Copy</button><button class="btn btn-primary flex-1" data-close>Done</button></div></div>` });
   m.$('[data-copy]').addEventListener('click', () => copyText(text, 'Sign-in details copied'));
   m.$('[data-close]').addEventListener('click', () => m.close());
+  // Refresh the page behind only once the sign-in details are closed (so they can be copied first).
+  const done = afterCreds; afterCreds = null;
+  if (done) { const obs = new MutationObserver(() => { if (!m.el.isConnected) { obs.disconnect(); done(); } }); obs.observe(document.body, { childList: true, subtree: true }); }
   refreshIcons();
 }
+let afterCreds = null;
 
 export async function viewDistrictPeople(dctx) {
   const t = dctx.t;
@@ -79,13 +84,18 @@ export async function viewDistrictPeople(dctx) {
   $('#pp-add').addEventListener('click', () => pickCategory(dctx, schools, refresh));
 }
 
-function pickCategory(dctx, schools, done) {
-  const m = openModal({ size: 'lg', html: modalHeader({ title: 'Add user', subtitle: 'What kind of account?', icon: 'user-plus', tone: 'violet' }) + modalBody(`<div class="grid sm:grid-cols-2 gap-2">${PEOPLE_CATEGORIES.map(x => `<button class="flex items-start gap-3 p-3 rounded-xl border border-white/[0.08] hover:border-[#8B5CF6]/50 hover:bg-white/[0.03] text-left" data-pick="${x.id}">${iconTile(x.icon, x.tone)}<span class="min-w-0"><span class="block text-sm text-white">${escapeHtml(x.label)}</span><span class="block text-[11px] text-gray-500">${escapeHtml(x.desc)}</span></span></button>`).join('')}</div>`) });
+// School admins use the same forms for their own school (no join code needed).
+export function openAddUser({ slug, name, by }, catId = null, done = () => {}, only = null, preset = {}) {
+  const dctx = { district: { id: by }, districtId: by }, schools = [{ id: slug, name }];
+  return catId ? addUser(dctx, schools, catId, done, preset) : pickCategory(dctx, schools, done, only);
+}
+export function pickCategory(dctx, schools, done, only = null) {
+  const m = openModal({ size: 'lg', html: modalHeader({ title: 'Add user', subtitle: 'What kind of account?', icon: 'user-plus', tone: 'violet' }) + modalBody(`<div class="grid sm:grid-cols-2 gap-2">${PEOPLE_CATEGORIES.filter(x => !only || only.includes(x.id)).map(x => `<button class="flex items-start gap-3 p-3 rounded-xl border border-white/[0.08] hover:border-[#8B5CF6]/50 hover:bg-white/[0.03] text-left" data-pick="${x.id}">${iconTile(x.icon, x.tone)}<span class="min-w-0"><span class="block text-sm text-white">${escapeHtml(x.label)}</span><span class="block text-[11px] text-gray-500">${escapeHtml(x.desc)}</span></span></button>`).join('')}</div>`) });
   m.el.addEventListener('click', e => { const b = e.target.closest('[data-pick]'); if (b) { m.close(); addUser(dctx, schools, b.dataset.pick, done); } });
   refreshIcons();
 }
 
-async function addUser(dctx, schools, catId, done) {
+async function addUser(dctx, schools, catId, done, preset = {}) {
   const cat = CAT[catId], F = await forms();
   if (!schools.length) return toast('Add a school to the district first.', 'error');
   const schoolField = { id: 'school', type: 'select', label: 'School', required: true, options: schools.map(s => ({ v: s.id, l: s.name || s.id })) };
@@ -94,10 +104,10 @@ async function addUser(dctx, schools, catId, done) {
   if (catId === 'student') {
     fields = [schoolField, { id: 'first', type: 'text', label: 'First name', required: true }, { id: 'last', type: 'text', label: 'Last name', required: true },
       { id: 'grade', type: 'select', label: 'Grade', required: true, options: GRADES.map(g => ({ v: g, l: `${g === 'K' ? 'Kindergarten' : 'Grade ' + g} · class of ${gradYearFor(g)}` })) },
-      { id: 'username', type: 'text', label: 'Username', hint: 'Blank = made from their name.' }, { id: 'password', type: 'text', label: 'Temporary password', required: true }];
+      { id: 'username', type: 'text', label: 'Username', hint: 'Suggested from their name (firstname.lastname).' }, { id: 'password', type: 'text', label: 'Temporary password', required: true }];
     onSubmit = async d => {
-      const username = (d.username || `${slugName(d.first)}.${slugName(d.last)}`.slice(0, 20)).toLowerCase();
-      if (!/^[a-z0-9_.-]{3,20}$/.test(username)) throw new Error('Username must be 3–20 characters: letters, numbers, dots, dashes, underscores.');
+      const username = cleanUsername(d.username || await suggestUsername(d.school, d.first, d.last));
+      if (!validUsername(username)) throw new Error('Usernames are 3–30 letters, numbers, dots, dashes or underscores.');
       const email = `${username}@${d.school}.emberlms.local`;
       let uid; try { uid = await createLogin(email, d.password); } catch (ex) { if (ex.code === 'auth/email-already-in-use') throw new Error('That username is already taken at this school.'); throw ex; }
       const rec = { username, firstName: d.first, lastName: d.last, displayName: `${d.first} ${d.last}`.trim(), gradeLevel: d.grade, email, role: 'student', status: 'approved', tempPassword: d.password, enrolledCourseIds: [], approvedBy: 'district', createdBy: dctx.district.id || dctx.districtId, createdAt: serverTimestamp() };
@@ -107,36 +117,43 @@ async function addUser(dctx, schools, catId, done) {
       credentials('Student account created', rec.displayName, [['School', sc?.name || d.school], ['Username', username], ['Password', d.password], ...(id ? [['Student ID', id]] : [])], 'Students sign in from the Student tab with their school, username and password.');
       return true;
     };
-  } else if (catId === 'parent') {
-    fields = [schoolField, { id: 'name', type: 'text', label: 'Parent / guardian name', required: true }, { id: 'relationship', type: 'select', label: 'Relationship', options: ['Mother', 'Father', 'Guardian', 'Grandparent', 'Foster parent', 'Stepparent', 'Other relative', 'Other'] },
-      { id: 'email', type: 'text', label: 'Email (their sign-in)', required: true }, { id: 'phone', type: 'phone', label: 'Phone' },
-      { id: 'students', type: 'students', label: 'Their student(s)', required: true, hint: 'Pick the school first, then search.' }, { id: 'password', type: 'text', label: 'Temporary password', required: true }];
-    onSubmit = async d => {
-      const email = d.email.toLowerCase();
-      let uid; try { uid = await createLogin(email, d.password); } catch (ex) { if (ex.code === 'auth/email-already-in-use') throw new Error('That email already has an Ember login. Give the family the student’s Family Access code instead.'); throw ex; }
-      const b = writeBatch(db);
-      b.set(doc(db, 'tenants', d.school, 'guardians', uid), { userId: uid, name: d.name, displayName: d.name, email, phone: d.phone || '', relationship: d.relationship || '', category: 'parent', createdBy: 'district', createdAt: serverTimestamp() });
-      d.students.forEach(st => b.set(doc(db, 'tenants', d.school, 'guardianLinks', `${uid}_${st.uid}`), { guardianUid: uid, studentUid: st.uid, linkedBy: 'district', createdAt: serverTimestamp() }));
-      await b.commit();
-      credentials('Parent account created', d.name, [['Email', email], ['Password', d.password]], `Linked to ${d.students.map(x => x.name).join(', ')}. They sign in from the Parent tab.`);
-      return true;
-    };
   } else {
-    fields = [schoolField, { id: 'name', type: 'text', label: 'Full name', required: true }, { id: 'title', type: 'select', label: 'Title / role', required: true, options: cat.titles },
-      { id: 'email', type: 'text', label: 'Email (their sign-in)', required: true }, { id: 'phone', type: 'phone', label: 'Phone' }, { id: 'password', type: 'text', label: 'Temporary password', required: true },
+    const isParent = catId === 'parent';
+    fields = [schoolField, { id: 'first', type: 'text', label: 'First name', required: true }, { id: 'last', type: 'text', label: 'Last name', required: true },
+      ...(isParent ? [{ id: 'relationship', type: 'select', label: 'Relationship', options: ['Mother', 'Father', 'Guardian', 'Grandparent', 'Foster parent', 'Stepparent', 'Other relative', 'Other'] }] : [{ id: 'title', type: 'select', label: 'Title / role', required: true, options: cat.titles }]),
+      { id: 'username', type: 'text', label: 'Username', required: true, hint: 'They sign in with the school + this username. Suggested from their name.' }, { id: 'password', type: 'text', label: 'Temporary password', required: true },
+      { id: 'contactEmail', type: 'text', label: 'Contact email (optional)', hint: 'For your records only — not used to sign in.' }, { id: 'phone', type: 'phone', label: 'Phone' },
+      ...(isParent ? [{ id: 'students', type: 'students', label: 'Their student(s)', required: true, span: 'sm:col-span-2' }] : []),
       ...(access ? [{ id: 'note', type: 'note', text: access }] : [])];
     onSubmit = async d => {
-      const email = d.email.toLowerCase();
-      let uid; try { uid = await createLogin(email, d.password); } catch (ex) { if (ex.code === 'auth/email-already-in-use') throw new Error('That email already has an Ember login.'); throw ex; }
-      await setDoc(doc(db, 'tenants', d.school, 'users', uid), { userId: uid, role: cat.role, caps: cat.caps, category: catId, email, displayName: d.name, title: d.title || '', phone: d.phone || '', createdBy: 'district', createdAt: serverTimestamp() });
-      credentials(`${cat.label.replace(/s( &|$)/, '$1')} added`, d.name, [['Email', email], ['Password', d.password]], 'They sign in from the Staff tab. Ask them to change the password after signing in.');
+      const full = `${d.first} ${d.last}`.trim(), sc = schools.find(s => s.id === d.school);
+      const { uid, username } = await createUsernameLogin(d.school, d.username, d.password, isParent ? 'parent' : 'staff');
+      const loginEmail = `${username}@${d.school}.emberlms.local`;
+      if (isParent) {
+        const b = writeBatch(db);
+        b.set(doc(db, 'tenants', d.school, 'guardians', uid), { userId: uid, username, name: full, displayName: full, email: loginEmail, contactEmail: d.contactEmail || '', phone: d.phone || '', relationship: d.relationship || '', category: 'parent', createdBy: dctx.districtId || 'admin', createdAt: serverTimestamp() });
+        d.students.forEach(st => b.set(doc(db, 'tenants', d.school, 'guardianLinks', `${uid}_${st.uid}`), { guardianUid: uid, studentUid: st.uid, linkedBy: dctx.districtId || 'admin', createdAt: serverTimestamp() }));
+        await b.commit();
+      } else await setDoc(doc(db, 'tenants', d.school, 'users', uid), { userId: uid, username, role: cat.role, caps: cat.caps, category: catId, email: loginEmail, contactEmail: d.contactEmail || '', displayName: full, title: d.title || '', phone: d.phone || '', createdBy: dctx.districtId || 'admin', createdAt: serverTimestamp() });
+      await reserveUsername(d.school, username, { uid, email: loginEmail, kind: isParent ? 'parent' : 'staff' });
+      credentials(isParent ? 'Parent account created' : `${cat.label.replace(/s( &|$)/, '$1')} added`, full, [['School', sc?.name || d.school], ['Username', username], ['Password', d.password]],
+        `${isParent ? `Linked to ${d.students.map(x => x.name).join(', ')}. ` : ''}Sign in at ${location.host}${buildUrl('/login')} → ${isParent ? 'Parent' : 'Staff'} → pick the school → username and password.`);
       return true;
     };
   }
-  const rules = [d => d.email !== undefined && d.email && !isEmail(d.email) ? { id: 'email', msg: 'Enter a valid email address.' } : null, d => d.password && d.password.length < 8 ? { id: 'password', msg: 'Use at least 8 characters.' } : null];
+  const rules = [d => d.contactEmail && !isEmail(d.contactEmail) ? { id: 'contactEmail', msg: 'Enter a valid email address.' } : null, d => d.password && d.password.length < 8 ? { id: 'password', msg: 'Use at least 8 characters.' } : null,
+    d => d.username !== undefined && !validUsername(cleanUsername(d.username)) ? { id: 'username', msg: '3–30 letters, numbers, dots, dashes or underscores.' } : null];
   // The student picker needs that school's students; reload them when the school changes.
   const env = { students: [] };
-  const m = F.formModal({ title: `Add ${cat.label.toLowerCase().replace(/ &.*$/, '').replace(/s$/, '')}`, subtitle: cat.desc, icon: cat.icon, form: { sections: [{ fields }], rules }, env, data: { school: schools[0].id, password: genPassword(), title: cat.titles?.[0] || '' }, submit: 'Create account', onSubmit: async d => { const ok = await onSubmit(d); if (ok) done(); return ok; } });
+  const m = F.formModal({ title: `Add ${cat.label.toLowerCase().replace(/ &.*$/, '').replace(/s$/, '')}`, subtitle: cat.desc, icon: cat.icon, form: { sections: [{ fields }], rules }, env, data: { school: schools[0].id, password: genPassword(), title: cat.titles?.[0] || '', ...preset }, submit: 'Create account', onSubmit: async d => { afterCreds = done; const ok = await onSubmit(d); if (!ok) afterCreds = null; return ok; } });
+  // Suggest firstname.lastname (free at that school) as names are typed, until the username is edited by hand.
+  const uIn = m.$('[data-input="username"]');
+  if (uIn) {
+    let touched = false, tm;
+    uIn.addEventListener('input', () => { touched = true; });
+    const sug = () => { if (touched) return; clearTimeout(tm); tm = setTimeout(async () => { const f = m.$('[data-input="first"]')?.value.trim(), l = m.$('[data-input="last"]')?.value.trim(); if (f) uIn.value = await suggestUsername(m.$('[data-input="school"]').value, f, l); }, 250); };
+    ['first', 'last', 'school'].forEach(k => m.$(`[data-input="${k}"]`)?.addEventListener(k === 'school' ? 'change' : 'input', sug));
+  }
   if (catId === 'parent') {
     const sel = m.$('[data-input="school"]');
     const loadStudents = async () => { const s = await getDocs(collection(db, 'tenants', sel.value, 'students')).catch(() => ({ docs: [] })); env.students.splice(0, env.students.length, ...s.docs.map(x => ({ uid: x.id, ...x.data() })).filter(x => x.status !== 'pending' && x.status !== 'rejected')); };
