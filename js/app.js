@@ -1052,12 +1052,21 @@ function viewLogin() {
         if (raw.includes('@')) { useEmail = true; draw(); $('#district-email').value = raw; return; }
         withBusy(btn, 'Signing in…', () => authFlow(async () => {
           try {
-            const ix = await getDoc(unameRef('_district', cleanUsername(raw))).catch(() => null);
-            if (!ix?.exists()) return showError(err, 'Incorrect username or password.');
+            const u = cleanUsername(raw);
+            let ix = null, blocked = false;
+            try { ix = await getDoc(unameRef('_district', u)); } catch (ex) { blocked = ex.code === 'permission-denied'; }
+            if (blocked) return showError(err, 'Username sign-in is turned off for this site: publish the latest Firestore rules in the Firebase console, then try again. Until then, use “Sign in with your email” below.');
+            if (!ix?.exists()) {
+              // Accounts made directly as username logins (no index entry) still work.
+              try { const cred = await signInWithEmailAndPassword(auth, usernameEmail(u, 'district'), p); return navigate((await resolveDestinationForUser(cred.user)) || '/', { replace: true }); } catch (e2) {}
+              err.innerHTML = `There's no district username “${escapeHtml(u)}” yet. <button type="button" class="underline text-white" id="dz-email">Sign in with your email</button> once — you'll be asked to create your username and password right after.`;
+              err.classList.remove('hidden'); $('#dz-email').addEventListener('click', () => { useEmail = true; draw(); });
+              return;
+            }
             const cred = await signInWithEmailAndPassword(auth, ix.data().email, p);
             navigate(ix.data().district ? `/district/${ix.data().district}` : (await resolveDestinationForUser(cred.user)) || '/', { replace: true });
           } catch (ex) {
-            if (['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found', 'auth/invalid-email'].includes(ex.code)) showError(err, 'Incorrect username or password.');
+            if (['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found', 'auth/invalid-email'].includes(ex.code)) showError(err, 'That username exists, but the password isn’t right. Use the new password you chose when you made your username.');
             else { console.error(ex); showError(err, friendlyError(ex)); }
           }
         }));
