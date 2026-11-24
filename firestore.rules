@@ -194,7 +194,10 @@ service cloud.firestore {
 
       match /courses/{c} {
         allow read: if canReadCourseContent(t, c) || (isKiosk(t) && resource.data.ownerUid == kioskTeacher());
-        allow create: if isStaff(t) && request.resource.data.ownerUid == me();
+        allow create: if isStaff(t) && request.resource.data.ownerUid == me()
+          // counselors / admins set up a teacher's empty period sections for scheduling
+          || ((hasCap(t, 'services') || isAdmin(t)) && request.resource.data.get('slot', false) == true
+              && exists(/databases/$(database)/documents/tenants/$(t)/users/$(request.resource.data.ownerUid)));
         allow update, delete: if isAdmin(t) || (isStaff(t) && resource.data.ownerUid == me());
 
         match /modules/{m} {

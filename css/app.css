@@ -429,3 +429,13 @@ body.kiosk-on { user-select: none; -webkit-user-select: none; overscroll-behavio
 .flow-steps li span { flex-shrink: 0; width: 1.35rem; height: 1.35rem; border-radius: 999px; background: #F59E0B; color: #111; font-weight: 700; font-size: .7rem; display: grid; place-items: center; }
 details > summary { list-style: none; } details > summary::-webkit-details-marker { display: none; }
 .work-table tr.is-now td { background: rgba(12,163,12,0.08); color: #e5e5e5; }
+
+/* Counselor scheduling */
+.sched-wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+@media (min-width: 1024px) { .sched-wrap { grid-template-columns: 320px minmax(0, 1fr); align-items: start; } .sched-side { position: sticky; top: 1rem; } }
+.sched-list { max-height: 65vh; overflow-y: auto; }
+.sched-item { display: flex; align-items: center; gap: .5rem; width: 100%; text-align: left; padding: .65rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.sched-item:hover { background: rgba(255,255,255,0.03); }
+.sched-item.is-sel { background: rgba(245,158,11,0.08); box-shadow: inset 3px 0 0 #F59E0B; }
+.sched-row { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; padding: .8rem 1.25rem; }
+.sched-row.is-open { background: rgba(250,178,25,0.04); }

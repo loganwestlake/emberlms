@@ -4300,8 +4300,27 @@ function todoRow(ctx, it, { course = null, note = '' } = {}) {
 // ═══════════════════════════════════════════════════════════════
 // DASHBOARD & ALL COURSES
 // ═══════════════════════════════════════════════════════════════
+// Every classroom teacher has a section for each class period (Period 1–7) so counselors can schedule students
+// into them. Teachers rename them (e.g. "English 1") and can still add other courses.
+async function ensureTeacherPeriods(ctx) {
+  if (!ctx.teaches || ctx.isAdmin || ctx.isPersonal || ss('ember_periods_ok') === `${ctx.slug}|${ctx.me.uid}`) return 0;
+  try {
+    const settings = await (await import('./sis.js' + BUILD)).getSettings(ctx);
+    const periods = classPeriods(settings);
+    const have = new Set((await myCourses(ctx, { fresh: true })).map(c => c.periodId).filter(Boolean));
+    const missing = periods.filter(p => !have.has(p.id));
+    for (const p of missing) await addDoc(collection(db, 'tenants', ctx.slug, 'courses'), { title: p.name, periodId: p.id, slot: true, ownerUid: ctx.me.uid, ownerName: ctx.me.name, published: true, createdAt: serverTimestamp() });
+    ss('ember_periods_ok', `${ctx.slug}|${ctx.me.uid}`);
+    if (missing.length) invalidateCourses();
+    return missing.length;
+  } catch (e) { console.warn('period slots', e); return 0; }
+}
+// The bell schedule's class periods (not lunch / homeroom), at most 7.
+const classPeriods = settings => (settings?.periods || []).filter(p => !/lunch|homeroom|break|advisory/i.test(`${p.id} ${p.name}`)).slice(0, 7);
+
 async function viewDashboard(ctx) {
   const t = routeToken;
+  if (await ensureTeacherPeriods(ctx) && !live(t)) return;
   const { slug, tenant } = ctx;
   setTitle('Dashboard', tenant.name);
   const h = new Date().getHours();
@@ -4414,6 +4433,8 @@ async function renderDashSide(ctx, courses, t) {
 }
 async function viewAllCourses(ctx) {
   const t = routeToken;
+  await ensureTeacherPeriods(ctx);
+  if (!live(t)) return;
   setTitle('All courses', ctx.tenant.name);
   render(tenantPage(ctx, 'all-courses', pageHeader({ eyebrow: escapeHtml(ctx.tenant.name), title: 'All courses', subtitle: 'Star a course to show it on your dashboard.', actions: ctx.teacherMode && ctx.teaches ? `<button id="add-course-btn" class="btn btn-primary">${ico('plus')} New course</button>` : '' }) + `<div id="all-courses" class="max-w-5xl">${skeletonRows(4)}</div>`));
   $('#add-course-btn')?.addEventListener('click', () => openCourseModal(ctx));
@@ -5838,7 +5859,7 @@ const EMBER_API = {
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, myCourses, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
   GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute,
-  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas, ownAreas, WORK_AREAS, cleanUsername, usernameEmail, validUsername, usernameTaken, suggestUsername, reserveUsername, createUsernameLogin
+  ensureStudentId, backfillStudentIds, gradYearFor, classPeriods, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas, ownAreas, WORK_AREAS, cleanUsername, usernameEmail, validUsername, usernameTaken, suggestUsername, reserveUsername, createUsernameLogin
 };
 globalThis.__ember = EMBER_API;
 export {
@@ -5848,5 +5869,5 @@ export {
   toast, copyText, withBusy, openModal, modalHeader, modalBody, modalFooter, confirmDialog, buildUrl, navigate, live, unsubs,
   pageHeader, tenantPage, previewToggle, courseCol, cHref, myCourses, loadAllItems, subsCol, hasGrade, itemPoints, typeMeta,
   GRADED_TYPES, courseHex, searchBox, panel, openComposeModal, ls, routeTokenNow, randInt, initials, renderRoute,
-  ensureStudentId, backfillStudentIds, gradYearFor, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas, ownAreas, WORK_AREAS, cleanUsername, usernameEmail, validUsername, usernameTaken, suggestUsername, reserveUsername, createUsernameLogin
+  ensureStudentId, backfillStudentIds, gradYearFor, classPeriods, auth, secondaryAuth, secondaryDb, signInWithEmailAndPassword, signOut, isKioskUser, workAreas, ownAreas, WORK_AREAS, cleanUsername, usernameEmail, validUsername, usernameTaken, suggestUsername, reserveUsername, createUsernameLogin
 };

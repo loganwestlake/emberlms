@@ -2,7 +2,7 @@
 // Food Service, Transportation, Library, Athletics and IT & Data. Every record is timestamped and
 // keeps a history of who did what and when.
 import {
-  doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, getDocs, onSnapshot, serverTimestamp, arrayUnion, increment, deleteField
+  doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, getDocs, onSnapshot, serverTimestamp, arrayUnion, arrayRemove, increment, deleteField
 } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 const {
   db, $, $$, ico, refreshIcons, escapeHtml, plural, displayNameOf, tsMillis, toDateInput, render, setTitle, iconTile, badge, avatar,
@@ -365,12 +365,12 @@ async function medications(ctx, el, kids, t) {
 // COUNSELING & SPED
 // ═══════════════════════════════════════════════════════════════
 async function counselingView(ctx, el, tab, t) {
-  tab = tab || 'caseload';
+  tab = tab || 'schedule';
   const kids = await students(ctx);
   if (!live(t)) return;
   const iep = kids.filter(s => s.iep), p504 = kids.filter(s => s.plan504), ell = kids.filter(s => s.ell);
   el.innerHTML = `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">${kpi('IEP', iep.length)}${kpi('504 plans', p504.length)}${kpi('ELL', ell.length)}${kpi('Credit check: behind', '<span id="cs-behind">…</span>')}</div>
-    ${subTabs(ctx, 'counseling', [['caseload', 'Caseload', 'users'], ['sessions', 'Sessions', 'messages-square'], ['credits', 'Graduation credits', 'graduation-cap'], ['meetings', 'IEP / 504 meetings', 'calendar-check']], tab)}<div id="cs-body"></div>`;
+    ${subTabs(ctx, 'counseling', [['schedule', 'Scheduling', 'calendar-range'], ['caseload', 'Caseload', 'users'], ['sessions', 'Sessions', 'messages-square'], ['credits', 'Graduation credits', 'graduation-cap'], ['meetings', 'IEP / 504 meetings', 'calendar-check']], tab)}<div id="cs-body"></div>`;
   const body = $('#cs-body');
   // Credits earned vs. expected (6 per completed high-school year).
   const hist = (await getDocs(col(ctx, 'academicHistory')).catch(() => ({ docs: [] }))).docs.map(d => d.data());
@@ -386,6 +386,7 @@ async function counselingView(ctx, el, tab, t) {
       { id: 'referredBy', type: 'select', label: 'Referred by', options: ['Self', 'Teacher', 'Parent', 'Administrator', 'Nurse', 'Other'] }, { id: 'notes', type: 'textarea', label: 'Notes', rows: 3, span: 'sm:col-span-2' }, { id: 'followUp', type: 'date', label: 'Follow up on' }, { id: 'parentContacted', type: 'yesno', label: 'Parent contacted?' }],
     cols: [['Date', r => fmtDate(r.date)], ['Check in', r => fmt12(r.time)], ['Check out', r => fmt12(r.timeOut)], ['Student', r => `<span class="text-white">${escapeHtml(r.studentName || '')}</span>`], ['Type', r => escapeHtml(r.type || '')], ['Referred by', r => escapeHtml(r.referredBy || '')], ['Follow up', r => { const d = daysUntil(r.followUp); return r.followUp ? `<span class="${d !== null && d <= 0 ? 'text-[#fcd34d]' : ''}">${fmtDate(r.followUp)}</span>` : ''; }]] };
   $('#cs-new').addEventListener('click', async () => { if (tab !== 'sessions') return navigate(`/${ctx.slug}/work/counseling/sessions`); });
+  if (tab === 'schedule') return scheduler(ctx, body, t);
   if (tab === 'sessions') { const lb = await logbook(ctx, body, sessions); $('#cs-new').onclick = () => lb.edit(); return; }
   if (tab === 'meetings') return logbook(ctx, body, { name: 'planMeetings', title: 'IEP / 504 meetings', icon: 'calendar-check', tone: 'blue', addLabel: 'Schedule a meeting', from: '2000-01-01',
     fields: () => [{ id: 'students', type: 'students', label: 'Student', required: true }, { id: 'plan', type: 'chips', label: 'Plan', required: true, options: ['IEP', '504', 'ELL', 'Other'] }, { id: 'kind', type: 'select', label: 'Meeting', required: true, options: ['Annual review', 'Initial eligibility', 'Re-evaluation', 'Amendment', 'Transition', 'Other'] },
@@ -805,7 +806,8 @@ async function findStudentView(ctx, el, kids, t) {
     const nowC = sched.find(c => c.period && c.period === nowP), nextC = sched.find(c => c.period && c.period.start > hm);
     const pass = passSnap.docs.map(d => ({ id: d.id, ...d.data() })).find(p => p.status === 'active');
     const att = attSnap.docs.map(d => d.data()).filter(a => a.date === today());
-    const whereNow = pass ? `Out on a hall pass → ${escapeHtml(pass.destName || '')} (since ${escapeHtml(fmtStamp(pass.startAt))})` : nowC ? `${escapeHtml(nowC.title || 'Class')}${nowC.room ? ` · Room ${escapeHtml(nowC.room)}` : ''}${nowC.ownerName ? ` · ${escapeHtml(nowC.ownerName)}` : ''}` : nowP ? `${escapeHtml(nowP.name)} — no class scheduled` : 'Not during a class period';
+    const exNow = nowP && (s.scheduleExceptions || {})[nowP.id];
+    const whereNow = exNow && !pass ? `Not in class — ${escapeHtml(({ early: 'Early release (shortened schedule)', late: 'Late start (shortened schedule)', dual: 'Dual enrollment (college)', ojt: 'On-the-job training', work: 'Work release / co-op', virtual: 'Virtual school', cte: 'Career & technical (off campus)', ta: 'Teacher assistant', study: 'Study hall' })[exNow.type] || 'Other')}${exNow.where ? ' · ' + escapeHtml(exNow.where) : ''}` : pass ? `Out on a hall pass → ${escapeHtml(pass.destName || '')} (since ${escapeHtml(fmtStamp(pass.startAt))})` : nowC ? `${escapeHtml(nowC.title || 'Class')}${nowC.room ? ` · Room ${escapeHtml(nowC.room)}` : ''}${nowC.ownerName ? ` · ${escapeHtml(nowC.ownerName)}` : ''}` : nowP ? `${escapeHtml(nowP.name)} — no class scheduled` : 'Not during a class period';
     const contacts = s.contacts || [];
     out.innerHTML = `<section class="card p-5 mb-4"><div class="flex flex-wrap items-center gap-4">${avatar(displayNameOf(s), null, 'w-14 h-14', 'text-lg')}<div class="flex-1 min-w-0"><div class="font-serif text-2xl text-white">${escapeHtml(displayNameOf(s))}</div><div class="text-xs text-gray-400">${escapeHtml(s.studentNumber || 'No ID')} · Grade ${escapeHtml(String(s.gradeLevel ?? '—'))}${s.homeroom ? ` · Homeroom ${escapeHtml(s.homeroom)}` : ''}${s.bus?.pm?.bus ? ` · Bus ${escapeHtml(s.bus.pm.bus)}` : ''}</div></div>
         <div class="flex flex-wrap gap-2">${nowC ? `<button class="btn btn-primary btn-sm" data-fs-pass="${s.uid}">${ico('ticket', 'w-3.5 h-3.5')} Send to ${escapeHtml(nowC.title || 'class')}</button>` : ''}<a class="btn btn-secondary btn-sm" href="${buildUrl(`/${ctx.slug}/record/${s.uid}/info`)}">${ico('id-card', 'w-3.5 h-3.5')} Full record</a></div></div>
@@ -972,4 +974,101 @@ export async function openMyDevices(ctx) {
   const list = await devicesFor(ctx, ctx.me.uid);
   const m = openModal({ html: modalHeader({ title: 'My devices', subtitle: 'Devices IT has assigned to you. Contact IT if anything is wrong.', icon: 'laptop' }) + modalBody(deviceCardsHTML(list)) });
   refreshIcons(); return m;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SCHEDULING (counselors) — every teacher has Period 1–7 sections; place each student into one class per
+// period, or mark the period as shortened schedule / dual enrollment / OJT / etc.
+// ═══════════════════════════════════════════════════════════════
+async function scheduler(ctx, el, t) {
+  el.innerHTML = skeletonRows(4, 'h-20');
+  const S = await import('./sis.js' + BUILD), settings = await S.getSettings(ctx, { fresh: true });
+  const periods = globalThis.__ember.classPeriods(settings), EXC = S.SCHEDULE_EXCEPTIONS;
+  const [staffSnap, courseSnap] = await Promise.all([getDocs(col(ctx, 'users')), getDocs(col(ctx, 'courses'))]);
+  let courses = courseSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  // Make sure every classroom teacher has a section in every period (teachers who haven't signed in yet too).
+  const teachers = staffSnap.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.role === 'teacher' && !['nurse', 'counselor', 'office', 'support', 'it'].includes(u.category));
+  let added = 0;
+  for (const tch of teachers) for (const p of periods) if (!courses.some(c => c.ownerUid === tch.uid && c.periodId === p.id)) {
+    try { const ref = await addDoc(col(ctx, 'courses'), { title: p.name, periodId: p.id, slot: true, ownerUid: tch.uid, ownerName: displayNameOf(tch), published: true, createdAt: serverTimestamp() }); courses.push({ id: ref.id, title: p.name, periodId: p.id, slot: true, ownerUid: tch.uid, ownerName: displayNameOf(tch) }); added++; } catch (e) { console.warn(e); }
+  }
+  if (added) toast(`Added ${plural(added, 'empty period section')} for teachers`);
+  studentsCache = null;
+  let kids = await students(ctx), sel = null, q = '', fGrade = '', show = 'need';
+  if (!live(t)) return;
+  const sections = pid => courses.filter(c => c.periodId === pid).sort((a, b) => (a.ownerName || '').localeCompare(b.ownerName || ''));
+  const seats = cid => kids.filter(s => (s.enrolledCourseIds || []).includes(cid)).length;
+  const slotOf = (s, pid) => { const c = courses.find(c => c.periodId === pid && (s.enrolledCourseIds || []).includes(c.id)); if (c) return { course: c }; const x = (s.scheduleExceptions || {})[pid]; return x ? { exception: x } : null; };
+  const missing = s => periods.filter(p => !slotOf(s, p.id));
+  const programs = s => [...new Set(Object.values(s.scheduleExceptions || {}).map(x => EXC.find(e => e[0] === x.type)?.[2]).filter(Boolean))];
+  const needList = () => kids.filter(s => (!fGrade || String(s.gradeLevel) === fGrade) && (!q || `${displayNameOf(s)} ${s.studentNumber || ''}`.toLowerCase().includes(q)) && (show === 'all' || missing(s).length))
+    .sort((a, b) => missing(b).length - missing(a).length || displayNameOf(a).localeCompare(displayNameOf(b)));
+  const month = new Date().getMonth(), startOfYear = month >= 6 && month <= 8;
+  el.innerHTML = `${startOfYear ? `<div class="mb-4 p-3 rounded-xl border border-[#F59E0B]/30 bg-[#F59E0B]/5 text-sm text-gray-200">${ico('sparkles', 'w-4 h-4 inline -mt-0.5 text-[#F59E0B]')} New school year — students without full schedules are listed on the left.</div>` : ''}
+    <div class="sched-wrap"><aside class="card overflow-hidden sched-side"><div class="p-4 border-b border-white/[0.06] space-y-2"><div class="flex items-center justify-between"><h2 class="text-white font-medium">Students</h2><span class="text-xs text-gray-500" id="sc-count"></span></div>
+        <div class="segmented grid grid-cols-2" role="group"><button data-sc-show="need" aria-pressed="true">Need classes</button><button data-sc-show="all" aria-pressed="false">Everyone</button></div>
+        <input id="sc-q" type="search" class="input !py-1.5" placeholder="Name or ID…" aria-label="Find student"><select id="sc-grade" class="input !py-1.5" aria-label="Grade" data-icon="graduation-cap"><option value="">All grades</option>${['K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].map(g => `<option>${g}</option>`).join('')}</select></div>
+        <div id="sc-list" class="sched-list"></div></aside>
+      <section id="sc-main" class="min-w-0"></section></div>`;
+  const drawList = () => {
+    const l = needList(), need = kids.filter(s => missing(s).length).length;
+    $('#sc-count').textContent = `${need} need classes`;
+    $('#sc-list').innerHTML = l.length ? l.map(s => { const m = missing(s); return `<button class="sched-item ${sel?.uid === s.uid ? 'is-sel' : ''}" data-sc="${s.uid}"><span class="flex-1 min-w-0"><span class="block text-sm text-white truncate">${escapeHtml(displayNameOf(s))}</span><span class="block text-[11px] text-gray-500">${escapeHtml(s.studentNumber || '')} · Gr ${escapeHtml(String(s.gradeLevel ?? '—'))}${programs(s).length ? ' · ' + escapeHtml(programs(s).join(', ')) : ''}</span></span>${m.length === periods.length ? badge('No classes', 'red') : m.length ? badge(`Missing ${m.map(p => p.name.replace(/period\s*/i, 'P')).join(', ')}`, 'amber') : badge('Full', 'green')}</button>`; }).join('')
+      : `<p class="text-sm text-gray-500 p-4">${show === 'need' ? 'Every student has a full schedule.' : 'No students match.'}</p>`;
+    refreshIcons();
+  };
+  const drawMain = () => {
+    const main = $('#sc-main');
+    if (!sel) { main.innerHTML = `<div class="card p-8">${emptyState({ icon: 'calendar-range', title: 'Pick a student', text: 'Choose a student on the left to build their schedule.' })}</div>`; return refreshIcons(); }
+    const s = kids.find(k => k.uid === sel.uid) || sel, short = S.isShortened(s), m = missing(s);
+    main.innerHTML = `<section class="card overflow-hidden"><div class="flex flex-wrap items-center gap-3 px-5 py-4 border-b border-white/[0.06]">${avatar(displayNameOf(s))}<div class="flex-1 min-w-0"><div class="text-white text-lg">${escapeHtml(displayNameOf(s))}</div><div class="text-[11px] text-gray-500">${escapeHtml(s.studentNumber || 'No ID')} · Grade ${escapeHtml(String(s.gradeLevel ?? '—'))} · ${escapeHtml(settings.schoolYear || schoolYear())}</div></div>
+        ${short ? badge('Shortened schedule', 'amber') : badge('Full day', 'green')} ${programs(s).filter(p => p !== 'Shortened schedule').map(p => badge(escapeHtml(p), 'violet')).join(' ')} ${m.length ? badge(`${m.length} open`, 'amber') : ''}
+        <a class="btn btn-ghost btn-sm" href="${buildUrl(`/${ctx.slug}/record/${s.uid}/schedule`)}">${ico('external-link', 'w-3.5 h-3.5')} Schedule</a></div>
+      <div class="divide-y divide-white/[0.05]">${periods.map(p => { const slot = slotOf(s, p.id); const e = slot?.exception && (EXC.find(x => x[0] === slot.exception.type) || EXC.at(-1)); return `<div class="sched-row ${slot ? '' : 'is-open'}" data-pid="${p.id}"><div class="w-28 shrink-0"><div class="text-sm text-white">${escapeHtml(p.name)}</div><div class="text-[11px] text-gray-500 tabular-nums">${escapeHtml(fmt12(p.start))}–${escapeHtml(fmt12(p.end))}</div></div>
+        ${slot?.course ? `<div class="flex-1 min-w-0"><div class="text-white truncate">${escapeHtml(slot.course.title || '')}</div><div class="text-[11px] text-gray-500">${escapeHtml(slot.course.ownerName || '')}${slot.course.room ? ' · Room ' + escapeHtml(slot.course.room) : ''} · ${plural(seats(slot.course.id), 'student')}</div></div><button class="btn btn-ghost btn-sm" data-sc-change="${p.id}">${ico('repeat', 'w-3.5 h-3.5')} Change</button><button class="btn-icon danger" data-sc-drop="${p.id}" aria-label="Remove from ${escapeHtml(p.name)}">${ico('x', 'w-4 h-4')}</button>`
+          : e ? `<div class="flex-1 min-w-0"><div class="text-white flex items-center gap-2">${ico(e[3], 'w-4 h-4 text-[#A78BFA]')} ${escapeHtml(e[1])}</div><div class="text-[11px] text-gray-500">${escapeHtml([slot.exception.where, slot.exception.note].filter(Boolean).join(' · ') || 'Not in a class this period')}</div></div><button class="btn-icon danger" data-sc-drop="${p.id}" aria-label="Clear ${escapeHtml(p.name)}">${ico('x', 'w-4 h-4')}</button>`
+          : `<div class="flex-1 min-w-0 flex flex-wrap gap-2"><select class="input !py-1.5 flex-1 min-w-[220px]" data-sc-pick="${p.id}" aria-label="Class for ${escapeHtml(p.name)}" data-icon="book-open"><option value="">Choose a class…</option>${sections(p.id).map(c => `<option value="${c.id}">${escapeHtml(c.title || p.name)} · ${escapeHtml(c.ownerName || '')}${c.room ? ' · Rm ' + escapeHtml(c.room) : ''} · ${plural(seats(c.id), 'student')}</option>`).join('')}</select><button class="btn btn-secondary btn-sm" data-sc-other="${p.id}">${ico('map-pin', 'w-3.5 h-3.5')} Not in class…</button></div>`}</div>`; }).join('')}</div></section>
+      ${(s.scheduleLog || []).length ? `<section class="card p-5 mt-4"><h3 class="label">Schedule changes</h3>${timeline(s.scheduleLog)}</section>` : ''}`;
+    refreshIcons();
+  };
+  const sref = s => dref(ctx, 'students', s.uid);
+  const refresh = async () => { studentsCache = null; kids = await students(ctx); sel = kids.find(k => k.uid === sel?.uid) || sel; drawList(); drawMain(); };
+  const dropCourse = async (s, c) => { await deleteDoc(doc(db, 'tenants', ctx.slug, 'courses', c.id, 'enrollments', s.uid)).catch(() => {}); await updateDoc(sref(s), { enrolledCourseIds: arrayRemove(c.id) }); };
+  const place = async (s, pid, cid) => {
+    const c = courses.find(x => x.id === cid), cur = slotOf(s, pid);
+    if (cur?.course) await dropCourse(s, cur.course);
+    await setDoc(doc(db, 'tenants', ctx.slug, 'courses', c.id, 'enrollments', s.uid), { studentId: s.uid, studentName: displayNameOf(s), username: s.username || '', enrolledAt: serverTimestamp(), enrolledBy: ctx.me.uid });
+    await updateDoc(sref(s), { enrolledCourseIds: arrayUnion(c.id), [`scheduleExceptions.${pid}`]: deleteField(), scheduleLog: arrayUnion(stamp(ctx, `${pid.toUpperCase()}: ${c.title} (${c.ownerName || ''})`)) });
+    toast(`${displayNameOf(s)} → ${c.title}`);
+  };
+  const other = s => forms().then(F => F.formModal({ title: `Not in a class · ${displayNameOf(s)}`, subtitle: 'Mark periods the student spends off campus or out of class.', icon: 'map-pin', form: { sections: [{ fields: [
+      { id: 'type', type: 'radio', label: 'What', required: true, cols: 1, options: EXC.map(([v, l]) => ({ v, l })), span: 'sm:col-span-2' },
+      { id: 'periods', type: 'checks', label: 'Periods', required: true, options: periods.map(p => ({ v: p.id, l: p.name })), span: 'sm:col-span-2' },
+      { id: 'where', type: 'text', label: 'Where / organization', placeholder: 'e.g. Pasco-Hernando State College, Publix' }, { id: 'note', type: 'text', label: 'Note', placeholder: 'e.g. Leaves at 11:30 · transport by parent' }] }] },
+    data: { type: 'early', periods: [] }, submit: 'Save', onSubmit: async d => {
+      const patch = { scheduleLog: arrayUnion(stamp(ctx, `${d.periods.map(x => x.toUpperCase()).join(', ')}: ${EXC.find(e => e[0] === d.type)[1]}${d.where ? ' · ' + d.where : ''}`)) };
+      for (const pid of d.periods) { const cur = slotOf(s, pid); if (cur?.course) await dropCourse(s, cur.course); patch[`scheduleExceptions.${pid}`] = { type: d.type, where: d.where || '', note: d.note || '', setBy: ctx.me.name, setAt: Date.now() }; }
+      await updateDoc(sref(s), patch);
+      const next = { ...(s.scheduleExceptions || {}) }; d.periods.forEach(pid => { next[pid] = { type: d.type }; });
+      await updateDoc(sref(s), { scheduleType: S.isShortened({ scheduleExceptions: next }) ? 'Shortened' : 'Full' });
+      toast('Schedule updated'); await refresh(); return true;
+    } }));
+  el.addEventListener('click', async e => {
+    const sh = e.target.closest('[data-sc-show]'); if (sh) { show = sh.dataset.scShow; el.querySelectorAll('[data-sc-show]').forEach(b => b.setAttribute('aria-pressed', String(b === sh))); return drawList(); }
+    const it = e.target.closest('[data-sc]'); if (it) { sel = kids.find(k => k.uid === it.dataset.sc); drawList(); return drawMain(); }
+    const s = sel && kids.find(k => k.uid === sel.uid); if (!s) return;
+    const dr = e.target.closest('[data-sc-drop]');
+    if (dr) { const pid = dr.dataset.scDrop, cur = slotOf(s, pid); try { if (cur?.course) { await dropCourse(s, cur.course); await updateDoc(sref(s), { scheduleLog: arrayUnion(stamp(ctx, `${pid.toUpperCase()}: removed from ${cur.course.title}`)) }); } else { const next = { ...(s.scheduleExceptions || {}) }; delete next[pid]; await updateDoc(sref(s), { [`scheduleExceptions.${pid}`]: deleteField(), scheduleType: S.isShortened({ scheduleExceptions: next }) ? 'Shortened' : 'Full', scheduleLog: arrayUnion(stamp(ctx, `${pid.toUpperCase()}: cleared`)) }); } await refresh(); } catch (ex) { toast(friendlyError(ex), 'error'); } return; }
+    const ch = e.target.closest('[data-sc-change]');
+    if (ch) { const pid = ch.dataset.scChange, cur = slotOf(s, pid); await dropCourse(s, cur.course); return refresh(); }
+    const ot = e.target.closest('[data-sc-other]'); if (ot) return other(s);
+  });
+  el.addEventListener('change', async e => {
+    if (e.target.id === 'sc-grade') { fGrade = e.target.value; return drawList(); }
+    const pk = e.target.closest('[data-sc-pick]'); if (!pk || !pk.value) return;
+    const s = kids.find(k => k.uid === sel.uid);
+    try { await place(s, pk.dataset.scPick, pk.value); await refresh(); } catch (ex) { toast(friendlyError(ex), 'error'); }
+  });
+  el.addEventListener('input', e => { if (e.target.id === 'sc-q') { q = e.target.value.trim().toLowerCase(); drawList(); } });
+  drawList(); drawMain();
 }

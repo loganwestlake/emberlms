@@ -676,10 +676,25 @@ export async function viewMasterSchedule(ctx) {
   $$('[data-by]').forEach(b => b.addEventListener('click', () => { by = b.dataset.by; draw(); }));
   try { await load(); if (live(t)) draw(); } catch (e) { console.error(e); if (live(t)) { el.innerHTML = errorBox(e); refreshIcons(); } }
 }
-function scheduleHTML(courses, settings) {
-  if (!courses.length) return emptyState({ icon: 'calendar-range', title: 'No classes yet' });
-  const sorted = [...courses].sort((a, b) => periodOrder(settings, a.periodId) - periodOrder(settings, b.periodId));
-  return `<div class="card overflow-hidden divide-y divide-white/[0.05]">${sorted.map(c => { const p = settings.periods.find(x => x.id === c.periodId); return `
+// Periods spent off campus or out of class (shortened schedule, dual enrollment, OJT …) set by counselors.
+export const SCHEDULE_EXCEPTIONS = [
+  ['early', 'Early release', 'Shortened schedule', 'log-out'], ['late', 'Late start', 'Shortened schedule', 'sunrise'],
+  ['dual', 'Dual enrollment (college)', 'Dual enrollment', 'graduation-cap'], ['ojt', 'On-the-job training (OJT)', 'OJT', 'hard-hat'],
+  ['work', 'Work release / co-op', 'Work release', 'briefcase'], ['virtual', 'Virtual school', 'Virtual', 'monitor'],
+  ['cte', 'Career & technical (off campus)', 'CTE', 'wrench'], ['ta', 'Teacher assistant', 'Teacher assistant', 'hand-helping'],
+  ['study', 'Study hall', 'Study hall', 'book-open'], ['other', 'Other', 'Other', 'circle-dot'],
+];
+export const isShortened = st => Object.values(st?.scheduleExceptions || {}).some(x => ['early', 'late'].includes(x.type));
+function scheduleHTML(courses, settings, student = null) {
+  const ex = student?.scheduleExceptions || {};
+  const exRows = Object.entries(ex).map(([pid, x]) => ({ exception: x, periodId: pid }));
+  if (!courses.length && !exRows.length) return emptyState({ icon: 'calendar-range', title: 'No classes yet' });
+  const programs = [...new Set(Object.values(ex).map(x => SCHEDULE_EXCEPTIONS.find(e => e[0] === x.type)?.[2]).filter(Boolean))];
+  const head = programs.length ? `<div class="flex flex-wrap gap-2 mb-3">${programs.map(p => badge(escapeHtml(p), p === 'Shortened schedule' ? 'amber' : 'violet')).join('')}</div>` : '';
+  const sorted = [...courses, ...exRows.filter(r => !courses.some(c => c.periodId === r.periodId))].sort((a, b) => periodOrder(settings, a.periodId) - periodOrder(settings, b.periodId));
+  return head + `<div class="card overflow-hidden divide-y divide-white/[0.05]">${sorted.map(c => { const p = settings.periods.find(x => x.id === c.periodId);
+    if (c.exception) { const e = SCHEDULE_EXCEPTIONS.find(x => x[0] === c.exception.type) || SCHEDULE_EXCEPTIONS.at(-1); return `<div class="flex items-center gap-4 px-5 py-3.5 bg-[#8B5CF6]/[0.04]"><div class="w-24 shrink-0"><div class="text-xs text-white">${escapeHtml(p?.name || c.periodId)}</div><div class="text-[11px] text-gray-500 tabular-nums">${p ? `${fmtTime(p.start)}–${fmtTime(p.end)}` : ''}</div></div><span class="w-1 self-stretch rounded-full bg-[#8B5CF6]"></span><div class="flex-1 min-w-0"><div class="text-sm text-white flex items-center gap-2">${ico(e[3], 'w-4 h-4 text-[#A78BFA]')} ${escapeHtml(e[1])}</div><div class="text-[11px] text-gray-500 truncate">${escapeHtml([c.exception.where, c.exception.note].filter(Boolean).join(' · ') || 'Not in a class this period')}</div></div></div>`; }
+    return `
     <div class="flex items-center gap-4 px-5 py-3.5"><div class="w-24 shrink-0"><div class="text-xs text-white">${escapeHtml(p?.name || 'Unscheduled')}</div><div class="text-[11px] text-gray-500 tabular-nums">${p ? `${fmtTime(p.start)}–${fmtTime(p.end)}` : ''}</div></div>
       <span class="w-1 self-stretch rounded-full" style="background:${courseHex(c)}"></span>
       <div class="flex-1 min-w-0"><div class="text-sm text-white truncate">${escapeHtml(c.title || '')}</div><div class="text-[11px] text-gray-500 truncate">${escapeHtml(c.ownerName || '')}${c.room ? ' · Room ' + escapeHtml(c.room) : ''}${c.days?.length && c.days.length < 5 ? ' · ' + escapeHtml(c.days.join('')) : ''}</div></div></div>`; }).join('')}</div>`;
@@ -1013,7 +1028,7 @@ export async function viewRecord(ctx, sidParam, tab = 'overview') {
     } else if (tab === 'schedule') {
       const courses = await studentCourses(ctx, student);
       if (!live(t)) return;
-      el.innerHTML = `<p class="text-sm text-gray-500 mb-4">${escapeHtml(settings.schoolYear)}</p>${scheduleHTML(courses, settings)}`;
+      el.innerHTML = `<p class="text-sm text-gray-500 mb-4">${escapeHtml(settings.schoolYear)}</p>${scheduleHTML(courses, settings, student)}`;
     } else if (tab === 'attendance') {
       const recs = await recordsForStudent(ctx, sid);
       if (!live(t)) return;
