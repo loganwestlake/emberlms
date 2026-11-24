@@ -411,7 +411,8 @@ async function counselingView(ctx, el, tab, t) {
 async function officeView(ctx, el, tab, t) {
   tab = tab || 'find';
   const kids = await students(ctx);
-  const att = (await getDocs(query(col(ctx, 'attendance'), where('date', '==', today()))).catch(() => ({ docs: [] }))).docs.map(d => d.data());
+  // Only today's absences / tardies — never every "Present" mark (that's thousands of reads at a big school).
+  const att = await (await import('./sis.js' + BUILD)).dayAttendance(ctx, today()).then(x => x.recs).catch(() => []);
   if (!live(t)) return;
   const absent = att.filter(a => a.code && a.code !== 'P'), tardy = att.filter(a => a.code === 'T');
   const newKids = kids.filter(s => ms(s.createdAt) > Date.now() - 30 * 86400000);

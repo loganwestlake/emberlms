@@ -1,7 +1,7 @@
 // Ember SIS — attendance, scheduling, report cards, family access, student records & services.
 // Loaded on demand by app.js the first time an SIS page is opened.
 import {
-  doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, getDocs,
+  doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, getDocs, getCountFromServer,
   serverTimestamp, arrayUnion, arrayRemove, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 const {
@@ -113,6 +113,23 @@ async function recordsForStudent(ctx, sid) {
   return snap.docs.map(d => d.data()).sort((a, b) => b.date.localeCompare(a.date) || periodCmp(a, b));
 }
 const periodCmp = (a, b) => String(a.periodId || '').localeCompare(String(b.periodId || ''));
+// One day's attendance without downloading every "Present" mark: count all marks on the server (1 read per
+// 1,000) and fetch only the absent / excused / tardy ones. At 1,000 students that's ~700 reads instead of ~7,000.
+export async function dayAttendance(ctx, date) {
+  const base = query(tcol(ctx, 'attendance'), where('date', '==', date));
+  const [total, snap] = await Promise.all([
+    getCountFromServer(base).then(r => r.data().count).catch(() => null),
+    getDocs(query(tcol(ctx, 'attendance'), where('date', '==', date), where('code', 'in', ['A', 'E', 'T']))),
+  ]);
+  const recs = snap.docs.map(d => d.data());
+  return { recs, total: total ?? recs.length };
+}
+function summarizeDay({ recs, total }) {
+  const c = { P: 0, T: 0, A: 0, E: 0 };
+  recs.forEach(x => { if (c[x.code] !== undefined) c[x.code]++; });
+  c.P = Math.max(0, total - c.T - c.A - c.E);
+  return { ...c, total, absent: c.A + c.E, rate: pct(c.P + c.T, total), absenceRate: pct(c.A + c.E, total) };
+}
 function summarize(records, range = null) {
   const r = range ? records.filter(x => x.date >= toDateInput(range.from) && x.date <= toDateInput(range.to)) : records;
   const c = { P: 0, T: 0, A: 0, E: 0 };
@@ -277,7 +294,7 @@ export async function viewRollCall(ctx, course) {
       const [r, recs, studs, sess] = await Promise.all([
         rosterOf(ctx, course.id),
         getDocs(query(tcol(ctx, 'attendance'), where('courseId', '==', course.id), where('date', '==', date))),
-        loadStudents(ctx).catch(() => []),
+        Promise.resolve([]),
         getDoc(tdoc(ctx, 'attendanceSessions', `${date}_${course.id}`)),
       ]);
       if (!live(t) || want !== date) return;
@@ -285,7 +302,9 @@ export async function viewRollCall(ctx, course) {
       recs.docs.forEach(d => { const x = d.data(); marks[x.studentUid] = x.code; if (x.note) notes[x.studentUid] = x.note; });
       loadedMarks = { ...marks };
       savedAt = sess.exists() ? sess.data().takenAt : null;
-      flags = Object.fromEntries(studs.map(s => [s.uid, s]));
+      const studs2 = studs.length ? studs : (await Promise.all(r.map(x => getDoc(tdoc(ctx, 'students', x.uid)).then(d => d.exists() ? { uid: d.id, ...d.data() } : null).catch(() => null)))).filter(Boolean);
+      if (!live(t) || want !== date) return;
+      flags = Object.fromEntries(studs2.map(s => [s.uid, s]));
       draw();
       drawSide();
     } catch (e) { console.error(e); if (live(t)) { main.innerHTML = errorBox(e); refreshIcons(); } }
@@ -446,17 +465,17 @@ export async function viewAttendanceOffice(ctx) {
       if (!live(t) || my !== drawSeq) return;
       if (tab === 'today') {
         controls.innerHTML = `<label class="sr-only" for="att-date">Date</label><input id="att-date" type="date" class="input !py-2 !w-auto" value="${date}" max="${todayISO()}">`;
-        const [sessSnap, recSnap] = await Promise.all([
+        const [sessSnap, day] = await Promise.all([
           getDocs(query(tcol(ctx, 'attendanceSessions'), where('date', '==', date))),
-          getDocs(query(tcol(ctx, 'attendance'), where('date', '==', date))),
+          dayAttendance(ctx, date),
         ]);
         if (!live(t) || my !== drawSeq) return;
         const taken = new Set(sessSnap.docs.map(d => d.data().courseId));
         const scheduled = cache.courses.filter(c => c.periodId);
         const pool = scheduled.length ? scheduled : cache.courses;
         const notTaken = pool.filter(c => !taken.has(c.id)).sort((a, b) => periodOrder(settings, a.periodId) - periodOrder(settings, b.periodId));
-        const recs = recSnap.docs.map(d => d.data());
-        const s = summarize(recs);
+        const recs = day.recs;
+        const s = summarizeDay(day);
         const byStudent = {};
         recs.filter(r => r.code !== 'P').forEach(r => { (byStudent[r.studentUid] ||= { name: r.studentName, grade: r.gradeLevel, list: [] }).list.push(r); });
         const staffName = uid => displayNameOf(cache.staff.find(x => x.uid === uid)) || 'Teacher';
@@ -609,8 +628,11 @@ export async function viewMasterSchedule(ctx) {
   let by = 'teacher', settings, courses, staff, rosters;
   const el = $('#ms');
   const load = async () => {
-    [settings, courses, staff] = await Promise.all([getSettings(ctx), loadAllCourses(ctx), loadStaff(ctx)]);
-    rosters = Object.fromEntries(await Promise.all(courses.map(async c => [c.id, await rosterOf(ctx, c.id).catch(() => [])])));
+    let students;
+    [settings, courses, staff, students] = await Promise.all([getSettings(ctx), loadAllCourses(ctx), loadStaff(ctx), loadStudents(ctx)]);
+    // Rosters from each student's class list — one read per student instead of one query per section.
+    rosters = Object.fromEntries(courses.map(c => [c.id, []]));
+    students.forEach(s => (s.enrolledCourseIds || []).forEach(id => rosters[id]?.push({ uid: s.uid, name: displayNameOf(s), username: s.username || '' })));
   };
   const overlap = (a, b) => { const da = a.days?.length ? a.days : DAYS.map(d => d[0]); const dbb = b.days?.length ? b.days : DAYS.map(d => d[0]); return da.some(d => dbb.includes(d)); };
   // A course whose period was deleted in Setup counts as unscheduled (so it stays visible and fixable).
@@ -1946,7 +1968,7 @@ export async function officeToday(ctx) {
   const [settings, courses, sess, recs, inc, svc, reqs, pending] = await Promise.all([
     settled(getSettings(ctx)), settled(loadAllCourses(ctx)),
     settled(getDocs(query(tcol(ctx, 'attendanceSessions'), where('date', '==', today)))),
-    settled(getDocs(query(tcol(ctx, 'attendance'), where('date', '==', today)))),
+    settled(dayAttendance(ctx, today)),
     ctx.can('safety') ? settled(getDocs(tcol(ctx, 'incidents'))) : null,
     ctx.can('services') ? settled(getDocs(tcol(ctx, 'services'))) : null,
     ctx.isAdmin ? settled(getDocs(tcol(ctx, 'requests'))) : null,
@@ -1959,7 +1981,7 @@ export async function officeToday(ctx) {
     const scheduled = courses.filter(c => c.periodId), pool = scheduled.length ? scheduled : courses;
     const taken = new Set(sess.docs.map(d => d.data().courseId));
     const missing = pool.filter(c => !taken.has(c.id));
-    const sum = summarize(recs.docs.map(d => d.data()));
+    const sum = summarizeDay(recs);
     tiles.push(kpi('Attendance taken', `${pool.length - missing.length}<span class="text-gray-500 text-lg">/${pool.length}</span>`, weekend ? 'No school today' : missing.length ? `${plural(missing.length, 'class', 'classes')} still to take` : 'Every class is done', weekend || !pool.length ? null : missing.length ? 'warning' : 'good', href('/office/attendance')));
     tiles.push(kpi('Absent today', sum.absent.toLocaleString(), sum.total ? `${fmtPct(sum.rate)} attendance · ${sum.T} tardy` : 'Nothing recorded yet', null, href('/office/attendance')));
     if (!weekend && missing.length) todo.push({ level: 'warning', icon: 'calendar-check', text: `${plural(missing.length, 'class', 'classes')} ${missing.length === 1 ? "hasn't" : "haven't"} taken attendance today`, href: href('/office/attendance') });
